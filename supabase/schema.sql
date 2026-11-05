@@ -478,11 +478,26 @@ ALTER TABLE public.affiliate_clicks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.affiliate_commissions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.affiliate_payouts ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Audit logs insert" ON public.security_audit_logs;
 CREATE POLICY "Audit logs insert" ON public.security_audit_logs FOR INSERT WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Audit logs admin select" ON public.security_audit_logs;
 CREATE POLICY "Audit logs admin select" ON public.security_audit_logs FOR SELECT USING (public.is_admin());
+
+DROP POLICY IF EXISTS "Fraud alerts admin all" ON public.fraud_alerts;
 CREATE POLICY "Fraud alerts admin all" ON public.fraud_alerts FOR ALL USING (public.is_admin());
+
+DROP POLICY IF EXISTS "Affiliate profiles owner/admin" ON public.affiliate_profiles;
 CREATE POLICY "Affiliate profiles owner/admin" ON public.affiliate_profiles FOR ALL USING (auth.uid() = user_id OR public.is_admin());
+
+DROP POLICY IF EXISTS "Affiliate clicks insert" ON public.affiliate_clicks;
 CREATE POLICY "Affiliate clicks insert" ON public.affiliate_clicks FOR INSERT WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Affiliate clicks select owner" ON public.affiliate_clicks;
 CREATE POLICY "Affiliate clicks select owner" ON public.affiliate_clicks FOR SELECT USING (auth.uid() = affiliate_user_id OR public.is_admin());
+
+DROP POLICY IF EXISTS "Affiliate commissions owner" ON public.affiliate_commissions;
 CREATE POLICY "Affiliate commissions owner" ON public.affiliate_commissions FOR SELECT USING (auth.uid() = affiliate_user_id OR public.is_admin());
+
+DROP POLICY IF EXISTS "Affiliate payouts owner/admin" ON public.affiliate_payouts;
 CREATE POLICY "Affiliate payouts owner/admin" ON public.affiliate_payouts FOR ALL USING (auth.uid() = affiliate_user_id OR public.is_admin());

@@ -276,49 +276,57 @@ ALTER TABLE public.affiliate_commissions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.affiliate_payouts ENABLE ROW LEVEL SECURITY;
 
 -- 4.1 Immutable Security Audit Logs (INSERT + Admin SELECT only, NEVER UPDATE OR DELETE)
+DROP POLICY IF EXISTS "Allow system and users to insert audit logs" ON public.security_audit_logs;
 CREATE POLICY "Allow system and users to insert audit logs"
     ON public.security_audit_logs FOR INSERT
     WITH CHECK (true);
 
+DROP POLICY IF EXISTS "Only admins can select audit logs" ON public.security_audit_logs;
 CREATE POLICY "Only admins can select audit logs"
     ON public.security_audit_logs FOR SELECT
     USING (public.is_admin());
 
--- Notice: NO UPDATE OR DELETE POLICY CREATED FOR security_audit_logs -> 100% IMMUTABLE
-
 -- 4.2 Fraud Alerts (Admin only select and update)
+DROP POLICY IF EXISTS "Admins can view and manage fraud alerts" ON public.fraud_alerts;
 CREATE POLICY "Admins can view and manage fraud alerts"
     ON public.fraud_alerts FOR ALL
     USING (public.is_admin());
 
+DROP POLICY IF EXISTS "System can insert fraud alerts" ON public.fraud_alerts;
 CREATE POLICY "System can insert fraud alerts"
     ON public.fraud_alerts FOR INSERT
     WITH CHECK (true);
 
 -- 4.3 Affiliate Profiles RLS
+DROP POLICY IF EXISTS "Users can view and edit their own affiliate profile or Admin manage" ON public.affiliate_profiles;
 CREATE POLICY "Users can view and edit their own affiliate profile or Admin manage"
     ON public.affiliate_profiles FOR ALL
     USING (auth.uid() = user_id OR public.is_admin());
 
 -- 4.4 Affiliate Clicks RLS (Public insert via tracking redirect, affiliate read)
+DROP POLICY IF EXISTS "Anyone can register clicks" ON public.affiliate_clicks;
 CREATE POLICY "Anyone can register clicks"
     ON public.affiliate_clicks FOR INSERT
     WITH CHECK (true);
 
+DROP POLICY IF EXISTS "Affiliates can view their own click stats" ON public.affiliate_clicks;
 CREATE POLICY "Affiliates can view their own click stats"
     ON public.affiliate_clicks FOR SELECT
     USING (auth.uid() = affiliate_user_id OR public.is_admin());
 
 -- 4.5 Affiliate Commissions RLS
+DROP POLICY IF EXISTS "Affiliates can view their own commissions" ON public.affiliate_commissions;
 CREATE POLICY "Affiliates can view their own commissions"
     ON public.affiliate_commissions FOR SELECT
     USING (auth.uid() = affiliate_user_id OR public.is_admin());
 
+DROP POLICY IF EXISTS "Admin or service role can insert/update commissions" ON public.affiliate_commissions;
 CREATE POLICY "Admin or service role can insert/update commissions"
     ON public.affiliate_commissions FOR ALL
     USING (public.is_admin());
 
 -- 4.6 Affiliate Payouts RLS
+DROP POLICY IF EXISTS "Affiliates can view and request their own payouts" ON public.affiliate_payouts;
 CREATE POLICY "Affiliates can view and request their own payouts"
     ON public.affiliate_payouts FOR ALL
     USING (auth.uid() = affiliate_user_id OR public.is_admin());

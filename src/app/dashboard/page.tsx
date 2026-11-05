@@ -63,6 +63,7 @@ import {
   Moon,
   LogOut,
   Wallet,
+  Loader2,
 } from 'lucide-react';
 import {
   usePortal,
@@ -228,6 +229,28 @@ export default function CustomerDashboardPage() {
   const [envValInput, setEnvValInput] = useState('');
   const [sshKeyInput, setSshKeyInput] = useState(activeService?.sshPublicKey || '');
   const [revealedEnvKeys, setRevealedEnvKeys] = useState<{ [key: string]: boolean }>({});
+  const [ssoLoading, setSsoLoading] = useState<string | null>(null);
+
+  const handleLaunchSso = async (cpanelUser: string, service: 'cpaneld' | 'webmaild' = 'cpaneld') => {
+    setSsoLoading(service);
+    try {
+      const res = await fetch('/api/whm/sso', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: cpanelUser, service }),
+      });
+      const data = await res.json();
+      if (data?.url) {
+        window.open(data.url, '_blank', 'noopener,noreferrer');
+      } else {
+        alert(data?.message || 'Could not initialize SSO session');
+      }
+    } catch {
+      alert('Failed to connect to SSO gateway');
+    } finally {
+      setSsoLoading(null);
+    }
+  };
 
   // Database Tab State
   const [newDbName, setNewDbName] = useState('');
@@ -1068,6 +1091,41 @@ export default function CustomerDashboardPage() {
                               className="px-2.5 py-1 rounded-lg bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 text-[11px] font-semibold hover:bg-blue-100 cursor-pointer"
                             >
                               Reset Password
+                            </button>
+                          </div>
+                        </div>
+
+                        <div>
+                          <span className="text-slate-400">1-Click Direct Access:</span>
+                          <div className="mt-1 flex items-center gap-2">
+                            <button
+                              type="button"
+                              disabled={ssoLoading === 'cpaneld'}
+                              onClick={() => handleLaunchSso(activeService.cpanelUser, 'cpaneld')}
+                              className="px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-[11px] font-semibold hover:bg-emerald-100 flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                              title="Instant 1-Click passwordless login to cPanel via WHM SSO API"
+                            >
+                              {ssoLoading === 'cpaneld' ? (
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                              ) : (
+                                <ExternalLink className="w-3 h-3" />
+                              )}
+                              <span>1-Click cPanel SSO ↗</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              disabled={ssoLoading === 'webmaild'}
+                              onClick={() => handleLaunchSso(activeService.cpanelUser, 'webmaild')}
+                              className="px-2 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 text-[11px] font-semibold hover:bg-indigo-100 flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                              title="Instant 1-Click webmail session"
+                            >
+                              {ssoLoading === 'webmaild' ? (
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                              ) : (
+                                <ExternalLink className="w-3 h-3" />
+                              )}
+                              <span>Webmail ↗</span>
                             </button>
                           </div>
                         </div>

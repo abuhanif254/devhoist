@@ -204,6 +204,22 @@ export default function StackBuilderDrawer() {
 
     // Step 4: Inject into Portal Context & Navigate
     await new Promise((res) => setTimeout(res, 1000));
+
+    // Call live backend webhook to provision real WHM cPanel & sync Supabase
+    const finalAmountBDT = typeof finalTotal === 'number' ? (isBDT ? finalTotal : Math.round(finalTotal * 120)) : 450;
+    fetch('/api/payments/webhook', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        invoice_number: `INV-${new Date().getFullYear()}-${Math.floor(100000 + Math.random() * 900000)}`,
+        trx_id: randomTrx,
+        amount_bdt: finalAmountBDT,
+        domain: effectiveDomain,
+        plan_name: `${planName}`,
+        gateway: paymentMethod.toLowerCase(),
+      }),
+    }).catch((err) => console.warn('[Backend Webhook Sync Notice]', err));
+
     const newServiceId = await provisionNewOrder({
       planId: pid === 1 ? 'starter' : pid === 2 ? 'developer-pro' : 'business-max',
       planName: `${planName}`,
@@ -213,7 +229,7 @@ export default function StackBuilderDrawer() {
       paymentMethod,
       trxId: randomTrx,
       billingCycle: cycle,
-      priceBDT: typeof finalTotal === 'number' ? (isBDT ? finalTotal : Math.round(finalTotal * 120)) : 450,
+      priceBDT: finalAmountBDT,
     });
 
     setIsProvisioning(false);

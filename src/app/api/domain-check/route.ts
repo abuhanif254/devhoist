@@ -4,8 +4,6 @@ import { convertBdtToUsd, CurrencyCode } from '@/config/constants';
 import { buildDomainOrderUrl } from '@/lib/whmcsRouter';
 import { checkRateLimit } from '@/lib/edgeRateLimit';
 
-export const runtime = 'edge';
-
 // Common reserved/high-profile domains for local cache safeguard
 const RESERVED_NAMES = new Set([
   'google', 'facebook', 'amazon', 'apple', 'microsoft', 'netflix', 'github',

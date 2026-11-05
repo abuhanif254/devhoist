@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server';
 import { checkRateLimit } from '@/lib/edgeRateLimit';
 
-export const runtime = 'edge';
-
 // Generates realistic, SLA-compliant 90-day history with 99.98% overall uptime
 function generate90DayHistory(serviceBaseUptime: number) {
   const history = [];

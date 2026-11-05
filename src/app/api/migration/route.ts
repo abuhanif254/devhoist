@@ -3,8 +3,6 @@ import { WHMCS_CONFIG } from '@/config/constants';
 import { buildHostingOrderUrl } from '@/lib/whmcsRouter';
 import { checkRateLimit } from '@/lib/edgeRateLimit';
 
-export const runtime = 'edge';
-
 const ALLOWED_PLANS = new Set([1, 2, 3]);
 const ALLOWED_PANELS = new Set(['cpanel', 'cyberpanel', 'wordpress_admin', 'custom_vps']);
 const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;

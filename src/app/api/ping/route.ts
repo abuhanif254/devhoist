@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server';
 import { checkRateLimit } from '@/lib/edgeRateLimit';
 
-export const runtime = 'edge';
-
 export async function GET(request: Request) {
   // Edge sliding window rate limit (30 requests/minute)
   const rateLimit = checkRateLimit(request, 30, 60 * 1000);

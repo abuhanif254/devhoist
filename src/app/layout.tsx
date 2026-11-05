@@ -7,6 +7,7 @@ import { PortalProvider } from '@/context/PortalContext';
 import CommandPalette from '@/components/common/CommandPalette';
 import StackBuilderDrawer from '@/components/checkout/StackBuilderDrawer';
 import FloatingConversionDock from '@/components/common/FloatingConversionDock';
+import AnalyticsProvider from '@/components/AnalyticsProvider';
 
 const plusJakartaSans = Plus_Jakarta_Sans({
   variable: '--font-sans',
@@ -62,6 +63,29 @@ export const metadata: Metadata = {
   },
   icons: {
     icon: '/favicon.ico',
+  },
+  openGraph: {
+    title: 'DevHost Cloud | Developer Experience of Vercel. Accessibility of cPanel.',
+    description:
+      'High-performance developer-first cloud hosting with zero-downtime GitHub deployment, LiteSpeed WordPress caching, and instant bKash/Nagad payments.',
+    url: 'https://devhostcloud.com',
+    siteName: 'DevHost Cloud',
+    images: [
+      {
+        url: '/api/og',
+        width: 1200,
+        height: 630,
+        alt: 'DevHost Cloud NVMe Infrastructure',
+      },
+    ],
+    locale: 'en_US',
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'DevHost Cloud | High Performance NVMe Hosting',
+    description: 'Deploy Next.js, Node.js & WordPress with automated GitHub pipelines.',
+    images: ['/api/og'],
   },
 };
 
@@ -126,10 +150,12 @@ export default function RootLayout({
         <LanguageProvider>
           <BillingProvider>
             <PortalProvider>
-              {children}
-              <CommandPalette />
-              <StackBuilderDrawer />
-              <FloatingConversionDock />
+              <AnalyticsProvider>
+                {children}
+                <CommandPalette />
+                <StackBuilderDrawer />
+                <FloatingConversionDock />
+              </AnalyticsProvider>
             </PortalProvider>
           </BillingProvider>
         </LanguageProvider>

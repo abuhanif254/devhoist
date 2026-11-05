@@ -9,6 +9,10 @@ import {
   ShieldCheck,
   Ban,
   Fingerprint,
+  Mail,
+  Bell,
+  Eye,
+  FileDown,
   Server,
   Users,
   CreditCard,
@@ -71,6 +75,25 @@ import {
   SecurityAuditItem,
 } from '@/context/PortalContext';
 import { useBilling } from '@/context/BillingContext';
+import {
+  getEmailOutboxLogs,
+  sendTransactionalEmail,
+  EmailLogEntry,
+  EmailTemplateId,
+  renderWelcomeVerifyEmail,
+  renderHostingProvisionedEmail,
+  renderInvoicePaidEmail,
+  renderRenewalReminderEmail,
+  renderServiceSuspendedEmail,
+  renderAffiliateEmail,
+  renderMigrationStatusEmail,
+  renderSecurityThreatEmail,
+} from '@/lib/emailEngine';
+import {
+  getTelegramOutbox,
+  testTelegramAlert,
+  TelegramLogEntry,
+} from '@/lib/adminNotifier';
 
 type AdminModule =
   | 'overview'
@@ -145,6 +168,187 @@ export default function AdminCommandCenterPage() {
   const [securitySearch, setSecuritySearch] = useState('');
   const [securityRiskFilter, setSecurityRiskFilter] = useState<'all' | 'critical' | 'high' | 'medium' | 'low'>('all');
   const [clawbackInputOrderId, setClawbackInputOrderId] = useState('');
+
+  // Phase 12: Autonomous Email, Telegram & Lifecycle States
+  const [emailOutboxLogs, setEmailOutboxLogs] = useState<EmailLogEntry[]>(getEmailOutboxLogs());
+  const [selectedEmailPreview, setSelectedEmailPreview] = useState<EmailLogEntry | null>(null);
+  const [telegramLogs, setTelegramLogs] = useState<TelegramLogEntry[]>(getTelegramOutbox());
+  const [isTestingTelegram, setIsTestingTelegram] = useState(false);
+  const [testEmailAddress, setTestEmailAddress] = useState('founder@devhostcloud.com');
+  const [testEmailTemplate, setTestEmailTemplate] = useState<EmailTemplateId>('hosting_provisioned_credentials');
+  const [lifecycleCronRunning, setLifecycleCronRunning] = useState(false);
+  const [lifecycleCronResults, setLifecycleCronResults] = useState<any | null>(null);
+  const [cronSubTab, setCronSubTab] = useState<'lifecycle' | 'email_outbox' | 'telegram' | 'export'>('lifecycle');
+
+  // Trigger 6-Task Autonomous Lifecycle Cron
+  const handleRunAutonomousLifecycle = async () => {
+    setLifecycleCronRunning(true);
+    try {
+      const res = await fetch('/api/cron/lifecycle?secret=devhost_cron_secret_key', {
+        headers: { 'x-admin-trigger': 'true' }
+      });
+      const data = await res.json();
+      setLifecycleCronResults(data);
+      setEmailOutboxLogs(getEmailOutboxLogs());
+      setTelegramLogs(getTelegramOutbox());
+    } catch (err: any) {
+      window.alert('Cron execution error: ' + err?.message);
+    } finally {
+      setLifecycleCronRunning(false);
+    }
+  };
+
+  // Test Telegram Bot Alert
+  const handleTestTelegramAlert = async () => {
+    setIsTestingTelegram(true);
+    try {
+      const res = await testTelegramAlert();
+      setTelegramLogs(getTelegramOutbox());
+      window.alert(
+        res.simulated
+          ? 'Telegram alert simulated and logged to outbox! (Set TELEGRAM_BOT_TOKEN and TELEGRAM_ADMIN_CHAT_ID in .env for live mobile delivery).'
+          : 'Telegram alert delivered live to founder chat!'
+      );
+    } catch (err: any) {
+      window.alert('Telegram test error: ' + err?.message);
+    } finally {
+      setIsTestingTelegram(false);
+    }
+  };
+
+  // Dispatch Test Email
+  const handleSendTestEmail = async () => {
+    try {
+      let html = '';
+      let subject = 'DevHost Cloud Test Notification';
+      let previewText = 'Test transactional message';
+
+      if (testEmailTemplate === 'hosting_provisioned_credentials') {
+        subject = '⚡ cPanel Credentials & Server Provisioning — client-site.com';
+        html = renderHostingProvisionedEmail({
+          name: 'Demo Client',
+          packageName: 'Developer Pro NVMe',
+          domain: 'client-site.com',
+          serverIp: '103.205.71.18',
+          datacenter: 'Singapore SG1 (Equinix)',
+          nameservers: ['ns1.devhostcloud.com', 'ns2.devhostcloud.com'],
+          cpanelUsername: 'cp_client',
+          ssoLoginUrl: 'https://devhostcloud.com/dashboard',
+          sshPort: 22,
+          sshHost: '103.205.71.18',
+        });
+      } else if (testEmailTemplate === 'welcome_and_verify') {
+        subject = '🚀 Welcome to DevHost Cloud — Verify Your Account';
+        html = renderWelcomeVerifyEmail({
+          name: 'Demo User',
+          email: testEmailAddress,
+          verificationCode: '749102',
+        });
+      } else if (testEmailTemplate === 'invoice_paid_receipt') {
+        subject = 'Receipt for Invoice #INV-2026-9021 ✅';
+        html = renderInvoicePaidEmail({
+          name: 'Demo Client',
+          invoiceNumber: 'INV-2026-9021',
+          amountBDT: 450,
+          paymentMethod: 'bKash (Instant)',
+          trxId: '9K72LM89QP',
+          paidDate: new Date().toLocaleDateString(),
+          items: [{ desc: 'Developer Pro NVMe (1 Month)', amount: 450 }],
+        });
+      } else if (testEmailTemplate === 'renewal_reminder_notice') {
+        subject = 'Upcoming Renewal Notice: client-site.com (3 Days Left)';
+        html = renderRenewalReminderEmail({
+          name: 'Demo Client',
+          serviceName: 'Developer Pro NVMe',
+          domain: 'client-site.com',
+          expiryDate: new Date(Date.now() + 3 * 86400000).toLocaleDateString(),
+          daysRemaining: 3,
+          renewalAmountBDT: 450,
+          walletBalanceBDT: 0,
+        });
+      } else if (testEmailTemplate === 'service_suspended_alert') {
+        subject = 'Critical: Service Suspended for client-site.com 🛑';
+        html = renderServiceSuspendedEmail({
+          name: 'Demo Client',
+          serviceName: 'Developer Pro NVMe',
+          domain: 'client-site.com',
+          overdueDays: 3,
+          outstandingAmountBDT: 450,
+          terminationGraceDays: 14,
+        });
+      } else if (testEmailTemplate === 'affiliate_commission_and_payout') {
+        subject = '🎉 New Affiliate Commission Credited! (৳150 BDT)';
+        html = renderAffiliateEmail({
+          name: 'Affiliate Partner',
+          type: 'commission_earned',
+          amountBDT: 150,
+          details: 'Commission earned for Developer Pro referral (35-day hold started)',
+          holdDaysRemaining: 35,
+        });
+      } else if (testEmailTemplate === 'migration_status_update') {
+        subject = 'Migration Complete — Zero Downtime! 🎉 — client-site.com';
+        html = renderMigrationStatusEmail({
+          name: 'Demo Client',
+          domain: 'client-site.com',
+          status: 'completed',
+          sourceHost: 'Previous cPanel Host',
+          nameservers: ['ns1.devhostcloud.com', 'ns2.devhostcloud.com'],
+        });
+      } else {
+        subject = 'Security Notice: New Login Detected (103.205.71.18) 🛡️';
+        html = renderSecurityThreatEmail({
+          name: 'Demo Client',
+          alertType: 'New Device Authentication',
+          ipAddress: '103.205.71.18',
+          location: 'Dhaka, Bangladesh',
+          deviceBrowser: 'Edge on Windows 11',
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      await sendTransactionalEmail({
+        to: testEmailAddress,
+        subject,
+        html,
+        template: testEmailTemplate,
+        previewText,
+      });
+
+      setEmailOutboxLogs(getEmailOutboxLogs());
+      window.alert(`Test email (${testEmailTemplate}) dispatched to ${testEmailAddress}! View the full HTML preview in the Outbox table.`);
+    } catch (err: any) {
+      window.alert('Email send error: ' + err?.message);
+    }
+  };
+
+  // Generic JSON & CSV Exporters
+  const downloadFile = (content: string, filename: string, type: string) => {
+    const blob = new Blob([content], { type });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportJsonData = (dataset: any[], filename: string) => {
+    downloadFile(JSON.stringify(dataset, null, 2), `${filename}.json`, 'application/json');
+  };
+
+  const handleExportCsvData = (dataset: any[], filename: string) => {
+    if (!dataset.length) return;
+    const headers = Object.keys(dataset[0]);
+    const csvRows = [
+      headers.join(','),
+      ...dataset.map((row) =>
+        headers.map((h) => JSON.stringify(row[h] ?? '')).join(',')
+      ),
+    ];
+    downloadFile(csvRows.join('\n'), `${filename}.csv`, 'text/csv');
+  };
 
   // Customer Inspector Drawer
   const [selectedCustomer, setSelectedCustomer] = useState<AdminCustomer | null>(null);
@@ -433,7 +637,7 @@ export default function AdminCommandCenterPage() {
               >
                 <div className="flex items-center gap-3">
                   <Terminal className="w-4 h-4" />
-                  <span>WHM Automation Cron</span>
+                  <span>Autonomous Cron &amp; Outbox</span>
                 </div>
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
               </button>
@@ -1155,61 +1359,439 @@ export default function AdminCommandCenterPage() {
              ========================================================================= */}
           {activeModule === 'automation_cron' && (
             <div className="space-y-6 animate-in fade-in duration-150">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs">
-                <div>
-                  <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                    <Terminal className="w-5 h-5 text-blue-600" />
-                    <span>WHMCS / WHM Automation Cron &amp; Dunning Engine</span>
-                  </h2>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Automated invoice billing cycles, suspension timers &amp; JetBackup sync triggers
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleRunCron}
-                  disabled={isCronRunning}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs disabled:opacity-50 cursor-pointer"
-                >
-                  <Play className="w-3.5 h-3.5 fill-current" />
-                  <span>{isCronRunning ? 'Running Cron...' : 'Run System Cron Manually Now'}</span>
-                </button>
-              </div>
-
-              {/* Dunning Rules Settings */}
+              {/* TOP HEADER & SUB-NAV TABS */}
               <div className="p-6 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs space-y-4">
-                <h3 className="text-sm font-bold text-slate-900 dark:text-white">Active Dunning &amp; Automation Rules</h3>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs font-mono">
-                  <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-200 dark:border-white/5 space-y-2">
-                    <span className="text-slate-500">Invoice Generation:</span>
-                    <div className="text-lg font-bold text-slate-900 dark:text-white">{dunningRules.invoiceDaysBefore} Days Before Due</div>
-                    <p className="text-[10px] text-slate-400">Generates proforma renewal invoice in portal</p>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-600 dark:text-blue-400">
+                      <Terminal className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                        Autonomous Operations &amp; Outbox Engine
+                        <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 font-bold">
+                          Zero-Human Intervention
+                        </span>
+                      </h2>
+                      <p className="text-xs text-slate-500 font-mono">
+                        6-Task billing lifecycle, 8 branded HTML email outbox, and founder Telegram alert bot.
+                      </p>
+                    </div>
                   </div>
 
-                  <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-200 dark:border-white/5 space-y-2">
-                    <span className="text-slate-500">Auto-Suspension:</span>
-                    <div className="text-lg font-bold text-amber-600">{dunningRules.autoSuspendDaysAfter} Days Overdue</div>
-                    <p className="text-[10px] text-slate-400">cPanel account locked via WHM API</p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleRunAutonomousLifecycle}
+                      disabled={lifecycleCronRunning}
+                      className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-md shadow-blue-600/20 disabled:opacity-50 cursor-pointer transition-all flex items-center gap-2"
+                    >
+                      <Play className="w-3.5 h-3.5 fill-current" />
+                      <span>{lifecycleCronRunning ? 'Executing 6 Tasks...' : 'Run Autonomous Lifecycle Now'}</span>
+                    </button>
                   </div>
+                </div>
 
-                  <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-200 dark:border-white/5 space-y-2">
-                    <span className="text-slate-500">Auto-Termination:</span>
-                    <div className="text-lg font-bold text-rose-500">{dunningRules.autoTerminateDaysAfter} Days Overdue</div>
-                    <p className="text-[10px] text-slate-400">Frees up 100GB slot after backup snapshot</p>
-                  </div>
+                {/* Sub-Tabs Nav */}
+                <div className="flex items-center gap-2 pt-2 border-t border-slate-100 dark:border-white/5 overflow-x-auto text-xs font-mono">
+                  <button
+                    type="button"
+                    onClick={() => setCronSubTab('lifecycle')}
+                    className={`px-3.5 py-1.5 rounded-lg transition-all cursor-pointer ${
+                      cronSubTab === 'lifecycle'
+                        ? 'bg-blue-600 text-white font-bold'
+                        : 'text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-800'
+                    }`}
+                  >
+                    1. 6-Task Lifecycle Cron
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCronSubTab('email_outbox')}
+                    className={`px-3.5 py-1.5 rounded-lg transition-all cursor-pointer flex items-center gap-2 ${
+                      cronSubTab === 'email_outbox'
+                        ? 'bg-blue-600 text-white font-bold'
+                        : 'text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-800'
+                    }`}
+                  >
+                    <Mail className="w-3.5 h-3.5" />
+                    <span>2. Email Outbox ({emailOutboxLogs.length})</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCronSubTab('telegram')}
+                    className={`px-3.5 py-1.5 rounded-lg transition-all cursor-pointer flex items-center gap-2 ${
+                      cronSubTab === 'telegram'
+                        ? 'bg-blue-600 text-white font-bold'
+                        : 'text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-800'
+                    }`}
+                  >
+                    <Bell className="w-3.5 h-3.5" />
+                    <span>3. Telegram Alert Bot</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCronSubTab('export')}
+                    className={`px-3.5 py-1.5 rounded-lg transition-all cursor-pointer flex items-center gap-2 ${
+                      cronSubTab === 'export'
+                        ? 'bg-blue-600 text-white font-bold'
+                        : 'text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-800'
+                    }`}
+                  >
+                    <FileDown className="w-3.5 h-3.5" />
+                    <span>4. 1-Click Data Backup</span>
+                  </button>
                 </div>
               </div>
 
-              {/* Real-time Terminal Cron Execution Logs */}
-              {cronLogs.length > 0 && (
-                <div className="p-5 rounded-2xl bg-slate-950 border border-white/10 text-emerald-400 font-mono text-xs space-y-1.5 shadow-xl">
-                  <div className="flex items-center gap-2 pb-2 border-b border-white/10 text-slate-400 text-[11px]">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                    <span>System Automation Execution Stream</span>
+              {/* TAB 1: 6-TASK AUTONOMOUS LIFECYCLE */}
+              {cronSubTab === 'lifecycle' && (
+                <div className="space-y-6">
+                  {/* Active Lifecycle Cards */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div className="p-4 rounded-xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/5 space-y-1 text-xs font-mono">
+                      <span className="text-slate-500 uppercase tracking-wider text-[10px]">Step 1 &bull; T-7 Invoices</span>
+                      <div className="text-base font-bold text-slate-900 dark:text-white">Auto-Invoice &bull; 7 Days</div>
+                      <p className="text-[11px] text-slate-400">Creates unpaid renewal invoice &amp; sends reminder notice</p>
+                    </div>
+
+                    <div className="p-4 rounded-xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/5 space-y-1 text-xs font-mono">
+                      <span className="text-slate-500 uppercase tracking-wider text-[10px]">Step 2 &bull; Cloud Wallet</span>
+                      <div className="text-base font-bold text-emerald-600 dark:text-emerald-400">Zero-Touch Auto-Renew</div>
+                      <p className="text-[11px] text-slate-400">Deducts wallet balance &amp; extends service without outage</p>
+                    </div>
+
+                    <div className="p-4 rounded-xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/5 space-y-1 text-xs font-mono">
+                      <span className="text-slate-500 uppercase tracking-wider text-[10px]">Step 4 &bull; T+3 Dunning</span>
+                      <div className="text-base font-bold text-amber-600">3-Day Auto-Suspend</div>
+                      <p className="text-[11px] text-slate-400">Locks cPanel vHost via WHM API while keeping data safe</p>
+                    </div>
                   </div>
-                  {cronLogs.map((log, i) => (
-                    <div key={i} className="leading-relaxed">{log}</div>
-                  ))}
+
+                  {/* Execution Telemetry Log */}
+                  {lifecycleCronResults && (
+                    <div className="p-5 rounded-2xl bg-slate-950 border border-white/10 text-emerald-400 font-mono text-xs space-y-3 shadow-xl">
+                      <div className="flex items-center justify-between pb-2 border-b border-white/10 text-slate-400 text-[11px]">
+                        <div className="flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                          <span>Last Lifecycle Execution Telemetry ({lifecycleCronResults.timestamp})</span>
+                        </div>
+                        <span className="text-emerald-400 font-bold">Status: 200 OK</span>
+                      </div>
+
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-slate-300">
+                        <div className="p-2.5 rounded-lg bg-white/5">
+                          Invoices Created: <strong>{lifecycleCronResults.results?.renewalInvoicesCreated}</strong>
+                        </div>
+                        <div className="p-2.5 rounded-lg bg-white/5">
+                          Wallet Auto-Renewed: <strong>{lifecycleCronResults.results?.autoRenewedViaWallet}</strong>
+                        </div>
+                        <div className="p-2.5 rounded-lg bg-white/5">
+                          Urgent Notices Sent: <strong>{lifecycleCronResults.results?.urgentRemindersSent}</strong>
+                        </div>
+                        <div className="p-2.5 rounded-lg bg-white/5">
+                          Accounts Suspended: <strong>{lifecycleCronResults.results?.accountsSuspended}</strong>
+                        </div>
+                        <div className="p-2.5 rounded-lg bg-white/5">
+                          Affiliate Matured: <strong>৳{lifecycleCronResults.results?.affiliateCommissionsMaturedBDT} BDT</strong>
+                        </div>
+                      </div>
+
+                      <div className="pt-2 border-t border-white/10 space-y-1 text-[11px] text-slate-400">
+                        {lifecycleCronResults.logs?.map((l: string, i: number) => (
+                          <div key={i}>{l}</div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Terminal Execution Logs */}
+                  {cronLogs.length > 0 && !lifecycleCronResults && (
+                    <div className="p-5 rounded-2xl bg-slate-950 border border-white/10 text-emerald-400 font-mono text-xs space-y-1.5 shadow-xl">
+                      <div className="flex items-center gap-2 pb-2 border-b border-white/10 text-slate-400 text-[11px]">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                        <span>System Automation Stream</span>
+                      </div>
+                      {cronLogs.map((log, i) => (
+                        <div key={i} className="leading-relaxed">{log}</div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* TAB 2: TRANSACTIONAL EMAIL OUTBOX (8 BRANDED TEMPLATES) */}
+              {cronSubTab === 'email_outbox' && (
+                <div className="space-y-6">
+                  {/* Dispatch Test Email Form */}
+                  <div className="p-5 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs space-y-3">
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                      <Mail className="w-4 h-4 text-blue-500" />
+                      Dispatch Live / Simulated Branded Email
+                    </h3>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <input
+                        type="email"
+                        value={testEmailAddress}
+                        onChange={(e) => setTestEmailAddress(e.target.value)}
+                        placeholder="Recipient Email Address"
+                        className="px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono"
+                      />
+                      <select
+                        value={testEmailTemplate}
+                        onChange={(e) => setTestEmailTemplate(e.target.value as any)}
+                        className="px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono"
+                      >
+                        <option value="hosting_provisioned_credentials">1. cPanel Credentials &amp; Server Details</option>
+                        <option value="welcome_and_verify">2. Welcome &amp; 2FA Verification Code</option>
+                        <option value="invoice_paid_receipt">3. Payment Receipt (bKash/Nagad)</option>
+                        <option value="renewal_reminder_notice">4. Renewal Reminder Notice (T-7 / T-3)</option>
+                        <option value="service_suspended_alert">5. Service Suspended Notice (T+3)</option>
+                        <option value="affiliate_commission_and_payout">6. Affiliate Commission &amp; Payout</option>
+                        <option value="migration_status_update">7. Website Migration Update</option>
+                        <option value="security_threat_alert">8. Security &amp; New Device Login Alert</option>
+                      </select>
+                      <button
+                        type="button"
+                        onClick={handleSendTestEmail}
+                        className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer transition-all"
+                      >
+                        Dispatch &amp; Log to Outbox
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Outbox Table */}
+                  <div className="p-5 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                        Transactional Email Outbox Log ({emailOutboxLogs.length} Messages)
+                      </h3>
+                      <button
+                        type="button"
+                        onClick={() => setEmailOutboxLogs(getEmailOutboxLogs())}
+                        className="text-xs text-blue-600 hover:underline font-mono cursor-pointer"
+                      >
+                        Refresh Outbox
+                      </button>
+                    </div>
+
+                    <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-white/5">
+                      <table className="w-full text-left text-xs font-mono">
+                        <thead className="bg-slate-50 dark:bg-zinc-900/80 text-slate-500 uppercase text-[10px] tracking-wider border-b border-slate-200 dark:border-white/5">
+                          <tr>
+                            <th className="py-2.5 px-3">Sent Time</th>
+                            <th className="py-2.5 px-3">Recipient</th>
+                            <th className="py-2.5 px-3">Template</th>
+                            <th className="py-2.5 px-3">Subject</th>
+                            <th className="py-2.5 px-3">Status</th>
+                            <th className="py-2.5 px-3 text-right">Preview</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 dark:divide-white/5">
+                          {emailOutboxLogs.map((eml) => (
+                            <tr key={eml.id} className="hover:bg-slate-50 dark:hover:bg-zinc-900/30">
+                              <td className="py-2.5 px-3 text-slate-400 text-[11px]">
+                                {new Date(eml.sentAt).toLocaleTimeString()}
+                              </td>
+                              <td className="py-2.5 px-3 font-bold text-slate-900 dark:text-white">{eml.to}</td>
+                              <td className="py-2.5 px-3">
+                                <span className="px-2 py-0.5 rounded bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-400 text-[10px] font-bold">
+                                  {eml.template}
+                                </span>
+                              </td>
+                              <td className="py-2.5 px-3 text-slate-600 dark:text-zinc-300 max-w-xs truncate">{eml.subject}</td>
+                              <td className="py-2.5 px-3">
+                                <span className="px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 text-[10px] font-bold uppercase">
+                                  {eml.status}
+                                </span>
+                              </td>
+                              <td className="py-2.5 px-3 text-right">
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedEmailPreview(eml)}
+                                  className="px-2.5 py-1 rounded bg-slate-100 dark:bg-zinc-800 hover:bg-blue-600 hover:text-white transition-all text-[11px] font-semibold cursor-pointer inline-flex items-center gap-1"
+                                >
+                                  <Eye className="w-3.5 h-3.5" />
+                                  <span>HTML Preview</span>
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 3: FOUNDER TELEGRAM ALERT BOT */}
+              {cronSubTab === 'telegram' && (
+                <div className="space-y-6">
+                  <div className="p-6 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs space-y-4">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200 dark:border-white/5">
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                          <Bell className="w-4 h-4 text-emerald-500" />
+                          Founder Instant Telegram Alert Dispatcher
+                        </h3>
+                        <p className="text-xs text-slate-500 font-mono">
+                          Push notifications for new bKash payments, critical support tickets &amp; fraud attempts.
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleTestTelegramAlert}
+                        disabled={isTestingTelegram}
+                        className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold cursor-pointer transition-all flex items-center gap-2"
+                      >
+                        <Send className="w-3.5 h-3.5" />
+                        <span>{isTestingTelegram ? 'Sending Test...' : 'Send Test Telegram Alert'}</span>
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs font-mono">
+                      <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-200 dark:border-white/5 space-y-1">
+                        <span className="text-slate-500">Bot Token Status:</span>
+                        <div className="font-bold text-slate-900 dark:text-white">Active / Edge Simulated</div>
+                        <p className="text-[10px] text-slate-400">Set TELEGRAM_BOT_TOKEN &amp; TELEGRAM_ADMIN_CHAT_ID in .env</p>
+                      </div>
+
+                      <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-200 dark:border-white/5 space-y-1">
+                        <span className="text-slate-500">Auto-Delivered Events:</span>
+                        <div className="font-bold text-emerald-600">Orders, TrxID, Tickets, Fraud &amp; Migrations</div>
+                        <p className="text-[10px] text-slate-400">Formatted HTML summaries delivered in &lt;1 second</p>
+                      </div>
+                    </div>
+
+                    {/* Telegram Log Feed */}
+                    <div className="space-y-3 pt-2">
+                      <span className="text-xs font-bold text-slate-900 dark:text-white">Recent Telegram Dispatches:</span>
+                      {telegramLogs.map((tg) => (
+                        <div
+                          key={tg.id}
+                          className="p-3 rounded-xl bg-slate-50 dark:bg-zinc-950/60 border border-slate-200 dark:border-white/5 text-xs font-mono space-y-1"
+                        >
+                          <div className="flex items-center justify-between text-[11px] text-slate-400">
+                            <span className="uppercase font-bold text-blue-600">{tg.type}</span>
+                            <span>{new Date(tg.timestamp).toLocaleTimeString()} ({tg.status})</span>
+                          </div>
+                          <div
+                            className="text-slate-800 dark:text-zinc-200 whitespace-pre-wrap leading-relaxed"
+                            dangerouslySetInnerHTML={{ __html: tg.text }}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 4: 1-CLICK PLATFORM DATA BACKUP & EXPORT */}
+              {cronSubTab === 'export' && (
+                <div className="space-y-6">
+                  <div className="p-6 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs space-y-4">
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                        <FileDown className="w-4 h-4 text-blue-500" />
+                        1-Click Platform Data Backup &amp; Financial Reporting
+                      </h3>
+                      <p className="text-xs text-slate-500 font-mono">
+                        Instant snapshot downloads of entire platform databases in standard .CSV and .JSON formats.
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-2">
+                      {/* Customer CRM */}
+                      <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-200 dark:border-white/5 space-y-3">
+                        <span className="text-xs font-bold text-slate-900 dark:text-white block">Customer CRM 360°</span>
+                        <p className="text-[11px] text-slate-400 font-mono">{customers.length} Accounts &bull; VHosts</p>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleExportCsvData(customers, 'devhost_customers')}
+                            className="flex-1 py-1.5 rounded-lg bg-blue-600 text-white text-[11px] font-semibold cursor-pointer"
+                          >
+                            .CSV
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleExportJsonData(customers, 'devhost_customers')}
+                            className="flex-1 py-1.5 rounded-lg bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 text-[11px] font-semibold cursor-pointer"
+                          >
+                            .JSON
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Orders Ledger */}
+                      <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-200 dark:border-white/5 space-y-3">
+                        <span className="text-xs font-bold text-slate-900 dark:text-white block">bKash Ledger &amp; Invoices</span>
+                        <p className="text-[11px] text-slate-400 font-mono">{ordersLedger.length} Orders &bull; MFS trxIDs</p>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleExportCsvData(ordersLedger, 'devhost_orders_ledger')}
+                            className="flex-1 py-1.5 rounded-lg bg-blue-600 text-white text-[11px] font-semibold cursor-pointer"
+                          >
+                            .CSV
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleExportJsonData(ordersLedger, 'devhost_orders_ledger')}
+                            className="flex-1 py-1.5 rounded-lg bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 text-[11px] font-semibold cursor-pointer"
+                          >
+                            .JSON
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Affiliate Commissions */}
+                      <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-200 dark:border-white/5 space-y-3">
+                        <span className="text-xs font-bold text-slate-900 dark:text-white block">Affiliate Performance</span>
+                        <p className="text-[11px] text-slate-400 font-mono">{affiliate.subIdStats.length} Campaigns &bull; Holds</p>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleExportCsvData(affiliate.commissions, 'devhost_affiliate_commissions')}
+                            className="flex-1 py-1.5 rounded-lg bg-blue-600 text-white text-[11px] font-semibold cursor-pointer"
+                          >
+                            .CSV
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleExportJsonData(affiliate.commissions, 'devhost_affiliate_commissions')}
+                            className="flex-1 py-1.5 rounded-lg bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 text-[11px] font-semibold cursor-pointer"
+                          >
+                            .JSON
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Security Audit Trail */}
+                      <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-200 dark:border-white/5 space-y-3">
+                        <span className="text-xs font-bold text-slate-900 dark:text-white block">Immutable Audit Trail</span>
+                        <p className="text-[11px] text-slate-400 font-mono">{securityAuditLogs.length} Events &bull; RLS Sealed</p>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleExportCsvData(securityAuditLogs, 'devhost_security_audit')}
+                            className="flex-1 py-1.5 rounded-lg bg-blue-600 text-white text-[11px] font-semibold cursor-pointer"
+                          >
+                            .CSV
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleExportJsonData(securityAuditLogs, 'devhost_security_audit')}
+                            className="flex-1 py-1.5 rounded-lg bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 text-[11px] font-semibold cursor-pointer"
+                          >
+                            .JSON
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
@@ -1936,6 +2518,57 @@ export default function AdminCommandCenterPage() {
           )}
         </main>
       </div>
+
+      {/* =========================================================================
+          MODAL: HTML EMAIL LIVE PREVIEW
+         ========================================================================= */}
+      {selectedEmailPreview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in">
+          <div className="w-full max-w-3xl max-h-[90vh] bg-zinc-950 border border-white/10 rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+            {/* Modal Header */}
+            <div className="p-4 border-b border-white/10 flex items-center justify-between bg-zinc-900">
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 rounded bg-blue-500/20 text-blue-400 text-[10px] font-mono font-bold">
+                    {selectedEmailPreview.template}
+                  </span>
+                  <span className="text-xs text-slate-400 font-mono">
+                    Sent to: <strong className="text-white">{selectedEmailPreview.to}</strong>
+                  </span>
+                </div>
+                <h3 className="text-sm font-bold text-white">{selectedEmailPreview.subject}</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedEmailPreview(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Email Render Frame */}
+            <div className="flex-1 overflow-y-auto p-4 bg-[#09090b]">
+              <div
+                className="w-full max-w-xl mx-auto rounded-xl shadow-lg overflow-hidden"
+                dangerouslySetInnerHTML={{ __html: selectedEmailPreview.html }}
+              />
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-3 border-t border-white/10 bg-zinc-900 flex items-center justify-between text-xs font-mono text-slate-400">
+              <span>Timestamp: {new Date(selectedEmailPreview.sentAt).toLocaleString()}</span>
+              <button
+                type="button"
+                onClick={() => setSelectedEmailPreview(null)}
+                className="px-4 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white font-semibold cursor-pointer"
+              >
+                Close Preview
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* =========================================================================
           MODAL: CUSTOMER 360° INSPECTOR DRAWER

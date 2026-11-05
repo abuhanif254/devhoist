@@ -1,9 +1,15 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-// Environment variables for Supabase
+// Environment variables for Supabase (supports both modern publishable/secret and legacy anon/service_role)
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const supabaseAnonKey =
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+  '';
+const supabaseServiceKey =
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.SUPABASE_SECRET_KEY ||
+  '';
 
 // Detect if Supabase is actively configured with valid live credentials
 export const isSupabaseConfigured = (): boolean => {
@@ -12,7 +18,8 @@ export const isSupabaseConfigured = (): boolean => {
     supabaseUrl.startsWith('https://') &&
     supabaseAnonKey &&
     !supabaseUrl.includes('your-project-ref') &&
-    !supabaseAnonKey.includes('your-anon-key')
+    !supabaseAnonKey.includes('placeholder') &&
+    (supabaseAnonKey.startsWith('sb_publishable_') || supabaseAnonKey.startsWith('eyJ'))
   );
 };
 

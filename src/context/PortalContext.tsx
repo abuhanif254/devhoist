@@ -206,6 +206,53 @@ export interface AffiliatePayout {
   trxId: string;
 }
 
+export interface AffiliateCommissionItem {
+  id: string;
+  date: string;
+  invoiceId: string;
+  customerMasked: string;
+  domain: string;
+  orderAmountBDT: number;
+  commissionBDT: number;
+  ratePercent: number;
+  subId: string;
+  status: 'pending_35d_hold' | 'cleared_available' | 'clawed_back_refunded' | 'flagged_self_referral';
+  daysLeftToMature: number;
+  clearanceDate: string;
+}
+
+export interface CampaignSubIdStat {
+  subId: string;
+  channelName: string;
+  clicks: number;
+  signups: number;
+  conversionRate: number;
+  totalEarningsBDT: number;
+}
+
+export interface FraudAlertItem {
+  id: string;
+  type: 'self_referral_attempt' | 'duplicate_trxid' | 'brute_force_ip' | 'disposable_email' | 'velocity_abuse';
+  severity: 'warning' | 'critical';
+  title: string;
+  target: string;
+  details: string;
+  status: 'open' | 'blocked' | 'dismissed' | 'whitelisted';
+  timestamp: string;
+  ipAddress: string;
+}
+
+export interface SecurityAuditItem {
+  id: string;
+  actor: string;
+  role: 'client' | 'admin' | 'system';
+  action: string;
+  target: string;
+  ip: string;
+  riskLevel: 'low' | 'medium' | 'high' | 'critical';
+  timestamp: string;
+}
+
 export interface TeamMember {
   id: string;
   name: string;
@@ -452,15 +499,32 @@ interface PortalContextType {
   // Affiliate
   affiliate: {
     refLink: string;
+    referralCode: string;
     clicks: number;
     signups: number;
+    activeConversions: number;
     commissionTier: string;
+    commissionRate: number;
+    tierLevel: 'starter_20' | 'pro_25' | 'agency_30';
+    pendingClearanceBDT: number;
     availableBalanceBDT: number;
     totalEarnedBDT: number;
     payouts: AffiliatePayout[];
+    commissions: AffiliateCommissionItem[];
+    subIdStats: CampaignSubIdStat[];
   };
   requestAffiliatePayout: (amount: number, method: string, accountNumber: string) => boolean;
   approveAffiliatePayout: (payoutId: string) => void;
+  clawbackCommission: (commissionId: string) => void;
+
+  // Security, Fraud Radar & Audit
+  fraudAlerts: FraudAlertItem[];
+  auditLogs: SecurityAuditItem[];
+  emergencyLockdown: boolean;
+  toggleEmergencyLockdown: (enabled: boolean) => void;
+  dismissFraudAlert: (alertId: string) => void;
+  blockIpPermanently: (ip: string) => void;
+  freezeAffiliate: (userId: string, reason: string) => void;
 
   // Security & Team
   teamMembers: TeamMember[];
@@ -967,24 +1031,131 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   const [tickets, setTickets] = useState<SupportTicket[]>(INITIAL_TICKETS);
   const [affiliate, setAffiliate] = useState<{
     refLink: string;
+    referralCode: string;
     clicks: number;
     signups: number;
+    activeConversions: number;
     commissionTier: string;
+    commissionRate: number;
+    tierLevel: 'starter_20' | 'pro_25' | 'agency_30';
+    pendingClearanceBDT: number;
     availableBalanceBDT: number;
     totalEarnedBDT: number;
     payouts: AffiliatePayout[];
+    commissions: AffiliateCommissionItem[];
+    subIdStats: CampaignSubIdStat[];
   }>({
-    refLink: 'https://devhostcloud.com/?ref=hanif2026',
+    refLink: 'https://devhost.cloud/?ref=hanif2026',
+    referralCode: 'hanif2026',
     clicks: 412,
     signups: 14,
-    commissionTier: 'Tier 2 (20% Recurring Lifetime)',
+    activeConversions: 11,
+    commissionTier: 'Tier 2 (25% Commission)',
+    commissionRate: 25,
+    tierLevel: 'pro_25',
+    pendingClearanceBDT: 1575,
     availableBalanceBDT: 2450,
     totalEarnedBDT: 9800,
     payouts: [
       { id: 'PAY-101', date: '2026-10-15', amount: 3500, method: 'bKash Merchant', accountNumber: '01712345678', status: 'Completed', trxId: 'BK_PAY_981' },
       { id: 'PAY-102', date: '2026-09-01', amount: 2500, method: 'Nagad Personal', accountNumber: '01819876543', status: 'Completed', trxId: 'NG_PAY_442' },
     ],
+    commissions: [
+      {
+        id: 'COMM-109',
+        date: '2026-11-04',
+        invoiceId: 'INV-2026-8941',
+        customerMasked: 'r***m@gmail.com',
+        domain: 'dhakabazaar.com.bd',
+        orderAmountBDT: 1800,
+        commissionBDT: 450,
+        ratePercent: 25,
+        subId: 'youtube_bio',
+        status: 'pending_35d_hold',
+        daysLeftToMature: 33,
+        clearanceDate: '2026-12-09',
+      },
+      {
+        id: 'COMM-108',
+        date: '2026-10-28',
+        invoiceId: 'INV-2026-8812',
+        customerMasked: 's***n@techbd.org',
+        domain: 'nextpos.cloud',
+        orderAmountBDT: 4500,
+        commissionBDT: 1125,
+        ratePercent: 25,
+        subId: 'fb_group',
+        status: 'pending_35d_hold',
+        daysLeftToMature: 26,
+        clearanceDate: '2026-12-02',
+      },
+      {
+        id: 'COMM-107',
+        date: '2026-09-22',
+        invoiceId: 'INV-2026-7241',
+        customerMasked: 'k***r@banglamail.net',
+        domain: 'ecombd.shop',
+        orderAmountBDT: 1400,
+        commissionBDT: 280,
+        ratePercent: 20,
+        subId: 'blog_review',
+        status: 'cleared_available',
+        daysLeftToMature: 0,
+        clearanceDate: '2026-10-27 (Cleared)',
+      },
+    ],
+    subIdStats: [
+      { subId: 'youtube_bio', channelName: 'YouTube Description', clicks: 184, signups: 7, conversionRate: 3.8, totalEarningsBDT: 3450 },
+      { subId: 'fb_group', channelName: 'Facebook Developers BD', clicks: 142, signups: 5, conversionRate: 3.5, totalEarningsBDT: 4200 },
+      { subId: 'blog_review', channelName: 'Personal Tech Blog', clicks: 86, signups: 2, conversionRate: 2.3, totalEarningsBDT: 2150 },
+    ],
   });
+
+  // Security, Fraud Radar & Audit
+  const [fraudAlerts, setFraudAlerts] = useState<FraudAlertItem[]>([
+    {
+      id: 'FRAUD-101',
+      type: 'self_referral_attempt',
+      severity: 'critical',
+      title: 'Self-Referral Blocked (Account & IP Match)',
+      target: 'Referral: tanvir99 -> Buyer: tanvir99@gmail.com',
+      details: 'Buyer email and checkout IP 103.112.44.18 matched affiliate registration credentials. Commission zeroed.',
+      status: 'blocked',
+      timestamp: '2 hours ago',
+      ipAddress: '103.112.44.18',
+    },
+    {
+      id: 'FRAUD-102',
+      type: 'brute_force_ip',
+      severity: 'warning',
+      title: 'Brute-Force Lockout (5 Failed Admin PIN Attempts)',
+      target: 'IP: 185.220.101.4 (Tor Exit Node)',
+      details: 'Submitting rapid login attempts on /admin. Temporarily locked out for 15 minutes by Edge Rate Limiter.',
+      status: 'blocked',
+      timestamp: 'Yesterday at 11:20 PM',
+      ipAddress: '185.220.101.4',
+    },
+    {
+      id: 'FRAUD-103',
+      type: 'duplicate_trxid',
+      severity: 'critical',
+      title: 'Duplicate bKash trxID Replay Attempt',
+      target: 'trxID: BKASH_9A8F12X (Already Claimed in INV-2026-8941)',
+      details: 'User tried submitting an already confirmed transaction ID. Payment flagged for review.',
+      status: 'open',
+      timestamp: 'Today at 09:14 AM',
+      ipAddress: '103.151.102.8',
+    },
+  ]);
+
+  const [auditLogs, setAuditLogs] = useState<SecurityAuditItem[]>([
+    { id: 'LOG-891', actor: 'Admin (Founder)', role: 'admin', action: 'Dunning Rules Updated', target: 'Grace Period -> 3 Days', ip: '103.145.22.40', riskLevel: 'low', timestamp: 'Today at 10:15 AM' },
+    { id: 'LOG-890', actor: 'System Auto-Engine', role: 'system', action: 'Self-Referral Detected', target: 'tanvir99 (COMM-104 Flagged)', ip: '103.112.44.18', riskLevel: 'critical', timestamp: '2 hours ago' },
+    { id: 'LOG-889', actor: 'System Auto-Engine', role: 'system', action: 'Brute-Force IP Auto-Blocked', target: '185.220.101.4 -> 15 min lock', ip: '185.220.101.4', riskLevel: 'high', timestamp: 'Yesterday at 11:20 PM' },
+    { id: 'LOG-888', actor: 'Admin (Founder)', role: 'admin', action: 'cPanel Manual Suspend', target: 'User: dev_test2', ip: '103.145.22.40', riskLevel: 'medium', timestamp: '2 days ago' },
+  ]);
+
+  const [emergencyLockdown, setEmergencyLockdown] = useState<boolean>(false);
 
   // Security & Team
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([
@@ -1794,6 +1965,41 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     }));
   };
 
+  const clawbackCommission = (commissionId: string) => {
+    setAffiliate((prev) => {
+      const comm = prev.commissions.find((c) => c.id === commissionId);
+      if (!comm || comm.status === 'clawed_back_refunded') return prev;
+      return {
+        ...prev,
+        pendingClearanceBDT: comm.status === 'pending_35d_hold' ? Math.max(0, prev.pendingClearanceBDT - comm.commissionBDT) : prev.pendingClearanceBDT,
+        availableBalanceBDT: comm.status === 'cleared_available' ? Math.max(0, prev.availableBalanceBDT - comm.commissionBDT) : prev.availableBalanceBDT,
+        commissions: prev.commissions.map((c) => (c.id === commissionId ? { ...c, status: 'clawed_back_refunded', daysLeftToMature: 0 } : c)),
+      };
+    });
+  };
+
+  const toggleEmergencyLockdown = (enabled: boolean) => {
+    setEmergencyLockdown(enabled);
+  };
+
+  const dismissFraudAlert = (alertId: string) => {
+    setFraudAlerts((prev) => prev.map((a) => (a.id === alertId ? { ...a, status: 'dismissed' } : a)));
+  };
+
+  const blockIpPermanently = (ip: string) => {
+    setFraudAlerts((prev) =>
+      prev.map((a) => (a.ipAddress === ip ? { ...a, status: 'blocked', details: a.details + ' [IP PERMANENTLY BLOCKED]' } : a))
+    );
+  };
+
+  const freezeAffiliate = (userId: string, reason: string) => {
+    setAffiliate((prev) => ({
+      ...prev,
+      commissionTier: 'FROZEN FOR FRAUD INVESTIGATION',
+    }));
+    alert(`Affiliate ${userId} has been frozen. Reason: ${reason}`);
+  };
+
   // ---------------------------------------------------------------------------
   // SECURITY & TEAM
   // ---------------------------------------------------------------------------
@@ -2036,6 +2242,19 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     setOrdersLedger((prev) =>
       prev.map((o) => (o.id === orderId ? { ...o, provisionStatus: 'Refunded' } : o))
     );
+    const order = ordersLedger.find((o) => o.id === orderId);
+    if (order) {
+      setAffiliate((prev) => {
+        const comm = prev.commissions.find((c) => c.invoiceId === order.invoiceId);
+        if (!comm || comm.status === 'clawed_back_refunded') return prev;
+        return {
+          ...prev,
+          pendingClearanceBDT: comm.status === 'pending_35d_hold' ? Math.max(0, prev.pendingClearanceBDT - comm.commissionBDT) : prev.pendingClearanceBDT,
+          availableBalanceBDT: comm.status === 'cleared_available' ? Math.max(0, prev.availableBalanceBDT - comm.commissionBDT) : prev.availableBalanceBDT,
+          commissions: prev.commissions.map((c) => (c.id === comm.id ? { ...c, status: 'clawed_back_refunded', daysLeftToMature: 0 } : c)),
+        };
+      });
+    }
   };
 
   const updateMigrationStatus = (migrationId: string, step: 1 | 2 | 3 | 4, notes?: string) => {
@@ -2336,6 +2555,15 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         affiliate,
         requestAffiliatePayout,
         approveAffiliatePayout,
+        clawbackCommission,
+
+        fraudAlerts,
+        auditLogs,
+        emergencyLockdown,
+        toggleEmergencyLockdown,
+        dismissFraudAlert,
+        blockIpPermanently,
+        freezeAffiliate,
 
         teamMembers,
         inviteTeamMember,

@@ -44,6 +44,8 @@ export default function DocsViewer() {
     'Domains & DNS',
     'WordPress & E-Commerce',
     'AI Website Builder',
+    'Affiliate Program & Growth',
+    'Security, Billing & Operations',
   ];
 
   const filteredArticles =

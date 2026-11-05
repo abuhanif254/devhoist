@@ -340,3 +340,149 @@ CREATE POLICY "Public read for platform settings"
 CREATE POLICY "Admin only write for platform settings"
     ON public.platform_settings FOR ALL
     USING (public.is_admin());
+
+
+-- ==============================================================================
+-- PHASE 11: SECURITY, FRAUD RADAR & AUTOMATED AFFILIATE SYSTEM EXTENSION
+-- ==============================================================================
+
+-- 1.1 Brute-Force & Lockout Tracker
+CREATE TABLE IF NOT EXISTS public.auth_login_attempts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email TEXT NOT NULL,
+    ip_address TEXT NOT NULL,
+    user_agent TEXT,
+    attempt_status TEXT NOT NULL CHECK (attempt_status IN ('success', 'failed_password', 'failed_2fa', 'blocked_lockout')),
+    failure_reason TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 1.2 User Active Devices & Session Fingerprints
+CREATE TABLE IF NOT EXISTS public.user_sessions_devices (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+    device_hash TEXT NOT NULL,
+    ip_address TEXT NOT NULL,
+    location TEXT DEFAULT 'Dhaka, Bangladesh',
+    browser_os TEXT NOT NULL,
+    is_trusted BOOLEAN NOT NULL DEFAULT TRUE,
+    last_active_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 1.3 Immutable Security Audit Trail
+CREATE TABLE IF NOT EXISTS public.security_audit_logs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    actor_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    actor_role TEXT NOT NULL DEFAULT 'client' CHECK (actor_role IN ('client', 'admin', 'system')),
+    action_type TEXT NOT NULL,
+    target_resource TEXT NOT NULL,
+    ip_address TEXT NOT NULL DEFAULT '127.0.0.1',
+    risk_level TEXT NOT NULL DEFAULT 'low' CHECK (risk_level IN ('low', 'medium', 'high', 'critical')),
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 1.4 Automated Fraud & Threat Radar
+CREATE TABLE IF NOT EXISTS public.fraud_alerts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    alert_type TEXT NOT NULL CHECK (
+        alert_type IN ('self_referral_attempt', 'duplicate_trxid', 'brute_force_ip', 'disposable_email', 'velocity_abuse')
+    ),
+    severity TEXT NOT NULL CHECK (severity IN ('warning', 'critical')),
+    details JSONB NOT NULL DEFAULT '{}'::jsonb,
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'blocked', 'dismissed', 'whitelisted')),
+    action_taken TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 2.1 Affiliate Profiles
+CREATE TABLE IF NOT EXISTS public.affiliate_profiles (
+    user_id UUID PRIMARY KEY REFERENCES public.profiles(id) ON DELETE CASCADE,
+    referral_code TEXT NOT NULL UNIQUE,
+    custom_slug TEXT UNIQUE,
+    tier_level TEXT NOT NULL DEFAULT 'starter_20' CHECK (tier_level IN ('starter_20', 'pro_25', 'agency_30')),
+    commission_rate NUMERIC(5, 2) NOT NULL DEFAULT 20.00,
+    total_clicks INTEGER NOT NULL DEFAULT 0,
+    total_signups INTEGER NOT NULL DEFAULT 0,
+    active_conversions INTEGER NOT NULL DEFAULT 0,
+    pending_clearance_bdt NUMERIC(12, 2) NOT NULL DEFAULT 0.00 CHECK (pending_clearance_bdt >= 0),
+    available_balance_bdt NUMERIC(12, 2) NOT NULL DEFAULT 0.00 CHECK (available_balance_bdt >= 0),
+    total_withdrawn_bdt NUMERIC(12, 2) NOT NULL DEFAULT 0.00 CHECK (total_withdrawn_bdt >= 0),
+    payout_method TEXT DEFAULT 'bkash' CHECK (payout_method IN ('bkash', 'nagad', 'bank')),
+    payout_account_number TEXT,
+    is_frozen_for_fraud BOOLEAN NOT NULL DEFAULT FALSE,
+    fraud_reason TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 2.2 Affiliate Clicks
+CREATE TABLE IF NOT EXISTS public.affiliate_clicks (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    affiliate_user_id UUID NOT NULL REFERENCES public.affiliate_profiles(user_id) ON DELETE CASCADE,
+    referral_code TEXT NOT NULL,
+    visitor_ip_hash TEXT NOT NULL,
+    user_agent TEXT,
+    referrer_url TEXT,
+    landing_page TEXT NOT NULL DEFAULT '/',
+    sub_id TEXT DEFAULT 'organic',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 2.3 Affiliate Commissions
+CREATE TABLE IF NOT EXISTS public.affiliate_commissions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    affiliate_user_id UUID NOT NULL REFERENCES public.affiliate_profiles(user_id) ON DELETE CASCADE,
+    referred_user_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    invoice_id UUID REFERENCES public.invoices(id) ON DELETE SET NULL,
+    order_amount_bdt NUMERIC(10, 2) NOT NULL,
+    commission_rate NUMERIC(5, 2) NOT NULL,
+    commission_amount_bdt NUMERIC(10, 2) NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending_35d_hold' CHECK (
+        status IN ('pending_35d_hold', 'cleared_available', 'clawed_back_refunded', 'flagged_self_referral')
+    ),
+    buyer_ip_hash TEXT,
+    sub_id TEXT DEFAULT 'organic',
+    matures_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '35 days'),
+    cleared_at TIMESTAMPTZ,
+    clawed_back_at TIMESTAMPTZ,
+    notes TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 2.4 Affiliate Payout Requests
+CREATE TABLE IF NOT EXISTS public.affiliate_payouts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    affiliate_user_id UUID NOT NULL REFERENCES public.affiliate_profiles(user_id) ON DELETE CASCADE,
+    amount_bdt NUMERIC(10, 2) NOT NULL CHECK (amount_bdt >= 1000.00),
+    payout_method TEXT NOT NULL CHECK (payout_method IN ('bkash', 'nagad', 'bank')),
+    account_details TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending_review' CHECK (
+        status IN ('pending_review', 'approved_paid', 'rejected_fraud')
+    ),
+    admin_trx_id TEXT,
+    processed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- RLS for Phase 11 tables
+ALTER TABLE public.auth_login_attempts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.user_sessions_devices ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.security_audit_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.fraud_alerts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.affiliate_profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.affiliate_clicks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.affiliate_commissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.affiliate_payouts ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Audit logs insert" ON public.security_audit_logs FOR INSERT WITH CHECK (true);
+CREATE POLICY "Audit logs admin select" ON public.security_audit_logs FOR SELECT USING (public.is_admin());
+CREATE POLICY "Fraud alerts admin all" ON public.fraud_alerts FOR ALL USING (public.is_admin());
+CREATE POLICY "Affiliate profiles owner/admin" ON public.affiliate_profiles FOR ALL USING (auth.uid() = user_id OR public.is_admin());
+CREATE POLICY "Affiliate clicks insert" ON public.affiliate_clicks FOR INSERT WITH CHECK (true);
+CREATE POLICY "Affiliate clicks select owner" ON public.affiliate_clicks FOR SELECT USING (auth.uid() = affiliate_user_id OR public.is_admin());
+CREATE POLICY "Affiliate commissions owner" ON public.affiliate_commissions FOR SELECT USING (auth.uid() = affiliate_user_id OR public.is_admin());
+CREATE POLICY "Affiliate payouts owner/admin" ON public.affiliate_payouts FOR ALL USING (auth.uid() = affiliate_user_id OR public.is_admin());

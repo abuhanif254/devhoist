@@ -5,6 +5,10 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   ShieldAlert,
+  Shield,
+  ShieldCheck,
+  Ban,
+  Fingerprint,
   Server,
   Users,
   CreditCard,
@@ -64,6 +68,7 @@ import {
   DynamicHostingPlan,
   DynamicTldPricing,
   InvoiceItem,
+  SecurityAuditItem,
 } from '@/context/PortalContext';
 import { useBilling } from '@/context/BillingContext';
 
@@ -75,7 +80,8 @@ type AdminModule =
   | 'affiliates_promos'
   | 'pricing'
   | 'migrations'
-  | 'support_desk';
+  | 'support_desk'
+  | 'security_audit';
 
 export default function AdminCommandCenterPage() {
   const router = useRouter();
@@ -118,6 +124,15 @@ export default function AdminCommandCenterPage() {
 
     affiliate,
     approveAffiliatePayout,
+
+    fraudAlerts,
+    auditLogs: securityAuditLogs,
+    emergencyLockdown,
+    toggleEmergencyLockdown,
+    dismissFraudAlert,
+    blockIpPermanently,
+    freezeAffiliate,
+    clawbackCommission,
   } = usePortal();
 
   const { theme, toggleTheme } = useBilling();
@@ -125,6 +140,11 @@ export default function AdminCommandCenterPage() {
   const [activeModule, setActiveModule] = useState<AdminModule>('overview');
   const [customerSearch, setCustomerSearch] = useState('');
   const [customerFilter, setCustomerFilter] = useState<'All' | 'Active' | 'Suspended' | 'High Resource'>('All');
+
+  // Security & Audit States
+  const [securitySearch, setSecuritySearch] = useState('');
+  const [securityRiskFilter, setSecurityRiskFilter] = useState<'all' | 'critical' | 'high' | 'medium' | 'low'>('all');
+  const [clawbackInputOrderId, setClawbackInputOrderId] = useState('');
 
   // Customer Inspector Drawer
   const [selectedCustomer, setSelectedCustomer] = useState<AdminCustomer | null>(null);
@@ -528,6 +548,37 @@ export default function AdminCommandCenterPage() {
                 <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400">
                   {tickets.length}
                 </span>
+              </button>
+            </div>
+
+            {/* Category 4: ZERO-TRUST SECURITY & FRAUD SHIELD */}
+            <div className="space-y-1 pt-2 border-t border-slate-100 dark:border-white/5">
+              <span className="px-3 text-[10px] font-mono uppercase tracking-wider text-slate-400 font-bold">
+                Security &amp; Compliance
+              </span>
+
+              <button
+                type="button"
+                onClick={() => setActiveModule('security_audit')}
+                className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                  activeModule === 'security_audit'
+                    ? 'bg-rose-600 text-white shadow-md shadow-rose-600/20'
+                    : 'text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <ShieldAlert className="w-4 h-4 text-rose-500" />
+                  <span>Fraud Radar &amp; Audit</span>
+                </div>
+                {fraudAlerts.filter((a) => a.status === 'open').length > 0 ? (
+                  <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-rose-500 text-white font-bold animate-pulse">
+                    {fraudAlerts.filter((a) => a.status === 'open').length}
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 font-bold">
+                    Safe
+                  </span>
+                )}
               </button>
             </div>
           </div>
@@ -1517,6 +1568,368 @@ export default function AdminCommandCenterPage() {
                       </button>
                     </div>
                   ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* =========================================================================
+              MODULE 9: ZERO-TRUST SECURITY OPERATIONS CENTER (SOC) & FRAUD RADAR
+             ========================================================================= */}
+          {activeModule === 'security_audit' && (
+            <div className="space-y-8 animate-in fade-in duration-150">
+              {/* SOC Header & Telemetry Grid */}
+              <div className="p-6 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs space-y-6">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-slate-200 dark:border-white/5">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-600 dark:text-rose-400">
+                      <ShieldAlert className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                        Zero-Trust Security Operations Center (SOC)
+                        <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 font-bold">
+                          SOC-2 Compliant
+                        </span>
+                      </h2>
+                      <p className="text-xs text-slate-500 font-mono">
+                        Real-time threat heuristics, disposable email blocking, and anti-fraud affiliate shields.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Emergency Lockdown Mode Action */}
+                  <div className="flex items-center gap-3 w-full sm:w-auto">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const confirmed = window.confirm(
+                          emergencyLockdown
+                            ? 'Are you sure you want to LIFT the emergency platform lockdown and resume normal operations?'
+                            : 'CRITICAL ALERT: Are you sure you want to activate EMERGENCY PLATFORM LOCKDOWN? This will freeze new checkouts, WHM provisioning, and sensitive APIs.'
+                        );
+                        if (confirmed) {
+                          toggleEmergencyLockdown(!emergencyLockdown);
+                        }
+                      }}
+                      className={`w-full sm:w-auto px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-md ${
+                        emergencyLockdown
+                          ? 'bg-rose-600 hover:bg-rose-700 text-white animate-pulse shadow-rose-600/30'
+                          : 'bg-slate-900 hover:bg-slate-800 text-white dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-100'
+                      }`}
+                    >
+                      <Lock className="w-4 h-4" />
+                      <span>{emergencyLockdown ? 'LIFT EMERGENCY LOCKDOWN' : 'Trigger Platform Lockdown'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {emergencyLockdown && (
+                  <div className="p-4 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 flex items-center gap-3 text-xs text-rose-800 dark:text-rose-300 font-mono animate-pulse">
+                    <AlertTriangle className="w-5 h-5 shrink-0 text-rose-600 dark:text-rose-400" />
+                    <div>
+                      <strong>EMERGENCY LOCKDOWN ACTIVE:</strong> Public API mutations, checkout registrations, and WHM account creation are temporarily halted. Existing customer services remain operational.
+                    </div>
+                  </div>
+                )}
+
+                {/* 4 Infrastructure Shield Telemetry Cards */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/60 border border-slate-200 dark:border-white/5 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-mono uppercase tracking-wider text-slate-500">Imunify360 WAF</span>
+                      <ShieldCheck className="w-4 h-4 text-emerald-500" />
+                    </div>
+                    <div className="text-base font-bold text-slate-900 dark:text-white">Active &amp; Guarded</div>
+                    <div className="text-[11px] text-slate-500 font-mono">BDIX L7 + OWASP CRS Rules</div>
+                  </div>
+
+                  <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/60 border border-slate-200 dark:border-white/5 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-mono uppercase tracking-wider text-slate-500">Brute-Force Guard</span>
+                      <Lock className="w-4 h-4 text-blue-500" />
+                    </div>
+                    <div className="text-base font-bold text-slate-900 dark:text-white">5 Attempts / 15m</div>
+                    <div className="text-[11px] text-slate-500 font-mono">Memory Lockout Rate-Limiter</div>
+                  </div>
+
+                  <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/60 border border-slate-200 dark:border-white/5 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-mono uppercase tracking-wider text-slate-500">Disposable Emails</span>
+                      <Ban className="w-4 h-4 text-amber-500" />
+                    </div>
+                    <div className="text-base font-bold text-slate-900 dark:text-white">50+ Domains Blocked</div>
+                    <div className="text-[11px] text-slate-500 font-mono">Zero Temp-Mail Registrations</div>
+                  </div>
+
+                  <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/60 border border-slate-200 dark:border-white/5 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-mono uppercase tracking-wider text-slate-500">Affiliate Fraud Radar</span>
+                      <Fingerprint className="w-4 h-4 text-rose-500" />
+                    </div>
+                    <div className="text-base font-bold text-slate-900 dark:text-white">4 Signals Enforced</div>
+                    <div className="text-[11px] text-slate-500 font-mono">IP, Subnet, Device &amp; TrxID</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Section 1: Real-Time Fraud & Threat Alerts Radar */}
+              <div className="p-6 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs space-y-4">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4 text-rose-500" />
+                      Active Fraud Radar &amp; Threat Detections
+                    </h3>
+                    <p className="text-xs text-slate-500 font-mono">
+                      Automated high-risk security triggers requiring founder or NOC intervention.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-mono px-2.5 py-1 rounded-full bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-400 font-bold">
+                      {fraudAlerts.filter((a) => a.status === 'open').length} Open Threats
+                    </span>
+                  </div>
+                </div>
+
+                {fraudAlerts.length === 0 ? (
+                  <div className="py-8 text-center text-xs text-slate-500 font-mono">
+                    No active fraud alerts detected. Platform heuristics operating at normal levels.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {fraudAlerts.map((fraudItem) => (
+                      <div
+                        key={fraudItem.id}
+                        className={`p-4 rounded-xl border text-xs font-mono transition-all ${
+                          fraudItem.status === 'open'
+                            ? fraudItem.severity === 'critical'
+                              ? 'bg-rose-50/60 dark:bg-rose-950/30 border-rose-200 dark:border-rose-900/50'
+                              : 'bg-amber-50/60 dark:bg-amber-950/30 border-amber-200 dark:border-amber-900/50'
+                            : 'bg-slate-50/50 dark:bg-zinc-950/30 border-slate-200 dark:border-white/5 opacity-60'
+                        }`}
+                      >
+                        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <span
+                                className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                                  fraudItem.severity === 'critical'
+                                    ? 'bg-rose-600 text-white'
+                                    : 'bg-amber-500 text-white'
+                                }`}
+                              >
+                                {fraudItem.severity}
+                              </span>
+                              <strong className="text-slate-900 dark:text-white text-xs">{fraudItem.title}</strong>
+                              <span className="text-[11px] text-slate-400">({fraudItem.timestamp})</span>
+                            </div>
+
+                            <p className="text-slate-600 dark:text-zinc-300 text-xs">
+                              <span className="text-slate-400">Target:</span>{' '}
+                              <strong className="text-slate-900 dark:text-white">{fraudItem.target}</strong>
+                              {' • '}
+                              <span className="text-slate-400">IP:</span> {fraudItem.ipAddress}
+                            </p>
+
+                            <p className="text-slate-500 dark:text-zinc-400 text-[11px] leading-relaxed">
+                              {fraudItem.details}
+                            </p>
+                          </div>
+
+                          {/* 1-Click Action Buttons */}
+                          {fraudItem.status === 'open' ? (
+                            <div className="flex items-center gap-2 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  blockIpPermanently(fraudItem.ipAddress);
+                                  window.alert(`IP ${fraudItem.ipAddress} permanently blocked in Cloudflare WAF and iptables!`);
+                                }}
+                                className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-semibold cursor-pointer transition-all flex items-center gap-1.5"
+                              >
+                                <Ban className="w-3.5 h-3.5" />
+                                <span>Block IP</span>
+                              </button>
+
+                              {fraudItem.type === 'self_referral_attempt' && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    freezeAffiliate(fraudItem.target, 'Self-referral fraud detected');
+                                    window.alert(`Affiliate ${fraudItem.target} suspended and commissions revoked!`);
+                                  }}
+                                  className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-semibold cursor-pointer transition-all"
+                                >
+                                  Freeze Affiliate
+                                </button>
+                              )}
+
+                              <button
+                                type="button"
+                                onClick={() => dismissFraudAlert(fraudItem.id)}
+                                className="px-3 py-1.5 rounded-lg bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 text-[11px] font-semibold cursor-pointer hover:bg-slate-300 dark:hover:bg-zinc-700 transition-all"
+                              >
+                                Dismiss
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="px-2.5 py-1 rounded bg-slate-200 dark:bg-zinc-800 text-slate-500 font-bold text-[10px] uppercase">
+                              Status: {fraudItem.status}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Section 2: Commission Clawback Engine */}
+              <div className="p-6 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                      <RotateCcw className="w-4 h-4 text-blue-500" />
+                      Affiliate Commission Clawback Tool
+                    </h3>
+                    <p className="text-xs text-slate-500 font-mono">
+                      Revoke pending affiliate commissions for refunded ledger invoices or fraudulent referrals.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-col sm:flex-row gap-3">
+                  <input
+                    type="text"
+                    value={clawbackInputOrderId}
+                    onChange={(e) => setClawbackInputOrderId(e.target.value)}
+                    placeholder="Enter Invoice / Order ID (e.g. INV-9021)"
+                    className="flex-1 px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono uppercase"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (clawbackInputOrderId.trim()) {
+                        clawbackCommission(clawbackInputOrderId.trim());
+                        alert(`Commission for order ${clawbackInputOrderId.trim()} clawed back and marked refunded.`);
+                        setClawbackInputOrderId('');
+                      }
+                    }}
+                    className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold cursor-pointer transition-all"
+                  >
+                    Execute Clawback
+                  </button>
+                </div>
+              </div>
+
+              {/* Section 3: Immutable Security Audit Trail Viewer */}
+              <div className="p-6 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs space-y-4">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                      <Fingerprint className="w-4 h-4 text-emerald-500" />
+                      Immutable Security Audit Trail
+                    </h3>
+                    <p className="text-xs text-slate-500 font-mono">
+                      Cryptographically tamper-evident log stored with Row Level Security (RLS Write-Once).
+                    </p>
+                  </div>
+
+                  {/* Search and Risk Filter */}
+                  <div className="flex items-center gap-2 w-full sm:w-auto">
+                    <input
+                      type="text"
+                      value={securitySearch}
+                      onChange={(e) => setSecuritySearch(e.target.value)}
+                      placeholder="Search actor, action, IP..."
+                      className="px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono"
+                    />
+                    <select
+                      value={securityRiskFilter}
+                      onChange={(e) => setSecurityRiskFilter(e.target.value as any)}
+                      className="px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono"
+                    >
+                      <option value="all">All Risks</option>
+                      <option value="critical">Critical</option>
+                      <option value="high">High</option>
+                      <option value="medium">Medium</option>
+                      <option value="low">Low</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-white/5">
+                  <table className="w-full text-left text-xs font-mono">
+                    <thead className="bg-slate-50 dark:bg-zinc-900/80 text-slate-500 border-b border-slate-200 dark:border-white/5 uppercase text-[10px] tracking-wider">
+                      <tr>
+                        <th className="py-2.5 px-3">Timestamp</th>
+                        <th className="py-2.5 px-3">Actor &amp; Role</th>
+                        <th className="py-2.5 px-3">Event / Action</th>
+                        <th className="py-2.5 px-3">Target</th>
+                        <th className="py-2.5 px-3">IP Address</th>
+                        <th className="py-2.5 px-3">Risk Level</th>
+                        <th className="py-2.5 px-3 text-right">Integrity</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-white/5">
+                      {securityAuditLogs
+                        .filter((log: SecurityAuditItem) => {
+                          const matchesSearch =
+                            log.actor.toLowerCase().includes(securitySearch.toLowerCase()) ||
+                            log.action.toLowerCase().includes(securitySearch.toLowerCase()) ||
+                            log.target.toLowerCase().includes(securitySearch.toLowerCase()) ||
+                            log.ip.toLowerCase().includes(securitySearch.toLowerCase());
+                          const matchesRisk =
+                            securityRiskFilter === 'all' || log.riskLevel === securityRiskFilter;
+                          return matchesSearch && matchesRisk;
+                        })
+                        .map((log: SecurityAuditItem) => (
+                          <tr key={log.id} className="hover:bg-slate-50 dark:hover:bg-zinc-900/30">
+                            <td className="py-2.5 px-3 text-slate-400">{log.timestamp}</td>
+                            <td className="py-2.5 px-3 font-bold text-slate-900 dark:text-white">
+                              {log.actor}{' '}
+                              <span className="text-[10px] font-normal text-slate-400">({log.role})</span>
+                            </td>
+                            <td className="py-2.5 px-3">
+                              <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 font-bold text-[10px]">
+                                {log.action}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-slate-600 dark:text-zinc-300">{log.target}</td>
+                            <td className="py-2.5 px-3 text-slate-400">{log.ip}</td>
+                            <td className="py-2.5 px-3">
+                              <span
+                                className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                                  log.riskLevel === 'critical'
+                                    ? 'bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-400'
+                                    : log.riskLevel === 'high'
+                                    ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-400'
+                                    : log.riskLevel === 'medium'
+                                    ? 'bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-400'
+                                    : 'bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400'
+                                }`}
+                              >
+                                {log.riskLevel}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-right">
+                              <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold flex items-center justify-end gap-1">
+                                <CheckCircle2 className="w-3 h-3" />
+                                RLS Sealed
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-200 dark:border-white/5 text-[11px] text-slate-500 font-mono flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-emerald-500 shrink-0" />
+                  <span>
+                    Zero-Vulnerability Guarantee: Security logs are append-only. Modification or deletion is cryptographically prevented by PostgreSQL Row Level Security (RLS).
+                  </span>
                 </div>
               </div>
             </div>

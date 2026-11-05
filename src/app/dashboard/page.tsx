@@ -321,6 +321,13 @@ export default function CustomerDashboardPage() {
   const [payoutAmount, setPayoutAmount] = useState(1000);
   const [payoutMethod, setPayoutMethod] = useState('bKash');
   const [payoutAccount, setPayoutAccount] = useState('01712345678');
+  const [affiliateLanding, setAffiliateLanding] = useState('/');
+  const [affiliateSubId, setAffiliateSubId] = useState('youtube_bio');
+  const [isAffiliatePayoutModalOpen, setIsAffiliatePayoutModalOpen] = useState(false);
+  const [affiliatePayoutMethod, setAffiliatePayoutMethod] = useState<'bKash' | 'Nagad' | 'Bank'>('bKash');
+  const [affiliatePayoutAccount, setAffiliatePayoutAccount] = useState('01712345678');
+  const [affiliatePayoutAmount, setAffiliatePayoutAmount] = useState(1000);
+  const [bannerTab, setBannerTab] = useState<'728x90' | '300x250' | '1200x630'>('728x90');
 
   // Handlers
   const handleDeployNow = async () => {
@@ -2284,45 +2291,483 @@ export default function CustomerDashboardPage() {
              ========================================================================= */}
           {activeTab === 'affiliate' && (
             <div className="space-y-6 animate-in fade-in duration-150">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="p-5 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs">
-                  <span className="text-xs font-mono text-slate-400">Available Commission:</span>
-                  <div className="text-2xl font-bold font-mono text-emerald-600 dark:text-emerald-400 mt-1">
-                    ৳{affiliate.availableBalanceBDT.toLocaleString()}
+              {/* 1. Header Stat Cards */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="p-5 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs flex flex-col justify-between">
+                  <div>
+                    <span className="text-xs font-mono text-slate-400">Available for Payout:</span>
+                    <div className="text-2xl font-bold font-mono text-emerald-600 dark:text-emerald-400 mt-1">
+                      ৳{affiliate.availableBalanceBDT.toLocaleString()}
+                    </div>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsAffiliatePayoutModalOpen(true)}
+                    className="mt-3 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+                  >
+                    <Wallet className="w-3.5 h-3.5" />
+                    <span>Withdraw via bKash / Nagad</span>
+                  </button>
                 </div>
+
+                <div className="p-5 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs flex flex-col justify-between">
+                  <div>
+                    <span className="text-xs font-mono text-slate-400 flex items-center gap-1">
+                      <Clock className="w-3.5 h-3.5 text-amber-500" />
+                      <span>Pending 35-Day Hold:</span>
+                    </span>
+                    <div className="text-2xl font-bold font-mono text-amber-600 dark:text-amber-400 mt-1">
+                      ৳{(affiliate.pendingClearanceBDT || 1575).toLocaleString()}
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-slate-500 dark:text-zinc-400 mt-2">
+                    Matures automatically after 30-day moneyback guarantee period.
+                  </p>
+                </div>
+
                 <div className="p-5 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs">
                   <span className="text-xs font-mono text-slate-400">Total Lifetime Earned:</span>
                   <div className="text-2xl font-bold font-mono text-slate-900 dark:text-white mt-1">
                     ৳{affiliate.totalEarnedBDT.toLocaleString()}
                   </div>
+                  <div className="mt-2 text-xs text-slate-500 font-mono">
+                    Total Withdrawn: ৳6,000 BDT
+                  </div>
                 </div>
+
                 <div className="p-5 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs">
-                  <span className="text-xs font-mono text-slate-400">Referred Signups:</span>
+                  <span className="text-xs font-mono text-slate-400">Commission Tier:</span>
                   <div className="text-2xl font-bold font-mono text-blue-600 mt-1">
-                    {affiliate.signups} Accounts
+                    {affiliate.commissionRate || 25}% Recurring
+                  </div>
+                  <div className="mt-2 text-xs text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Tier 2 (Pro Partner)</span>
                   </div>
                 </div>
               </div>
 
-              {/* Referral Link Box */}
-              <div className="p-5 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] space-y-2">
-                <label className="text-xs font-mono text-slate-500 uppercase tracking-wider">
-                  Your Unique Partner Tracking URL
-                </label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    readOnly
-                    value={affiliate.refLink}
-                    className="flex-1 px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono"
+              {/* 2. Auto-Scaling Tier Progress Bar */}
+              <div className="p-5 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                      <TrendingUp className="w-4 h-4 text-blue-600" />
+                      <span>Auto-Scaling Tier Progress</span>
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Earned {affiliate.signups} active signups. 17 more referrals to unlock Tier 3 (30% Agency Commission).
+                    </p>
+                  </div>
+                  <span className="px-2.5 py-1 rounded-full text-xs font-mono font-bold bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+                    Tier 2: 25% Active
+                  </span>
+                </div>
+
+                <div className="w-full bg-slate-100 dark:bg-zinc-800 h-2.5 rounded-full overflow-hidden">
+                  <div
+                    className="bg-gradient-to-r from-blue-600 to-indigo-600 h-full rounded-full transition-all duration-500"
+                    style={{ width: `${Math.min(100, Math.round((affiliate.signups / 31) * 100))}%` }}
                   />
+                </div>
+
+                <div className="flex items-center justify-between text-[11px] font-mono text-slate-400">
+                  <span>Tier 1: 20% (1-10 Signups)</span>
+                  <span className="text-blue-600 font-bold">Tier 2: 25% (11-30 Signups) ✓</span>
+                  <span>Tier 3: 30% (31+ Signups)</span>
+                </div>
+              </div>
+
+              {/* 3. Custom Campaign & Deep-Link Generator */}
+              <div className="p-6 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] space-y-4">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                    <Share2 className="w-4 h-4 text-blue-600" />
+                    <span>Custom Campaign &amp; Deep-Link Generator</span>
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Generate customized tracking URLs for specific landing pages and marketing channels with 90-day cookie retention.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs font-medium text-slate-700 dark:text-zinc-300">
+                      Destination Landing Page:
+                    </label>
+                    <select
+                      value={affiliateLanding}
+                      onChange={(e) => setAffiliateLanding(e.target.value)}
+                      className="mt-1 w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs text-slate-900 dark:text-white"
+                    >
+                      <option value="/">Home Page (General Cloud Hosting)</option>
+                      <option value="/nodejs-hosting">Node.js &amp; Next.js Git Hosting</option>
+                      <option value="/wordpress-hosting-bangladesh">LiteSpeed WordPress Hosting</option>
+                      <option value="/cloud-vps">Managed Cloud VPS Configurator</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-slate-700 dark:text-zinc-300">
+                      Campaign Channel Sub-ID (subid):
+                    </label>
+                    <input
+                      type="text"
+                      value={affiliateSubId}
+                      onChange={(e) => setAffiliateSubId(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ''))}
+                      placeholder="e.g. youtube_bio, fb_group, blog_post"
+                      className="mt-1 w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono text-slate-900 dark:text-white"
+                    >
+                    </input>
+                  </div>
+                </div>
+
+                {/* Generated Tracking Link Box */}
+                <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-950/60 border border-slate-200 dark:border-white/10 space-y-1.5">
+                  <div className="text-[11px] font-mono text-slate-400 flex items-center justify-between">
+                    <span>Generated Partner Tracking URL:</span>
+                    <span className="text-emerald-600 dark:text-emerald-400 font-semibold">90-Day Cookie + Sub-ID Active</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={`https://devhost.cloud${affiliateLanding}?ref=${affiliate.referralCode || 'hanif2026'}&subid=${affiliateSubId || 'general'}`}
+                      className="flex-1 px-3 py-2 rounded-lg bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono text-blue-600 dark:text-blue-400 font-semibold"
+                    />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        triggerCopy(
+                          `https://devhost.cloud${affiliateLanding}?ref=${affiliate.referralCode || 'hanif2026'}&subid=${affiliateSubId || 'general'}`,
+                          'gen_ref'
+                        )
+                      }
+                      className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer shrink-0"
+                    >
+                      {copiedKey === 'gen_ref' ? 'Copied!' : 'Copy Link'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* 4. Sub-ID Analytics & Funnel Breakdown Table */}
+              <div className="p-6 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                    <Activity className="w-4 h-4 text-emerald-600" />
+                    <span>Campaign Sub-ID Performance &amp; Conversion Funnel</span>
+                  </h3>
+                  <span className="text-xs text-slate-400 font-mono">Live Attribution</span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-100 dark:border-white/10 text-slate-400 font-mono">
+                        <th className="pb-2">Channel Sub-ID</th>
+                        <th className="pb-2">Target Channel</th>
+                        <th className="pb-2">Total Clicks</th>
+                        <th className="pb-2">Signups</th>
+                        <th className="pb-2">Conversion Rate</th>
+                        <th className="pb-2 text-right">Total Earnings</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-white/5 font-mono">
+                      {(affiliate.subIdStats || []).map((s) => (
+                        <tr key={s.subId} className="hover:bg-slate-50/50 dark:hover:bg-white/[0.02]">
+                          <td className="py-2.5 font-bold text-blue-600">{s.subId}</td>
+                          <td className="py-2.5 text-slate-700 dark:text-zinc-300 font-sans">{s.channelName}</td>
+                          <td className="py-2.5">{s.clicks}</td>
+                          <td className="py-2.5 text-emerald-600 font-bold">{s.signups}</td>
+                          <td className="py-2.5">{s.conversionRate}%</td>
+                          <td className="py-2.5 text-right font-bold text-slate-900 dark:text-white">
+                            ৳{s.totalEarningsBDT.toLocaleString()}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* 5. 35-Day Hold Commissions Lifecycle Table */}
+              <div className="p-6 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                      <Clock className="w-4 h-4 text-amber-500" />
+                      <span>Commissions Lifecycle &amp; 35-Day Anti-Refund Maturity</span>
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Commissions automatically clear to your available balance after 35 days without refund clawback.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-100 dark:border-white/10 text-slate-400 font-mono">
+                        <th className="pb-2">Order Date</th>
+                        <th className="pb-2">Invoice / Domain</th>
+                        <th className="pb-2">Customer</th>
+                        <th className="pb-2">Amount</th>
+                        <th className="pb-2">Commission (25%)</th>
+                        <th className="pb-2">Maturity Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-white/5 font-mono">
+                      {(affiliate.commissions || []).map((comm) => (
+                        <tr key={comm.id} className="hover:bg-slate-50/50 dark:hover:bg-white/[0.02]">
+                          <td className="py-3 text-slate-500">{comm.date}</td>
+                          <td className="py-3">
+                            <span className="font-bold text-slate-900 dark:text-white">{comm.domain}</span>
+                            <div className="text-[10px] text-slate-400">{comm.invoiceId} • {comm.subId}</div>
+                          </td>
+                          <td className="py-3 text-slate-500">{comm.customerMasked}</td>
+                          <td className="py-3">৳{comm.orderAmountBDT}</td>
+                          <td className="py-3 font-bold text-emerald-600 dark:text-emerald-400">
+                            ৳{comm.commissionBDT}
+                          </td>
+                          <td className="py-3">
+                            {comm.status === 'pending_35d_hold' && (
+                              <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 flex items-center gap-1 w-fit">
+                                <Clock className="w-3 h-3" />
+                                <span>{comm.daysLeftToMature} days left to mature</span>
+                              </span>
+                            )}
+                            {comm.status === 'cleared_available' && (
+                              <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 flex items-center gap-1 w-fit">
+                                <CheckCircle2 className="w-3 h-3" />
+                                <span>Cleared &amp; Available</span>
+                              </span>
+                            )}
+                            {comm.status === 'clawed_back_refunded' && (
+                              <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800 flex items-center gap-1 w-fit">
+                                <AlertTriangle className="w-3 h-3" />
+                                <span>Refunded / Clawed Back</span>
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* 6. Ready-to-Use Promotional Banners & Social Copy Kit */}
+              <div className="p-6 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] space-y-5">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-blue-600" />
+                    <span>Ready-to-Use Promotional Banners &amp; Social Copy Kit</span>
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    1-Click copy high-converting ad copy and embed standard promotional banners on your blog or website.
+                  </p>
+                </div>
+
+                {/* Social Ad Copy Cards */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/50 border border-slate-200 dark:border-white/5 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-900 dark:text-white">বাংলা সোশ্যাল পোস্ট কপি (Facebook/LinkedIn)</span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          triggerCopy(
+                            `🚀 বাংলাদেশে সবচেয়ে ফাস্ট ও সাশ্রয়ী Next.js/Node.js এবং WordPress হোস্টিং খুঁজছেন? DevHost Cloud-এ পাচ্ছেন 1-Click cPanel SSO, লাইটস্পিড ক্যাশ এবং ফ্রি SSL! এখনই চেক করুন: https://devhost.cloud/?ref=${affiliate.referralCode || 'hanif2026'}`,
+                            'copy_bn'
+                          )
+                        }
+                        className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-semibold cursor-pointer"
+                      >
+                        {copiedKey === 'copy_bn' ? 'Copied!' : 'Copy Bangla Copy'}
+                      </button>
+                    </div>
+                    <p className="text-xs text-slate-600 dark:text-zinc-300 leading-relaxed font-sans">
+                      🚀 বাংলাদেশে সবচেয়ে ফাস্ট ও সাশ্রয়ী Next.js/Node.js এবং WordPress হোস্টিং খুঁজছেন? DevHost Cloud-এ পাচ্ছেন 1-Click cPanel SSO, লাইটস্পিড ক্যাশ এবং ফ্রি SSL! এখনই চেক করুন: https://devhost.cloud/?ref={affiliate.referralCode || 'hanif2026'}
+                    </p>
+                  </div>
+
+                  <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/50 border border-slate-200 dark:border-white/5 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-900 dark:text-white">English Ad Copy (YouTube/X/Blog)</span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          triggerCopy(
+                            `⚡ Deploy your Next.js and WordPress apps in seconds with automated GitHub Actions, LiteSpeed NVMe Turbo, and instant bKash activation: https://devhost.cloud/?ref=${affiliate.referralCode || 'hanif2026'}`,
+                            'copy_en'
+                          )
+                        }
+                        className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-semibold cursor-pointer"
+                      >
+                        {copiedKey === 'copy_en' ? 'Copied!' : 'Copy English Copy'}
+                      </button>
+                    </div>
+                    <p className="text-xs text-slate-600 dark:text-zinc-300 leading-relaxed font-sans">
+                      ⚡ Deploy your Next.js and WordPress apps in seconds with automated GitHub Actions, LiteSpeed NVMe Turbo, and instant bKash activation: https://devhost.cloud/?ref={affiliate.referralCode || 'hanif2026'}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Banner Embed Codes */}
+                <div className="space-y-3 pt-2">
+                  <div className="flex items-center gap-2 border-b border-slate-100 dark:border-white/10 pb-2">
+                    <button
+                      type="button"
+                      onClick={() => setBannerTab('728x90')}
+                      className={`text-xs font-semibold px-3 py-1 rounded-lg cursor-pointer ${
+                        bannerTab === '728x90' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-slate-900'
+                      }`}
+                    >
+                      728x90 Leaderboard Banner
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBannerTab('300x250')}
+                      className={`text-xs font-semibold px-3 py-1 rounded-lg cursor-pointer ${
+                        bannerTab === '300x250' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-slate-900'
+                      }`}
+                    >
+                      300x250 Medium Rectangle
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBannerTab('1200x630')}
+                      className={`text-xs font-semibold px-3 py-1 rounded-lg cursor-pointer ${
+                        bannerTab === '1200x630' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-slate-900'
+                      }`}
+                    >
+                      1200x630 Social Card
+                    </button>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-slate-50 dark:bg-zinc-950 font-mono text-[11px] text-slate-700 dark:text-zinc-300 flex items-center justify-between">
+                    <code className="truncate max-w-xl">
+                      {bannerTab === '728x90' &&
+                        `<a href="https://devhost.cloud/?ref=${affiliate.referralCode || 'hanif2026'}"><img src="https://devhost.cloud/banners/devhost-728x90.png" alt="DevHost Cloud" width="728" height="90"/></a>`}
+                      {bannerTab === '300x250' &&
+                        `<a href="https://devhost.cloud/?ref=${affiliate.referralCode || 'hanif2026'}"><img src="https://devhost.cloud/banners/devhost-300x250.png" alt="DevHost Cloud" width="300" height="250"/></a>`}
+                      {bannerTab === '1200x630' &&
+                        `<a href="https://devhost.cloud/?ref=${affiliate.referralCode || 'hanif2026'}"><img src="https://devhost.cloud/banners/devhost-1200x630.png" alt="DevHost Cloud" width="1200" height="630"/></a>`}
+                    </code>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        triggerCopy(
+                          `<a href="https://devhost.cloud/?ref=${affiliate.referralCode || 'hanif2026'}"><img src="https://devhost.cloud/banners/devhost-${bannerTab}.png" alt="DevHost Cloud"/></a>`,
+                          'embed'
+                        )
+                      }
+                      className="px-3 py-1 rounded-lg bg-slate-200 dark:bg-zinc-800 hover:bg-slate-300 text-xs font-semibold cursor-pointer shrink-0 ml-2"
+                    >
+                      {copiedKey === 'embed' ? 'Copied!' : 'Copy Embed Code'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* =========================================================================
+              MODAL: AFFILIATE PAYOUT REQUEST
+             ========================================================================= */}
+          {isAffiliatePayoutModalOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+              <div className="w-full max-w-md rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 p-6 space-y-4 shadow-2xl">
+                <div className="flex items-center justify-between border-b border-slate-100 dark:border-white/10 pb-3">
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                    <Wallet className="w-5 h-5 text-emerald-600" />
+                    <span>Request Affiliate Payout</span>
+                  </h3>
                   <button
                     type="button"
-                    onClick={() => triggerCopy(affiliate.refLink, 'ref')}
-                    className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
+                    onClick={() => setIsAffiliatePayoutModalOpen(false)}
+                    className="p-1 rounded-lg text-slate-400 hover:text-slate-600 cursor-pointer"
                   >
-                    {copiedKey === 'ref' ? 'Copied' : 'Copy'}
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-xs">
+                  <span className="text-slate-500 dark:text-zinc-400">Available Balance for Withdrawal:</span>
+                  <div className="text-lg font-bold font-mono text-emerald-600 dark:text-emerald-400">
+                    ৳{affiliate.availableBalanceBDT.toLocaleString()} BDT
+                  </div>
+                  <div className="text-[10px] text-slate-400 mt-1">Minimum payout threshold: ৳1,000 BDT</div>
+                </div>
+
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs font-medium text-slate-700 dark:text-zinc-300">
+                      Payout Method:
+                    </label>
+                    <select
+                      value={affiliatePayoutMethod}
+                      onChange={(e) => setAffiliatePayoutMethod(e.target.value as any)}
+                      className="mt-1 w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs"
+                    >
+                      <option value="bKash">bKash (Personal or Merchant)</option>
+                      <option value="Nagad">Nagad Personal</option>
+                      <option value="Bank">Bank Wire Transfer (City Bank / Dutch-Bangla)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-slate-700 dark:text-zinc-300">
+                      Account / Mobile Number:
+                    </label>
+                    <input
+                      type="text"
+                      value={affiliatePayoutAccount}
+                      onChange={(e) => setAffiliatePayoutAccount(e.target.value)}
+                      placeholder="e.g. 01712-345678 or Account No"
+                      className="mt-1 w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-slate-700 dark:text-zinc-300">
+                      Withdrawal Amount (BDT):
+                    </label>
+                    <input
+                      type="number"
+                      min={1000}
+                      max={affiliate.availableBalanceBDT}
+                      value={affiliatePayoutAmount}
+                      onChange={(e) => setAffiliatePayoutAmount(Number(e.target.value))}
+                      className="mt-1 w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-white/10">
+                  <button
+                    type="button"
+                    onClick={() => setIsAffiliatePayoutModalOpen(false)}
+                    className="px-4 py-2 rounded-xl border border-slate-200 dark:border-white/10 text-xs font-semibold hover:bg-slate-50 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={affiliatePayoutAmount > affiliate.availableBalanceBDT || affiliatePayoutAmount < 1000}
+                    onClick={() => {
+                      const success = requestAffiliatePayout(affiliatePayoutAmount, affiliatePayoutMethod, affiliatePayoutAccount);
+                      if (success) {
+                        setIsAffiliatePayoutModalOpen(false);
+                        alert(`Payout request of ৳${affiliatePayoutAmount} submitted! Funds will be disbursed within 24 hours.`);
+                      } else {
+                        alert('Insufficient available balance');
+                      }
+                    }}
+                    className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold cursor-pointer disabled:opacity-50"
+                  >
+                    Confirm Withdrawal
                   </button>
                 </div>
               </div>

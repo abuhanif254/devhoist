@@ -1,0 +1,6 @@
+name: "Twenty-One Cloud Dark (Next.js Synced)"
+description: "Unified Deep Slate (#0B0F19) & Electric Indigo (#4F46E5) Child Theme matching the Next.js Frontend"
+author: "Global Cloud Hosting Engineering"
+parent: "twenty-one"
+config:
+  parent: "twenty-one"

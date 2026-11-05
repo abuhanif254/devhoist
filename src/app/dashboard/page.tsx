@@ -1,0 +1,3137 @@
+'use client';
+
+import React, { useState } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import {
+  LayoutDashboard,
+  Server,
+  Globe,
+  CreditCard,
+  LifeBuoy,
+  Users,
+  Shield,
+  Layers,
+  ArrowRight,
+  ExternalLink,
+  Plus,
+  RefreshCw,
+  Terminal,
+  CheckCircle2,
+  AlertTriangle,
+  Clock,
+  Copy,
+  Check,
+  ChevronDown,
+  Trash2,
+  Key,
+  Database,
+  Lock,
+  Unlock,
+  Eye,
+  EyeOff,
+  Bell,
+  Menu,
+  X,
+  FileText,
+  Printer,
+  Sparkles,
+  TrendingUp,
+  Sliders,
+  DollarSign,
+  Share2,
+  HardDrive,
+  Cpu,
+  Zap,
+  Activity,
+  Send,
+  GitBranch,
+  RotateCcw,
+  Download,
+  FolderGit2,
+  Play,
+  Pause,
+  UploadCloud,
+  CheckSquare,
+  Square,
+  Search,
+  Filter,
+  History,
+  AlertCircle,
+  HelpCircle,
+  Sun,
+  Moon,
+  LogOut,
+  Wallet,
+} from 'lucide-react';
+import {
+  usePortal,
+  CloudService,
+  DomainItem,
+  Invoice,
+  SupportTicket,
+  DnsRecord,
+  DatabaseItem,
+  SubdomainItem,
+  BackupSnapshot,
+  CronJobItem,
+  ServerLogItem,
+  ChildNameserver,
+  DomainRedirect,
+  SystemNotification,
+} from '@/context/PortalContext';
+import { useBilling } from '@/context/BillingContext';
+import { useLanguage } from '@/context/LanguageContext';
+
+type DashboardTab =
+  | 'overview'
+  | 'services'
+  | 'domains'
+  | 'billing'
+  | 'support'
+  | 'affiliate'
+  | 'security';
+
+type ServiceSubTab =
+  | 'overview'
+  | 'git'
+  | 'databases'
+  | 'domains_staging'
+  | 'backups'
+  | 'cron_logs';
+
+type DomainDrawerSubTab =
+  | 'nameservers'
+  | 'dns'
+  | 'child_ns'
+  | 'whois_lock'
+  | 'redirects';
+
+export default function CustomerDashboardPage() {
+  const router = useRouter();
+  const {
+    currentUser,
+    activeRole,
+    switchRole,
+    notifications,
+    unreadNotificationCount,
+    markNotificationRead,
+    markAllNotificationsRead,
+    systemBroadcast,
+    dismissBroadcast,
+
+    services,
+    activeService,
+    setActiveServiceId,
+    cleanServiceCache,
+    restartPassengerWorkers,
+    flushLiteSpeedCache,
+    resetCpanelPassword,
+    triggerManualDeploy,
+    rollbackRelease,
+    updateServiceRuntime,
+    addEnvVariable,
+    deleteEnvVariable,
+    upgradeServicePlan,
+    updateServiceSshKey,
+
+    databases,
+    createDatabase,
+    deleteDatabase,
+
+    subdomains,
+    createSubdomain,
+    deleteSubdomain,
+    cloneToStaging,
+    pushStagingToLive,
+    toggleSubdomainForceHttps,
+    renewAutoSsl,
+
+    backups,
+    restoreBackup,
+    generateManualSnapshot,
+
+    cronJobs,
+    createCronJob,
+    deleteCronJob,
+    toggleCronJobStatus,
+    serverLogs,
+    clearServerLogs,
+
+    domains,
+    toggleDomainLock,
+    toggleDomainWhoisPrivacy,
+    toggleDomainAutoRenew,
+    bulkToggleAutoRenew,
+    bulkUpdateNameservers,
+    updateDomainNameservers,
+    addDnsRecord,
+    deleteDnsRecord,
+    applyDnsPreset,
+
+    childNameservers,
+    createChildNameserver,
+    deleteChildNameserver,
+    domainRedirects,
+    createDomainRedirect,
+    deleteDomainRedirect,
+    initiateDomainTransfer,
+
+    walletBalanceBDT,
+    walletTransactions,
+    invoices,
+    topUpWallet,
+    payInvoice,
+
+    tickets,
+    createSupportTicket,
+    replyToTicket,
+    resolveTicket,
+
+    affiliate,
+    requestAffiliatePayout,
+
+    teamMembers,
+    inviteTeamMember,
+    removeTeamMember,
+    apiTokens,
+    generateApiToken,
+    revokeApiToken,
+    loginSessions,
+    revokeSession,
+    revokeAllOtherSessions,
+  } = usePortal();
+
+  const { theme, toggleTheme } = useBilling();
+  const { language } = useLanguage();
+
+  // Navigation State
+  const [activeTab, setActiveTab] = useState<DashboardTab>('overview');
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
+  const [isNotifPopoverOpen, setIsNotifPopoverOpen] = useState(false);
+
+  // Copy Feedback State
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const triggerCopy = (text: string, key: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey(null), 2000);
+  };
+
+  // Service Deep Workspace Sub-Tabs
+  const [serviceSubTab, setServiceSubTab] = useState<ServiceSubTab>('overview');
+  const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
+  const [newCpanelPass, setNewCpanelPass] = useState('DhcSecure_2026!#' + Math.random().toString(36).substring(2, 6));
+  const [isDeploying, setIsDeploying] = useState(false);
+  const [deployLogs, setDeployLogs] = useState<string[]>([]);
+  const [envKeyInput, setEnvKeyInput] = useState('');
+  const [envValInput, setEnvValInput] = useState('');
+  const [sshKeyInput, setSshKeyInput] = useState(activeService?.sshPublicKey || '');
+  const [revealedEnvKeys, setRevealedEnvKeys] = useState<{ [key: string]: boolean }>({});
+
+  // Database Tab State
+  const [newDbName, setNewDbName] = useState('');
+  const [newDbUser, setNewDbUser] = useState('');
+  const [newDbPass, setNewDbPass] = useState('Pass_' + Math.random().toString(36).substring(2, 8));
+  const [phpMyAdminModalDb, setPhpMyAdminModalDb] = useState<string | null>(null);
+
+  // Subdomain & Staging State
+  const [newSubdomainName, setNewSubdomainName] = useState('');
+  const [newSubdomainDocRoot, setNewSubdomainDocRoot] = useState('/public_html/');
+  const [isCloningStaging, setIsCloningStaging] = useState(false);
+  const [isPushingLive, setIsPushingLive] = useState(false);
+
+  // Backups State
+  const [restoreModalData, setRestoreModalData] = useState<{ backup: BackupSnapshot; type: 'files' | 'db' | 'full' } | null>(null);
+  const [isRestoring, setIsRestoring] = useState(false);
+  const [restoreProgressStep, setRestoreProgressStep] = useState(0);
+
+  // Cron & Logs State
+  const [cronPreset, setCronPreset] = useState('daily');
+  const [cronScheduleInput, setCronScheduleInput] = useState('0 0 * * *');
+  const [cronCommandInput, setCronCommandInput] = useState('node /home/dev_hanif/scripts/worker.js');
+  const [cronDescInput, setCronDescInput] = useState('Daily sync script');
+  const [logFilter, setLogFilter] = useState<'all' | '200' | '404' | 'error'>('all');
+
+  // Domains & Registrar State
+  const [selectedDomainForDrawer, setSelectedDomainForDrawer] = useState<DomainItem | null>(null);
+  const [domainDrawerTab, setDomainDrawerTab] = useState<DomainDrawerSubTab>('nameservers');
+  const [selectedDomainIds, setSelectedDomainIds] = useState<string[]>([]);
+  const [isBulkNsModalOpen, setIsBulkNsModalOpen] = useState(false);
+  const [bulkNs1, setBulkNs1] = useState('ns1.devhost.cloud');
+  const [bulkNs2, setBulkNs2] = useState('ns2.devhost.cloud');
+  const [isTransferInModalOpen, setIsTransferInModalOpen] = useState(false);
+  const [transferDomainInput, setTransferDomainInput] = useState('');
+  const [transferEppInput, setTransferEppInput] = useState('');
+  const [revealedEpp, setRevealedEpp] = useState(false);
+
+  // Child NS State
+  const [newChildNsHost, setNewChildNsHost] = useState('');
+  const [newChildNsIp, setNewChildNsIp] = useState('103.145.22.40');
+
+  // Redirects State
+  const [newRedirectSource, setNewRedirectSource] = useState('/');
+  const [newRedirectTarget, setNewRedirectTarget] = useState('https://');
+  const [newRedirectType, setNewRedirectType] = useState<'301' | '302'>('301');
+
+  // New DNS Record State
+  const [newDnsType, setNewDnsType] = useState<DnsRecord['type']>('A');
+  const [newDnsName, setNewDnsName] = useState('@');
+  const [newDnsContent, setNewDnsContent] = useState('103.145.22.40');
+  const [newDnsTtl, setNewDnsTtl] = useState(300);
+
+  // Top Up Wallet State
+  const [isTopUpModalOpen, setIsTopUpModalOpen] = useState(false);
+  const [topUpAmount, setTopUpAmount] = useState(1000);
+  const [topUpMethod, setTopUpMethod] = useState<'bKash' | 'Nagad'>('bKash');
+  const [topUpPhone, setTopUpPhone] = useState('01712345678');
+
+  // Support Ticket Form State
+  const [isNewTicketModalOpen, setIsNewTicketModalOpen] = useState(false);
+  const [ticketSubject, setTicketSubject] = useState('');
+  const [ticketDept, setTicketDept] = useState('Technical & DevOps Support');
+  const [ticketPriority, setTicketPriority] = useState<SupportTicket['priority']>('Normal');
+  const [ticketMessage, setTicketMessage] = useState('');
+  const [ticketReplyInput, setTicketReplyInput] = useState<{ [key: string]: string }>({});
+
+  // Payout Request State
+  const [payoutAmount, setPayoutAmount] = useState(1000);
+  const [payoutMethod, setPayoutMethod] = useState('bKash');
+  const [payoutAccount, setPayoutAccount] = useState('01712345678');
+
+  // Handlers
+  const handleDeployNow = async () => {
+    setIsDeploying(true);
+    const logs = await triggerManualDeploy(activeService.id);
+    setDeployLogs(logs);
+    setIsDeploying(false);
+  };
+
+  const handleCreateDatabaseSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newDbName.trim() || !newDbUser.trim()) return;
+    await createDatabase(activeService.id, `devhanif_${newDbName.trim()}`, `devhanif_${newDbUser.trim()}`, newDbPass);
+    setNewDbName('');
+    setNewDbUser('');
+  };
+
+  const handleCreateSubdomainSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newSubdomainName.trim()) return;
+    const fullSub = `${newSubdomainName.trim()}.${activeService.domain}`;
+    await createSubdomain(activeService.id, fullSub, newSubdomainDocRoot);
+    setNewSubdomainName('');
+  };
+
+  const handleCloneStagingTrigger = async () => {
+    setIsCloningStaging(true);
+    await cloneToStaging(activeService.id);
+    setIsCloningStaging(false);
+  };
+
+  const handlePushStagingLiveTrigger = async () => {
+    if (confirm('Are you sure you want to push staging to production? This will overwrite live files.')) {
+      setIsPushingLive(true);
+      await pushStagingToLive(activeService.id);
+      setIsPushingLive(false);
+      alert('Staging changes successfully merged into Production live container!');
+    }
+  };
+
+  const handleExecuteRestore = async () => {
+    if (!restoreModalData) return;
+    setIsRestoring(true);
+    setRestoreProgressStep(1);
+    await new Promise((res) => setTimeout(res, 800));
+    setRestoreProgressStep(2);
+    await new Promise((res) => setTimeout(res, 800));
+    setRestoreProgressStep(3);
+    await new Promise((res) => setTimeout(res, 800));
+    setRestoreProgressStep(4);
+    await restoreBackup(restoreModalData.backup.id, restoreModalData.type);
+    setIsRestoring(false);
+    setRestoreModalData(null);
+    setRestoreProgressStep(0);
+    alert('Backup point restored successfully without data loss!');
+  };
+
+  const handleAddCronSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!cronCommandInput.trim()) return;
+    createCronJob(activeService.id, cronScheduleInput, cronCommandInput.trim(), cronDescInput.trim());
+    setCronCommandInput('');
+    setCronDescInput('');
+  };
+
+  const handleBulkAutoRenew = (enable: boolean) => {
+    bulkToggleAutoRenew(selectedDomainIds, enable);
+    setSelectedDomainIds([]);
+  };
+
+  const handleBulkNsSave = () => {
+    bulkUpdateNameservers(selectedDomainIds, [bulkNs1, bulkNs2]);
+    setIsBulkNsModalOpen(false);
+    setSelectedDomainIds([]);
+  };
+
+  const handleTransferInSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!transferDomainInput.trim() || !transferEppInput.trim()) return;
+    await initiateDomainTransfer(transferDomainInput.trim(), transferEppInput.trim());
+    setIsTransferInModalOpen(false);
+    setTransferDomainInput('');
+    setTransferEppInput('');
+  };
+
+  const filteredLogs = serverLogs.filter((log) => {
+    if (log.serviceId !== activeService.id) return false;
+    if (logFilter === '200') return log.statusCode === 200;
+    if (logFilter === '404') return log.statusCode === 404;
+    if (logFilter === 'error') return log.statusCode >= 500 || log.type === 'error';
+    return true;
+  });
+
+  return (
+    <div className="min-h-screen bg-slate-50 dark:bg-zinc-950 text-slate-900 dark:text-zinc-100 flex flex-col font-sans transition-colors duration-200">
+      {/* GLOBAL SYSTEM ANNOUNCEMENT BROADCASTER (Controlled from /admin) */}
+      {systemBroadcast.active && (
+        <aside
+          aria-label="System Announcement"
+          className={`w-full px-4 py-2 text-xs font-mono flex items-center justify-between border-b ${
+            systemBroadcast.type === 'urgent'
+              ? 'bg-rose-500/10 border-rose-500/20 text-rose-700 dark:text-rose-400'
+              : systemBroadcast.type === 'warning'
+              ? 'bg-amber-500/10 border-amber-500/20 text-amber-800 dark:text-amber-300'
+              : 'bg-blue-500/10 border-blue-500/20 text-blue-700 dark:text-blue-300'
+          }`}
+        >
+          <div className="max-w-7xl mx-auto w-full flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+              <span className="font-semibold uppercase tracking-wider">SYSTEM BROADCAST:</span>
+              <span>{systemBroadcast.message}</span>
+            </div>
+            {systemBroadcast.dismissible && (
+              <button
+                type="button"
+                onClick={dismissBroadcast}
+                className="hover:opacity-75 p-1 cursor-pointer"
+                aria-label="Dismiss banner"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        </aside>
+      )}
+
+      {/* TOP COMMAND HEADER */}
+      <header className="sticky top-0 z-40 w-full border-b border-slate-200 dark:border-white/[0.08] bg-white/95 dark:bg-zinc-950/95 backdrop-blur-md">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
+          {/* Logo & Portal Brand */}
+          <div className="flex items-center gap-4">
+            <Link href="/" className="flex items-center gap-2.5 group">
+              <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold text-sm shadow-md shadow-blue-600/20">
+                DH
+              </div>
+              <div>
+                <span className="font-extrabold tracking-tight text-slate-900 dark:text-white text-base">
+                  DevHost<span className="text-blue-600">.cloud</span>
+                </span>
+                <span className="ml-2 text-[10px] font-mono px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 font-semibold">
+                  Client Area
+                </span>
+              </div>
+            </Link>
+          </div>
+
+          {/* Quick Actions & Header Tools */}
+          <div className="flex items-center gap-3">
+            {/* Real-time Notification Bell Popover */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setIsNotifPopoverOpen(!isNotifPopoverOpen)}
+                className="relative p-2 rounded-xl text-slate-600 hover:text-slate-900 dark:text-zinc-400 dark:hover:text-zinc-100 hover:bg-slate-100 dark:hover:bg-zinc-900 border border-slate-200 dark:border-white/10 transition-colors cursor-pointer"
+                title="Notifications"
+                aria-label="Open notifications"
+              >
+                <Bell className="w-4 h-4" />
+                {unreadNotificationCount > 0 && (
+                  <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-rose-500 text-white text-[10px] font-bold font-mono flex items-center justify-center">
+                    {unreadNotificationCount}
+                  </span>
+                )}
+              </button>
+
+              {/* Notification Popover Dropdown */}
+              {isNotifPopoverOpen && (
+                <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-2xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-white/10 shadow-2xl p-4 space-y-3 z-50 animate-in fade-in zoom-in-95 duration-150">
+                  <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-white/5">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-slate-900 dark:text-white">Notification Center</span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400 font-mono">
+                        {unreadNotificationCount} unread
+                      </span>
+                    </div>
+                    {unreadNotificationCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={markAllNotificationsRead}
+                        className="text-[11px] font-mono text-blue-600 hover:underline cursor-pointer"
+                      >
+                        Mark all as read
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="space-y-2 max-h-72 overflow-y-auto">
+                    {notifications.map((n) => (
+                      <div
+                        key={n.id}
+                        onClick={() => markNotificationRead(n.id)}
+                        className={`p-2.5 rounded-xl border text-left cursor-pointer transition-colors ${
+                          !n.read
+                            ? 'bg-blue-50/50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-900/50'
+                            : 'bg-slate-50/50 dark:bg-zinc-900/40 border-slate-100 dark:border-white/5 opacity-80'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between text-xs font-bold text-slate-900 dark:text-zinc-100">
+                          <span>{n.title}</span>
+                          <span className="text-[10px] font-mono text-slate-400 font-normal">{n.time}</span>
+                        </div>
+                        <p className="text-[11px] text-slate-600 dark:text-zinc-400 mt-1 leading-snug">
+                          {n.desc}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Cloud Wallet Pill */}
+            <button
+              type="button"
+              onClick={() => setIsTopUpModalOpen(true)}
+              className="hidden sm:inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-xs font-mono font-semibold hover:bg-emerald-100 transition-colors cursor-pointer"
+            >
+              <Wallet className="w-3.5 h-3.5" />
+              <span>Wallet: ৳{walletBalanceBDT.toLocaleString()}</span>
+              <Plus className="w-3 h-3 ml-0.5" />
+            </button>
+
+            {/* Role Switcher (Admin / Client quick switcher for founder) */}
+            <Link
+              href="/admin"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-zinc-200 text-white dark:text-zinc-950 text-xs font-semibold shadow-xs transition-colors"
+            >
+              <Shield className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Admin Console</span>
+            </Link>
+
+            {/* Theme Toggle */}
+            <button
+              type="button"
+              onClick={toggleTheme}
+              className="p-2 rounded-xl text-slate-600 hover:text-slate-900 dark:text-zinc-400 dark:hover:text-zinc-100 hover:bg-slate-100 dark:hover:bg-zinc-900 border border-slate-200 dark:border-white/10 transition-colors cursor-pointer"
+              title="Toggle Day/Dark Theme"
+              aria-label="Toggle theme"
+            >
+              {theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+            </button>
+
+            {/* User Avatar */}
+            <div className="flex items-center gap-2 pl-2 border-l border-slate-200 dark:border-white/10">
+              <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 text-white font-bold text-xs flex items-center justify-center">
+                {currentUser.avatar}
+              </div>
+              <div className="hidden md:block text-left">
+                <div className="text-xs font-bold text-slate-900 dark:text-white leading-tight">{currentUser.name}</div>
+                <div className="text-[10px] text-slate-400 font-mono leading-tight">{currentUser.company}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* MAIN PORTAL BODY WITH LEFT NAVIGATION */}
+      <div className="max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8 flex-1 flex flex-col lg:flex-row gap-8">
+        {/* SIDEBAR NAVIGATION */}
+        <aside className="w-full lg:w-64 shrink-0 space-y-6">
+          <div className="p-3 bg-white dark:bg-zinc-900/60 rounded-2xl border border-slate-200 dark:border-white/[0.08] shadow-xs space-y-1">
+            <button
+              type="button"
+              onClick={() => setActiveTab('overview')}
+              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                activeTab === 'overview'
+                  ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20'
+                  : 'text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800'
+              }`}
+            >
+              <LayoutDashboard className="w-4 h-4" />
+              <span>Dashboard Overview</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('services')}
+              className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                activeTab === 'services'
+                  ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20'
+                  : 'text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <Server className="w-4 h-4" />
+                <span>My Services &amp; Git</span>
+              </div>
+              <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded ${activeTab === 'services' ? 'bg-white/20' : 'bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400'}`}>
+                {services.length}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('domains')}
+              className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                activeTab === 'domains'
+                  ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20'
+                  : 'text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <Globe className="w-4 h-4" />
+                <span>Domains &amp; DNS</span>
+              </div>
+              <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded ${activeTab === 'domains' ? 'bg-white/20' : 'bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400'}`}>
+                {domains.length}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('billing')}
+              className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                activeTab === 'billing'
+                  ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20'
+                  : 'text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <CreditCard className="w-4 h-4" />
+                <span>Billing &amp; Invoices</span>
+              </div>
+              {invoices.some((i) => i.status === 'Unpaid') && (
+                <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('support')}
+              className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                activeTab === 'support'
+                  ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20'
+                  : 'text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <LifeBuoy className="w-4 h-4" />
+                <span>Support Tickets</span>
+              </div>
+              <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded ${activeTab === 'support' ? 'bg-white/20' : 'bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400'}`}>
+                {tickets.length}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('affiliate')}
+              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                activeTab === 'affiliate'
+                  ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20'
+                  : 'text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800'
+              }`}
+            >
+              <Share2 className="w-4 h-4" />
+              <span>Affiliate Program</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('security')}
+              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                activeTab === 'security'
+                  ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20'
+                  : 'text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800'
+              }`}
+            >
+              <Shield className="w-4 h-4" />
+              <span>Security &amp; API Keys</span>
+            </button>
+          </div>
+
+          {/* Quick Node Telemetry Card */}
+          <div className="p-4 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-mono text-slate-500 dark:text-zinc-400 uppercase tracking-wider font-semibold">
+                Network Status
+              </span>
+              <span className="inline-flex items-center gap-1 text-[10px] font-mono text-emerald-600 dark:text-emerald-400 font-bold">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" /> 100% Uptime
+              </span>
+            </div>
+            <div className="text-xs space-y-1 font-mono text-slate-600 dark:text-zinc-400">
+              <div className="flex justify-between">
+                <span>SG1 Equinix:</span>
+                <strong className="text-slate-900 dark:text-zinc-200">~35ms (BDIX)</strong>
+              </div>
+              <div className="flex justify-between">
+                <span>US Ashburn:</span>
+                <strong className="text-slate-900 dark:text-zinc-200">~182ms</strong>
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        {/* MAIN DYNAMIC CONTENT AREA */}
+        <main className="flex-1 min-w-0 space-y-8">
+          {/* =========================================================================
+              MODULE 1: DASHBOARD OVERVIEW & RESUME METRICS
+             ========================================================================= */}
+          {activeTab === 'overview' && (
+            <div className="space-y-8 animate-in fade-in duration-150">
+              {/* Welcome Banner */}
+              <div className="p-6 sm:p-8 rounded-3xl bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 text-white shadow-xl shadow-blue-600/10 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
+                <div className="space-y-2">
+                  <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/10 backdrop-blur-md text-xs font-mono font-medium">
+                    <Sparkles className="w-3.5 h-3.5 text-yellow-300" />
+                    <span>Active Production Workspace</span>
+                  </div>
+                  <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
+                    Welcome back, {currentUser.name}!
+                  </h1>
+                  <p className="text-sm text-blue-100 max-w-xl">
+                    Your {activeService.planName} is operational on {activeService.datacenter} with zero dropped requests.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('services')}
+                    className="px-4 py-2 rounded-xl bg-white text-blue-700 hover:bg-blue-50 font-semibold text-xs transition-colors shadow-sm cursor-pointer"
+                  >
+                    Manage Servers
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsTopUpModalOpen(true)}
+                    className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white border border-white/20 font-semibold text-xs transition-colors cursor-pointer"
+                  >
+                    Top Up Wallet
+                  </button>
+                </div>
+              </div>
+
+              {/* Quick Service Telemetry Card (UI FIX APPLIED: flex-col gap-1.5, zero wrapping) */}
+              <div className="p-6 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs space-y-5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100 dark:border-white/5">
+                  <div>
+                    <div className="flex items-center gap-2.5">
+                      <h2 className="text-lg font-bold text-slate-900 dark:text-white">
+                        {activeService.domain}
+                      </h2>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800">
+                        {activeService.status}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-500 dark:text-zinc-400 font-mono mt-1">
+                      {activeService.planName} • Node IP: {activeService.ipAddress} • {activeService.datacenter}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('services')}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 text-xs font-semibold hover:bg-blue-100 transition-colors cursor-pointer"
+                  >
+                    <span>Manage Service &amp; Git Pipelines</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                {/* 4 Telemetry Boxes with strict vertical layout & zero wrapping */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                  {/* Disk Quota */}
+                  <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/60 border border-slate-200 dark:border-white/5 flex flex-col gap-1.5">
+                    <span className="text-xs font-mono text-slate-500 dark:text-zinc-400">
+                      NVMe Disk Quota:
+                    </span>
+                    <strong className="text-slate-900 dark:text-white whitespace-nowrap font-mono tabular-nums text-base font-bold">
+                      {activeService.diskUsedGB} GB / {activeService.diskLimitGB} GB
+                    </strong>
+                    <div className="w-full h-1.5 rounded-full bg-slate-200 dark:bg-zinc-800 overflow-hidden mt-1">
+                      <div
+                        className="h-full bg-blue-600 rounded-full"
+                        style={{ width: `${(activeService.diskUsedGB / activeService.diskLimitGB) * 100}%` }}
+                      />
+                    </div>
+                    <span className="text-[10px] font-mono text-slate-400 text-right">
+                      {Math.round((activeService.diskUsedGB / activeService.diskLimitGB) * 100)}% Used
+                    </span>
+                  </div>
+
+                  {/* Inodes Count */}
+                  <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/60 border border-slate-200 dark:border-white/5 flex flex-col gap-1.5">
+                    <span className="text-xs font-mono text-slate-500 dark:text-zinc-400">
+                      Inodes Count:
+                    </span>
+                    <strong className="text-slate-900 dark:text-white whitespace-nowrap font-mono tabular-nums text-base font-bold">
+                      {activeService.inodesUsed.toLocaleString()} / {activeService.inodeLimit.toLocaleString()}
+                    </strong>
+                    <div className="w-full h-1.5 rounded-full bg-slate-200 dark:bg-zinc-800 overflow-hidden mt-1">
+                      <div
+                        className="h-full bg-emerald-500 rounded-full"
+                        style={{ width: `${(activeService.inodesUsed / activeService.inodeLimit) * 100}%` }}
+                      />
+                    </div>
+                    <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 text-right">
+                      {Math.round((activeService.inodesUsed / activeService.inodeLimit) * 100)}% (87% Spared)
+                    </span>
+                  </div>
+
+                  {/* RAM Allocation */}
+                  <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/60 border border-slate-200 dark:border-white/5 flex flex-col gap-1.5">
+                    <span className="text-xs font-mono text-slate-500 dark:text-zinc-400">
+                      Isolated LVE RAM:
+                    </span>
+                    <strong className="text-slate-900 dark:text-white whitespace-nowrap font-mono tabular-nums text-base font-bold">
+                      {activeService.ramUsedMB} MB / {activeService.ramLimitMB} MB
+                    </strong>
+                    <div className="w-full h-1.5 rounded-full bg-slate-200 dark:bg-zinc-800 overflow-hidden mt-1">
+                      <div
+                        className="h-full bg-indigo-500 rounded-full"
+                        style={{ width: `${(activeService.ramUsedMB / activeService.ramLimitMB) * 100}%` }}
+                      />
+                    </div>
+                    <span className="text-[10px] font-mono text-slate-400 text-right">
+                      {Math.round((activeService.ramUsedMB / activeService.ramLimitMB) * 100)}% Dedicated
+                    </span>
+                  </div>
+
+                  {/* Runtime Engine */}
+                  <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/60 border border-slate-200 dark:border-white/5 flex flex-col gap-1.5">
+                    <span className="text-xs font-mono text-slate-500 dark:text-zinc-400">
+                      Runtime Engine:
+                    </span>
+                    <strong className="text-blue-600 dark:text-blue-400 whitespace-nowrap font-mono text-base font-bold">
+                      {activeService.nodeVersion}
+                    </strong>
+                    <div className="text-[11px] font-mono text-slate-500 dark:text-zinc-400 mt-1">
+                      Passenger Rolling Reload
+                    </div>
+                    <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400">
+                      Active: 2.8s reload time
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Quick Summary Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Recent Invoices Card */}
+                <div className="p-6 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                      <CreditCard className="w-4 h-4 text-blue-600" />
+                      <span>Recent Invoices</span>
+                    </h3>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('billing')}
+                      className="text-xs font-mono text-blue-600 hover:underline cursor-pointer"
+                    >
+                      View all ({invoices.length})
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    {invoices.slice(0, 3).map((inv) => (
+                      <div
+                        key={inv.id}
+                        className="p-3 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-100 dark:border-white/5 flex items-center justify-between text-xs font-mono"
+                      >
+                        <div>
+                          <div className="font-bold text-slate-900 dark:text-zinc-100">{inv.id}</div>
+                          <div className="text-[11px] text-slate-400">{inv.date} • {inv.plan}</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="font-bold text-slate-900 dark:text-zinc-100">৳{inv.amount}</div>
+                          <span className={`text-[10px] font-bold ${inv.status === 'Paid' ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-500'}`}>
+                            {inv.status}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Support Tickets Card */}
+                <div className="p-6 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                      <LifeBuoy className="w-4 h-4 text-blue-600" />
+                      <span>Support &amp; Engineering Tickets</span>
+                    </h3>
+                    <button
+                      type="button"
+                      onClick={() => setIsNewTicketModalOpen(true)}
+                      className="text-xs font-semibold px-2.5 py-1 rounded-lg bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 hover:bg-blue-100 cursor-pointer"
+                    >
+                      + Open Ticket
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    {tickets.slice(0, 3).map((tkt) => (
+                      <div
+                        key={tkt.id}
+                        onClick={() => setActiveTab('support')}
+                        className="p-3 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-100 dark:border-white/5 cursor-pointer hover:border-slate-300 dark:hover:border-white/10 transition-colors"
+                      >
+                        <div className="flex items-center justify-between text-xs font-bold text-slate-900 dark:text-zinc-100">
+                          <span className="font-mono text-blue-600">{tkt.id}</span>
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-950 text-blue-600 font-mono">
+                            {tkt.status}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-600 dark:text-zinc-300 mt-1 truncate">
+                          {tkt.subject}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* =========================================================================
+              MODULE 2: MY SERVICES & GIT DEPLOYMENTS (6 COMPREHENSIVE TABS)
+             ========================================================================= */}
+          {activeTab === 'services' && (
+            <div className="space-y-6 animate-in fade-in duration-150">
+              {/* Service Selector Tabs */}
+              <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                {services.map((srv) => (
+                  <button
+                    key={srv.id}
+                    type="button"
+                    onClick={() => setActiveServiceId(srv.id)}
+                    className={`px-4 py-2.5 rounded-xl text-xs font-mono font-semibold transition-all cursor-pointer whitespace-nowrap flex items-center gap-2 border ${
+                      activeService.id === srv.id
+                        ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                        : 'bg-white dark:bg-zinc-900/60 text-slate-700 dark:text-zinc-300 border-slate-200 dark:border-white/10 hover:border-blue-400'
+                    }`}
+                  >
+                    <Server className="w-3.5 h-3.5" />
+                    <span>{srv.domain}</span>
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                  </button>
+                ))}
+              </div>
+
+              {/* Service Control Workspace Card */}
+              <div className="rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs overflow-hidden">
+                {/* 6 Engineering Workspace Tabs */}
+                <div className="flex items-center gap-1 p-2 border-b border-slate-200 dark:border-white/[0.08] bg-slate-50 dark:bg-zinc-950/50 overflow-x-auto">
+                  <button
+                    type="button"
+                    onClick={() => setServiceSubTab('overview')}
+                    className={`px-3.5 py-2 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer flex items-center gap-2 ${
+                      serviceSubTab === 'overview'
+                        ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
+                        : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    <Sliders className="w-3.5 h-3.5" />
+                    <span>Overview &amp; Power</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setServiceSubTab('git')}
+                    className={`px-3.5 py-2 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer flex items-center gap-2 ${
+                      serviceSubTab === 'git'
+                        ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
+                        : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    <GitBranch className="w-3.5 h-3.5" />
+                    <span>Git CI/CD &amp; Runtime (.env)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setServiceSubTab('databases')}
+                    className={`px-3.5 py-2 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer flex items-center gap-2 ${
+                      serviceSubTab === 'databases'
+                        ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
+                        : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    <Database className="w-3.5 h-3.5" />
+                    <span>Databases &amp; Users</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setServiceSubTab('domains_staging')}
+                    className={`px-3.5 py-2 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer flex items-center gap-2 ${
+                      serviceSubTab === 'domains_staging'
+                        ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
+                        : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    <Globe className="w-3.5 h-3.5" />
+                    <span>Subdomains &amp; Staging Cloner</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setServiceSubTab('backups')}
+                    className={`px-3.5 py-2 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer flex items-center gap-2 ${
+                      serviceSubTab === 'backups'
+                        ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
+                        : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    <History className="w-3.5 h-3.5" />
+                    <span>JetBackup Snapshots (14-Day)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setServiceSubTab('cron_logs')}
+                    className={`px-3.5 py-2 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer flex items-center gap-2 ${
+                      serviceSubTab === 'cron_logs'
+                        ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
+                        : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    <Terminal className="w-3.5 h-3.5" />
+                    <span>Cron Jobs &amp; Real-Time Logs</span>
+                  </button>
+                </div>
+
+                {/* Workspace Body */}
+                <div className="p-6">
+                  {/* ==========================================
+                      SUBTAB 1: OVERVIEW & POWER CONTROLS
+                     ========================================== */}
+                  {serviceSubTab === 'overview' && (
+                    <div className="space-y-6">
+                      {/* Server Details Grid */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/50 border border-slate-200 dark:border-white/5 text-xs font-mono">
+                        <div>
+                          <span className="text-slate-400">Server Node IP:</span>
+                          <div className="flex items-center gap-2 mt-1">
+                            <strong className="text-slate-900 dark:text-white text-sm">{activeService.ipAddress}</strong>
+                            <button
+                              type="button"
+                              onClick={() => triggerCopy(activeService.ipAddress, 'ip')}
+                              className="text-slate-400 hover:text-blue-600 cursor-pointer"
+                            >
+                              {copiedKey === 'ip' ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+                            </button>
+                          </div>
+                        </div>
+
+                        <div>
+                          <span className="text-slate-400">Datacenter:</span>
+                          <div className="text-slate-900 dark:text-white font-bold mt-1">
+                            {activeService.datacenter}
+                          </div>
+                        </div>
+
+                        <div>
+                          <span className="text-slate-400">cPanel Username:</span>
+                          <div className="text-slate-900 dark:text-white font-bold mt-1">
+                            {activeService.cpanelUser}
+                          </div>
+                        </div>
+
+                        <div>
+                          <span className="text-slate-400">cPanel Security:</span>
+                          <div className="mt-1">
+                            <button
+                              type="button"
+                              onClick={() => setIsPasswordModalOpen(true)}
+                              className="px-2.5 py-1 rounded-lg bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 text-[11px] font-semibold hover:bg-blue-100 cursor-pointer"
+                            >
+                              Reset Password
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Power Controls Bar */}
+                      <div className="space-y-3">
+                        <h4 className="text-xs font-mono uppercase tracking-wider text-slate-500 dark:text-zinc-400 font-semibold">
+                          Server Engine Power &amp; Cache Actions
+                        </h4>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              await restartPassengerWorkers(activeService.id);
+                              alert('Passenger workers gracefully reloaded in 2.8s!');
+                            }}
+                            className="p-3.5 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-zinc-950/40 hover:border-blue-500 transition-all text-left cursor-pointer group"
+                          >
+                            <RotateCcw className="w-4 h-4 text-blue-600 group-hover:rotate-180 transition-transform" />
+                            <div className="text-xs font-bold text-slate-900 dark:text-white mt-2">
+                              Restart Node / Passenger
+                            </div>
+                            <p className="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5">
+                              Graceful rolling reload (zero dropped TCP)
+                            </p>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              await flushLiteSpeedCache(activeService.id);
+                              alert('LiteSpeed Edge Cache purged successfully!');
+                            }}
+                            className="p-3.5 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-zinc-950/40 hover:border-emerald-500 transition-all text-left cursor-pointer group"
+                          >
+                            <Zap className="w-4 h-4 text-emerald-500 group-hover:scale-110 transition-transform" />
+                            <div className="text-xs font-bold text-slate-900 dark:text-white mt-2">
+                              Flush LiteSpeed Cache
+                            </div>
+                            <p className="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5">
+                              Purge Edge &amp; Redis object cache
+                            </p>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              await cleanServiceCache(activeService.id);
+                              alert('Temp files & node_modules/.cache flushed! Freed 250 MB.');
+                            }}
+                            className="p-3.5 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-zinc-950/40 hover:border-amber-500 transition-all text-left cursor-pointer group"
+                          >
+                            <Trash2 className="w-4 h-4 text-amber-500 group-hover:scale-110 transition-transform" />
+                            <div className="text-xs font-bold text-slate-900 dark:text-white mt-2">
+                              Clean Temp &amp; npm Cache
+                            </div>
+                            <p className="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5">
+                              Free up isolated NVMe storage
+                            </p>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              upgradeServicePlan(activeService.id, 'Business Max Cloud', 900);
+                              alert('Service upgraded to Business Max (15 GB NVMe / 4 GB RAM)!');
+                            }}
+                            className="p-3.5 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-zinc-950/40 hover:border-indigo-500 transition-all text-left cursor-pointer group"
+                          >
+                            <Sparkles className="w-4 h-4 text-indigo-500 group-hover:scale-110 transition-transform" />
+                            <div className="text-xs font-bold text-slate-900 dark:text-white mt-2">
+                              Upgrade to Business Max
+                            </div>
+                            <p className="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5">
+                              Instant double RAM &amp; CPU cores
+                            </p>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ==========================================
+                      SUBTAB 2: GIT CI/CD & RUNTIME (.env)
+                     ========================================== */}
+                  {serviceSubTab === 'git' && (
+                    <div className="space-y-6">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {/* Connected Repo */}
+                        <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/50 border border-slate-200 dark:border-white/5 space-y-2">
+                          <label className="text-xs font-mono text-slate-500 dark:text-zinc-400 uppercase tracking-wider">
+                            Connected GitHub Repository
+                          </label>
+                          <div className="flex items-center gap-2 font-mono text-sm font-bold text-slate-900 dark:text-white">
+                            <FolderGit2 className="w-4 h-4 text-blue-600" />
+                            <span>{activeService.gitRepoUrl}</span>
+                          </div>
+                          <div className="text-xs text-slate-500 dark:text-zinc-400 font-mono">
+                            Tracking branch: <span className="text-blue-600 dark:text-blue-400 font-bold">{activeService.gitBranch}</span>
+                          </div>
+                        </div>
+
+                        {/* Webhook URL */}
+                        <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/50 border border-slate-200 dark:border-white/5 space-y-2">
+                          <label className="text-xs font-mono text-slate-500 dark:text-zinc-400 uppercase tracking-wider">
+                            Auto-Deploy Webhook Endpoint
+                          </label>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="text"
+                              readOnly
+                              value={activeService.webhookUrl}
+                              className="flex-1 px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono text-slate-600 dark:text-zinc-300"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => triggerCopy(activeService.webhookUrl, 'wh')}
+                              className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
+                            >
+                              {copiedKey === 'wh' ? 'Copied' : 'Copy'}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Manual Deploy Action & Live Logs */}
+                      <div className="p-5 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50/50 dark:bg-zinc-950/40 space-y-4">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div>
+                            <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                              Manual Trigger &amp; Smart Overwrite Engine
+                            </h4>
+                            <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
+                              Builds on free GitHub Actions runners and restarts Passenger in 2.8s
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={handleDeployNow}
+                            disabled={isDeploying}
+                            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-md shadow-blue-600/20 disabled:opacity-50 cursor-pointer"
+                          >
+                            <Play className="w-3.5 h-3.5 fill-current" />
+                            <span>{isDeploying ? 'Deploying...' : 'Trigger Manual Git Build'}</span>
+                          </button>
+                        </div>
+
+                        {deployLogs.length > 0 && (
+                          <div className="p-3.5 rounded-xl bg-slate-950 text-emerald-400 font-mono text-[11px] space-y-1 max-h-48 overflow-y-auto border border-white/10">
+                            {deployLogs.map((log, i) => (
+                              <div key={i}>{log}</div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* 1-Click Rollback Releases Table */}
+                      <div className="space-y-3">
+                        <h4 className="text-xs font-mono uppercase tracking-wider text-slate-500 dark:text-zinc-400 font-semibold">
+                          Release History &amp; 1-Click Instant Rollback
+                        </h4>
+                        <div className="rounded-xl border border-slate-200 dark:border-white/10 overflow-hidden divide-y divide-slate-100 dark:divide-white/5">
+                          {activeService.releases.map((rel) => (
+                            <div
+                              key={rel.id}
+                              className="p-3.5 bg-white dark:bg-zinc-950/40 flex items-center justify-between text-xs font-mono"
+                            >
+                              <div className="flex items-center gap-3">
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                  rel.status === 'Active'
+                                    ? 'bg-emerald-50 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                                    : 'bg-slate-100 dark:bg-zinc-800 text-slate-500'
+                                }`}>
+                                  {rel.commit}
+                                </span>
+                                <div>
+                                  <div className="font-semibold text-slate-900 dark:text-zinc-200">{rel.message}</div>
+                                  <div className="text-[11px] text-slate-400">{rel.timestamp}</div>
+                                </div>
+                              </div>
+                              <div>
+                                {rel.status === 'Active' ? (
+                                  <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-bold">Currently Active</span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      rollbackRelease(activeService.id, rel.id);
+                                      alert(`Instant rollback triggered to release ${rel.commit}!`);
+                                    }}
+                                    className="px-3 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-800 dark:text-zinc-200 text-xs font-semibold cursor-pointer"
+                                  >
+                                    Rollback to this
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Encrypted .env Variable Manager */}
+                      <div className="space-y-3">
+                        <h4 className="text-xs font-mono uppercase tracking-wider text-slate-500 dark:text-zinc-400 font-semibold">
+                          Encrypted Environment Variables (.env)
+                        </h4>
+                        <div className="space-y-2">
+                          {activeService.envVars.map((env) => (
+                            <div
+                              key={env.key}
+                              className="p-2.5 rounded-xl border border-slate-200 dark:border-white/5 bg-slate-50 dark:bg-zinc-950/40 flex items-center justify-between text-xs font-mono"
+                            >
+                              <div className="flex items-center gap-3 flex-1 mr-4">
+                                <span className="font-bold text-blue-600 dark:text-blue-400 w-44 truncate">{env.key}</span>
+                                <span className="text-slate-600 dark:text-zinc-400 truncate flex-1">
+                                  {revealedEnvKeys[env.key] ? env.value : '••••••••••••••••••••••••'}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setRevealedEnvKeys((prev) => ({ ...prev, [env.key]: !prev[env.key] }))}
+                                  className="text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200 p-1 cursor-pointer"
+                                >
+                                  {revealedEnvKeys[env.key] ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => deleteEnvVariable(activeService.id, env.key)}
+                                  className="text-slate-400 hover:text-rose-500 p-1 cursor-pointer"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+
+                          {/* Add Env Form */}
+                          <div className="flex gap-2 pt-2">
+                            <input
+                              type="text"
+                              value={envKeyInput}
+                              onChange={(e) => setEnvKeyInput(e.target.value)}
+                              placeholder="KEY_NAME"
+                              className="w-1/3 px-3 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono uppercase"
+                            />
+                            <input
+                              type="text"
+                              value={envValInput}
+                              onChange={(e) => setEnvValInput(e.target.value)}
+                              placeholder="secret_value"
+                              className="flex-1 px-3 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (envKeyInput.trim()) {
+                                  addEnvVariable(activeService.id, envKeyInput.trim(), envValInput);
+                                  setEnvKeyInput('');
+                                  setEnvValInput('');
+                                }
+                              }}
+                              className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
+                            >
+                              Add Key
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ==========================================
+                      SUBTAB 3: DATABASES & USERS (IN-PORTAL MYSQL)
+                     ========================================== */}
+                  {serviceSubTab === 'databases' && (
+                    <div className="space-y-6">
+                      {/* Create New DB Card */}
+                      <form
+                        onSubmit={handleCreateDatabaseSubmit}
+                        className="p-5 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50/50 dark:bg-zinc-950/40 space-y-4"
+                      >
+                        <h4 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                          <Plus className="w-4 h-4 text-blue-600" />
+                          <span>Create In-Portal MySQL Database &amp; User</span>
+                        </h4>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          <div>
+                            <label className="text-[11px] font-mono text-slate-500">Database Name:</label>
+                            <div className="flex items-center gap-1 mt-1">
+                              <span className="text-xs font-mono text-slate-400">devhanif_</span>
+                              <input
+                                type="text"
+                                value={newDbName}
+                                onChange={(e) => setNewDbName(e.target.value)}
+                                placeholder="ecommerce"
+                                className="flex-1 px-2.5 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono text-slate-900 dark:text-white"
+                                required
+                              />
+                            </div>
+                          </div>
+
+                          <div>
+                            <label className="text-[11px] font-mono text-slate-500">Username:</label>
+                            <div className="flex items-center gap-1 mt-1">
+                              <span className="text-xs font-mono text-slate-400">devhanif_</span>
+                              <input
+                                type="text"
+                                value={newDbUser}
+                                onChange={(e) => setNewDbUser(e.target.value)}
+                                placeholder="appuser"
+                                className="flex-1 px-2.5 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono text-slate-900 dark:text-white"
+                                required
+                              />
+                            </div>
+                          </div>
+
+                          <div>
+                            <label className="text-[11px] font-mono text-slate-500">Password:</label>
+                            <div className="mt-1">
+                              <input
+                                type="text"
+                                value={newDbPass}
+                                onChange={(e) => setNewDbPass(e.target.value)}
+                                className="w-full px-2.5 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono text-slate-900 dark:text-white"
+                                required
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex justify-end">
+                          <button
+                            type="submit"
+                            className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
+                          >
+                            Create Database with ALL PRIVILEGES
+                          </button>
+                        </div>
+                      </form>
+
+                      {/* Databases Table */}
+                      <div className="space-y-3">
+                        <h4 className="text-xs font-mono uppercase tracking-wider text-slate-500 dark:text-zinc-400 font-semibold">
+                          Active MySQL Databases ({databases.filter((d) => d.serviceId === activeService.id).length})
+                        </h4>
+                        <div className="rounded-xl border border-slate-200 dark:border-white/10 overflow-hidden divide-y divide-slate-100 dark:divide-white/5">
+                          {databases
+                            .filter((d) => d.serviceId === activeService.id)
+                            .map((db) => {
+                              const connString = `mysql://${db.dbUser}:Password123@127.0.0.1:3306/${db.dbName}`;
+                              return (
+                                <div
+                                  key={db.id}
+                                  className="p-4 bg-white dark:bg-zinc-950/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-mono"
+                                >
+                                  <div>
+                                    <div className="flex items-center gap-2">
+                                      <Database className="w-4 h-4 text-blue-600" />
+                                      <strong className="text-slate-900 dark:text-white">{db.dbName}</strong>
+                                      <span className="text-[10px] text-slate-400">({db.sizeMB} MB)</span>
+                                    </div>
+                                    <div className="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5">
+                                      User: <span className="text-slate-700 dark:text-zinc-300">{db.dbUser}</span> • Host: {db.dbHost} • {db.collation}
+                                    </div>
+                                  </div>
+
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => triggerCopy(connString, db.id)}
+                                      className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 text-slate-700 dark:text-zinc-300 text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                                    >
+                                      <Copy className="w-3 h-3" />
+                                      <span>{copiedKey === db.id ? 'Copied' : 'Conn String'}</span>
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => setPhpMyAdminModalDb(db.dbName)}
+                                      className="px-2.5 py-1 rounded-lg bg-orange-50 dark:bg-orange-950/40 text-orange-700 dark:text-orange-400 border border-orange-200 dark:border-orange-800 text-[11px] font-semibold hover:bg-orange-100 cursor-pointer"
+                                    >
+                                      1-Click phpMyAdmin SSO
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const blob = new Blob([`-- DevHost Cloud SQL Dump\n-- Database: ${db.dbName}\n-- Exported: ${new Date().toISOString()}\nCREATE DATABASE IF NOT EXISTS \`${db.dbName}\`;\nUSE \`${db.dbName}\`;\n`], { type: 'text/sql' });
+                                        const url = URL.createObjectURL(blob);
+                                        const a = document.createElement('a');
+                                        a.href = url;
+                                        a.download = `${db.dbName}_dump_${new Date().toISOString().split('T')[0]}.sql`;
+                                        a.click();
+                                      }}
+                                      className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 text-slate-700 dark:text-zinc-300 text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                                    >
+                                      <Download className="w-3 h-3" />
+                                      <span>Export SQL</span>
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (confirm(`Delete database ${db.dbName}?`)) {
+                                          deleteDatabase(db.id);
+                                        }
+                                      }}
+                                      className="p-1 rounded-lg text-slate-400 hover:text-rose-500 cursor-pointer"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ==========================================
+                      SUBTAB 4: SUBDOMAINS, STAGING & AUTOSSL
+                     ========================================== */}
+                  {serviceSubTab === 'domains_staging' && (
+                    <div className="space-y-6">
+                      {/* 1-Click Staging Cloner Bar */}
+                      <div className="p-5 rounded-2xl bg-gradient-to-r from-purple-500/10 via-indigo-500/10 to-blue-500/10 border border-purple-500/20 space-y-3">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                          <div>
+                            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300 text-xs font-mono font-semibold">
+                              <Sparkles className="w-3 h-3" />
+                              <span>Isolated Staging Sandbox</span>
+                            </div>
+                            <h4 className="text-sm font-bold text-slate-900 dark:text-white mt-1">
+                              1-Click Clone to staging.{activeService.domain}
+                            </h4>
+                            <p className="text-xs text-slate-600 dark:text-zinc-400">
+                              Duplicate your live database, files, and Passenger container to safely test code.
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={handleCloneStagingTrigger}
+                              disabled={isCloningStaging}
+                              className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold shadow-xs disabled:opacity-50 cursor-pointer"
+                            >
+                              {isCloningStaging ? 'Cloning Staging...' : 'Clone Production to Staging'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handlePushStagingLiveTrigger}
+                              disabled={isPushingLive}
+                              className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-zinc-200 text-white dark:text-zinc-950 text-xs font-semibold shadow-xs disabled:opacity-50 cursor-pointer"
+                            >
+                              {isPushingLive ? 'Merging...' : 'Push Staging to Live'}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Add Subdomain Form */}
+                      <form
+                        onSubmit={handleCreateSubdomainSubmit}
+                        className="p-5 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50/50 dark:bg-zinc-950/40 space-y-4"
+                      >
+                        <h4 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                          <Plus className="w-4 h-4 text-blue-600" />
+                          <span>Create New Subdomain or Addon VHost</span>
+                        </h4>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="text-[11px] font-mono text-slate-500">Subdomain Prefix:</label>
+                            <div className="flex items-center gap-1 mt-1">
+                              <input
+                                type="text"
+                                value={newSubdomainName}
+                                onChange={(e) => setNewSubdomainName(e.target.value)}
+                                placeholder="api"
+                                className="flex-1 px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono"
+                                required
+                              />
+                              <span className="text-xs font-mono text-slate-500">.{activeService.domain}</span>
+                            </div>
+                          </div>
+                          <div>
+                            <label className="text-[11px] font-mono text-slate-500">Document Root Directory:</label>
+                            <div className="mt-1">
+                              <input
+                                type="text"
+                                value={newSubdomainDocRoot}
+                                onChange={(e) => setNewSubdomainDocRoot(e.target.value)}
+                                className="w-full px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex justify-end">
+                          <button
+                            type="submit"
+                            className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
+                          >
+                            Create Subdomain &amp; Issue AutoSSL
+                          </button>
+                        </div>
+                      </form>
+
+                      {/* Subdomains & AutoSSL Shield Table */}
+                      <div className="space-y-3">
+                        <h4 className="text-xs font-mono uppercase tracking-wider text-slate-500 dark:text-zinc-400 font-semibold">
+                          Subdomains &amp; TLS 1.3 AutoSSL Status
+                        </h4>
+                        <div className="rounded-xl border border-slate-200 dark:border-white/10 overflow-hidden divide-y divide-slate-100 dark:divide-white/5">
+                          {subdomains
+                            .filter((s) => s.serviceId === activeService.id)
+                            .map((sub) => (
+                              <div
+                                key={sub.id}
+                                className="p-4 bg-white dark:bg-zinc-950/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-mono"
+                              >
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <Globe className="w-4 h-4 text-blue-600" />
+                                    <strong className="text-slate-900 dark:text-white">{sub.subdomain}</strong>
+                                    {sub.isStaging && (
+                                      <span className="px-2 py-0.5 rounded-full bg-purple-50 dark:bg-purple-950 text-purple-600 text-[10px] font-bold">
+                                        STAGING
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-[11px] text-slate-400 mt-0.5">
+                                    Root: {sub.documentRoot}
+                                  </div>
+                                </div>
+
+                                <div className="flex flex-wrap items-center gap-3">
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 text-[11px] font-semibold border border-emerald-500/20">
+                                    <Shield className="w-3 h-3" />
+                                    <span>TLS 1.3 Active</span>
+                                  </span>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleSubdomainForceHttps(sub.id)}
+                                    className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors cursor-pointer ${
+                                      sub.forceHttps
+                                        ? 'bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border-blue-300'
+                                        : 'bg-slate-100 dark:bg-zinc-800 text-slate-500 border-transparent'
+                                    }`}
+                                  >
+                                    Force HTTPS: {sub.forceHttps ? 'ON' : 'OFF'}
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      await renewAutoSsl(sub.id);
+                                      alert(`AutoSSL certificate successfully re-issued for ${sub.subdomain}!`);
+                                    }}
+                                    className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 text-slate-700 dark:text-zinc-300 text-[11px] font-semibold cursor-pointer"
+                                  >
+                                    Renew AutoSSL Now
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => deleteSubdomain(sub.id)}
+                                    className="p-1 rounded-lg text-slate-400 hover:text-rose-500 cursor-pointer"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ==========================================
+                      SUBTAB 5: JETBACKUP OFFSITE SNAPSHOTS
+                     ========================================== */}
+                  {serviceSubTab === 'backups' && (
+                    <div className="space-y-6">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/50 border border-slate-200 dark:border-white/5">
+                        <div>
+                          <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                            Automated Offsite Cloud Backups (14-Day Vault)
+                          </h4>
+                          <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
+                            Encrypted and shipped daily to AWS S3 SG &amp; Backblaze EU vaults
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            await generateManualSnapshot(activeService.id);
+                            alert('Manual snapshot created and shipped to AWS S3 SG Vault!');
+                          }}
+                          className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs cursor-pointer"
+                        >
+                          + Generate Manual Snapshot Now
+                        </button>
+                      </div>
+
+                      {/* Backups List */}
+                      <div className="rounded-xl border border-slate-200 dark:border-white/10 overflow-hidden divide-y divide-slate-100 dark:divide-white/5">
+                        {backups
+                          .filter((b) => b.serviceId === activeService.id)
+                          .map((bk) => (
+                            <div
+                              key={bk.id}
+                              className="p-4 bg-white dark:bg-zinc-950/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-mono"
+                            >
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <History className="w-4 h-4 text-blue-600" />
+                                  <strong className="text-slate-900 dark:text-white">{bk.date}</strong>
+                                  <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 text-[10px]">
+                                    {bk.type}
+                                  </span>
+                                </div>
+                                <div className="text-[11px] text-slate-400 mt-0.5">
+                                  Size: {bk.sizeMB} MB • Vault: {bk.destination} ({bk.location})
+                                </div>
+                              </div>
+
+                              <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setRestoreModalData({ backup: bk, type: 'files' })}
+                                  className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 text-slate-700 dark:text-zinc-300 text-[11px] font-semibold cursor-pointer"
+                                >
+                                  Restore Files Only
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setRestoreModalData({ backup: bk, type: 'db' })}
+                                  className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 text-slate-700 dark:text-zinc-300 text-[11px] font-semibold cursor-pointer"
+                                >
+                                  Restore Database Only
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setRestoreModalData({ backup: bk, type: 'full' })}
+                                  className="px-2.5 py-1 rounded-lg bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 text-[11px] font-semibold hover:bg-blue-100 cursor-pointer"
+                                >
+                                  Full Account Restore
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ==========================================
+                      SUBTAB 6: CRON JOBS & REAL-TIME LOGS
+                     ========================================== */}
+                  {serviceSubTab === 'cron_logs' && (
+                    <div className="space-y-6">
+                      {/* Cron Job Creator */}
+                      <form
+                        onSubmit={handleAddCronSubmit}
+                        className="p-5 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50/50 dark:bg-zinc-950/40 space-y-4"
+                      >
+                        <h4 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                          <Clock className="w-4 h-4 text-blue-600" />
+                          <span>Schedule New Automated Cron Job</span>
+                        </h4>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          <div>
+                            <label className="text-[11px] font-mono text-slate-500">Preset Frequency:</label>
+                            <select
+                              value={cronPreset}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setCronPreset(v);
+                                if (v === '5min') setCronScheduleInput('*/5 * * * *');
+                                else if (v === 'hourly') setCronScheduleInput('0 * * * *');
+                                else if (v === 'daily') setCronScheduleInput('0 0 * * *');
+                                else if (v === 'weekly') setCronScheduleInput('0 0 * * 0');
+                              }}
+                              className="w-full mt-1 px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono"
+                            >
+                              <option value="5min">Every 5 Minutes (*/5 * * * *)</option>
+                              <option value="hourly">Hourly (0 * * * *)</option>
+                              <option value="daily">Daily at Midnight (0 0 * * *)</option>
+                              <option value="weekly">Weekly (0 0 * * 0)</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="text-[11px] font-mono text-slate-500">Cron Schedule Expression:</label>
+                            <input
+                              type="text"
+                              value={cronScheduleInput}
+                              onChange={(e) => setCronScheduleInput(e.target.value)}
+                              className="w-full mt-1 px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono"
+                              required
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-[11px] font-mono text-slate-500">Description:</label>
+                            <input
+                              type="text"
+                              value={cronDescInput}
+                              onChange={(e) => setCronDescInput(e.target.value)}
+                              placeholder="Daily sales report"
+                              className="w-full mt-1 px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono"
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="text-[11px] font-mono text-slate-500">Command to Execute:</label>
+                          <input
+                            type="text"
+                            value={cronCommandInput}
+                            onChange={(e) => setCronCommandInput(e.target.value)}
+                            placeholder="node /home/user/app/cron.js or php artisan schedule:run"
+                            className="w-full mt-1 px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono"
+                            required
+                          />
+                        </div>
+
+                        <div className="flex justify-end">
+                          <button
+                            type="submit"
+                            className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
+                          >
+                            Add Scheduled Cron Job
+                          </button>
+                        </div>
+                      </form>
+
+                      {/* Active Cron Jobs Table */}
+                      <div className="space-y-3">
+                        <h4 className="text-xs font-mono uppercase tracking-wider text-slate-500 dark:text-zinc-400 font-semibold">
+                          Active Cron Jobs ({cronJobs.filter((c) => c.serviceId === activeService.id).length})
+                        </h4>
+                        <div className="rounded-xl border border-slate-200 dark:border-white/10 overflow-hidden divide-y divide-slate-100 dark:divide-white/5">
+                          {cronJobs
+                            .filter((c) => c.serviceId === activeService.id)
+                            .map((job) => (
+                              <div
+                                key={job.id}
+                                className="p-3.5 bg-white dark:bg-zinc-950/40 flex items-center justify-between text-xs font-mono"
+                              >
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="px-2 py-0.5 rounded bg-blue-50 dark:bg-blue-950 text-blue-600 font-bold text-[10px]">
+                                      {job.schedule}
+                                    </span>
+                                    <strong className="text-slate-900 dark:text-white">{job.description}</strong>
+                                  </div>
+                                  <div className="text-[11px] text-slate-400 mt-0.5 truncate max-w-md">
+                                    {job.command}
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleCronJobStatus(job.id)}
+                                    className={`px-2 py-0.5 rounded text-[10px] font-semibold cursor-pointer ${
+                                      job.status === 'Active'
+                                        ? 'bg-emerald-50 dark:bg-emerald-950 text-emerald-600'
+                                        : 'bg-slate-100 dark:bg-zinc-800 text-slate-500'
+                                    }`}
+                                  >
+                                    {job.status}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => deleteCronJob(job.id)}
+                                    className="p-1 text-slate-400 hover:text-rose-500 cursor-pointer"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                        </div>
+                      </div>
+
+                      {/* Live Server Log Tailer */}
+                      <div className="p-5 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50/50 dark:bg-zinc-950/40 space-y-3">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div className="flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                            <h4 className="text-xs font-mono uppercase tracking-wider text-slate-900 dark:text-white font-bold">
+                              Live Server Log Stream
+                            </h4>
+                          </div>
+                          {/* Filter Pills */}
+                          <div className="flex items-center gap-1.5 text-xs font-mono">
+                            <button
+                              type="button"
+                              onClick={() => setLogFilter('all')}
+                              className={`px-2.5 py-1 rounded-lg cursor-pointer ${logFilter === 'all' ? 'bg-blue-600 text-white' : 'bg-slate-200 dark:bg-zinc-800 text-slate-600'}`}
+                            >
+                              All
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setLogFilter('200')}
+                              className={`px-2.5 py-1 rounded-lg cursor-pointer ${logFilter === '200' ? 'bg-blue-600 text-white' : 'bg-slate-200 dark:bg-zinc-800 text-slate-600'}`}
+                            >
+                              200 OK
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setLogFilter('404')}
+                              className={`px-2.5 py-1 rounded-lg cursor-pointer ${logFilter === '404' ? 'bg-blue-600 text-white' : 'bg-slate-200 dark:bg-zinc-800 text-slate-600'}`}
+                            >
+                              404 Not Found
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setLogFilter('error')}
+                              className={`px-2.5 py-1 rounded-lg cursor-pointer ${logFilter === 'error' ? 'bg-rose-600 text-white' : 'bg-slate-200 dark:bg-zinc-800 text-slate-600'}`}
+                            >
+                              500 / stderr
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Terminal Log Stream Window */}
+                        <div className="p-4 rounded-xl bg-slate-950 text-slate-300 font-mono text-[11px] space-y-1.5 max-h-60 overflow-y-auto border border-white/10">
+                          {filteredLogs.map((log) => (
+                            <div key={log.id} className="flex items-start gap-2 leading-tight">
+                              <span className="text-slate-500 shrink-0">[{log.timestamp}]</span>
+                              <span className={`px-1 py-0.2 rounded text-[10px] font-bold shrink-0 ${
+                                log.statusCode === 200
+                                  ? 'bg-emerald-950 text-emerald-400'
+                                  : log.statusCode === 404
+                                  ? 'bg-amber-950 text-amber-400'
+                                  : 'bg-rose-950 text-rose-400'
+                              }`}>
+                                {log.statusCode}
+                              </span>
+                              <span className="text-blue-400 shrink-0">{log.method}</span>
+                              <span className="text-slate-200">{log.path}</span>
+                              <span className="text-slate-500">({log.responseTimeMs}ms)</span>
+                              {log.message && <span className="text-rose-400">— {log.message}</span>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* =========================================================================
+              MODULE 3: DOMAINS & DNS REGISTRAR SUITE (5-TAB DRAWER & BULK ACTIONS)
+             ========================================================================= */}
+          {activeTab === 'domains' && (
+            <div className="space-y-6 animate-in fade-in duration-150">
+              {/* Header Bar */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900 dark:text-white">
+                    Domain Portfolio &amp; Registrar Suite
+                  </h2>
+                  <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
+                    Cloudflare-grade DNS zones, Glue Records, WHOIS shield &amp; EPP code management
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsTransferInModalOpen(true)}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs cursor-pointer"
+                >
+                  <ArrowRight className="w-3.5 h-3.5" />
+                  <span>Transfer In Existing Domain</span>
+                </button>
+              </div>
+
+              {/* Floating Bulk Action Bar (when domains selected) */}
+              {selectedDomainIds.length > 0 && (
+                <div className="p-3.5 rounded-xl bg-blue-50 dark:bg-blue-950/60 border border-blue-200 dark:border-blue-800 flex items-center justify-between gap-3 text-xs font-mono">
+                  <div className="flex items-center gap-2 text-blue-900 dark:text-blue-200 font-bold">
+                    <CheckSquare className="w-4 h-4 text-blue-600" />
+                    <span>{selectedDomainIds.length} Domain(s) Selected</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleBulkAutoRenew(true)}
+                      className="px-3 py-1 rounded-lg bg-white dark:bg-zinc-900 text-slate-800 dark:text-zinc-200 border border-slate-200 dark:border-white/10 font-semibold cursor-pointer"
+                    >
+                      Bulk Auto-Renew ON
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsBulkNsModalOpen(true)}
+                      className="px-3 py-1 rounded-lg bg-blue-600 text-white font-semibold cursor-pointer"
+                    >
+                      Bulk Change Nameservers
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedDomainIds([])}
+                      className="p-1 text-slate-400 hover:text-slate-600 cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Domain Master Table */}
+              <div className="rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs overflow-hidden divide-y divide-slate-100 dark:divide-white/5">
+                {domains.map((dom) => {
+                  const isChecked = selectedDomainIds.includes(dom.id);
+                  return (
+                    <div
+                      key={dom.id}
+                      className="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-xs font-mono"
+                    >
+                      <div className="flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (isChecked) setSelectedDomainIds((prev) => prev.filter((id) => id !== dom.id));
+                            else setSelectedDomainIds((prev) => [...prev, dom.id]);
+                          }}
+                          className="text-slate-400 hover:text-blue-600 cursor-pointer"
+                        >
+                          {isChecked ? <CheckSquare className="w-4 h-4 text-blue-600" /> : <Square className="w-4 h-4" />}
+                        </button>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <strong className="text-sm font-bold text-slate-900 dark:text-white">{dom.domain}</strong>
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              dom.status === 'Active'
+                                ? 'bg-emerald-50 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400'
+                                : 'bg-amber-50 dark:bg-amber-950 text-amber-600'
+                            }`}>
+                              {dom.status}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-slate-400 mt-1">
+                            Expires: {dom.expiryDate} ({dom.daysRemaining} days left) • Nameservers: {dom.nameservers[0]}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-3">
+                        <span className="text-[11px] text-slate-500 dark:text-zinc-400">
+                          Auto-Renew: <strong className={dom.autoRenew ? 'text-emerald-600' : 'text-slate-400'}>{dom.autoRenew ? 'ON' : 'OFF'}</strong>
+                        </span>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedDomainForDrawer(dom);
+                            setDomainDrawerTab('nameservers');
+                          }}
+                          className="px-3 py-1.5 rounded-xl bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 font-semibold hover:bg-blue-100 transition-colors cursor-pointer"
+                        >
+                          Manage DNS &amp; Zone →
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* =========================================================================
+              MODULE 4: BILLING & PREPAID CLOUD WALLET
+             ========================================================================= */}
+          {activeTab === 'billing' && (
+            <div className="space-y-6 animate-in fade-in duration-150">
+              {/* Wallet Summary Card */}
+              <div className="p-6 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-700 text-white shadow-xl shadow-emerald-600/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <span className="text-xs font-mono uppercase tracking-wider text-emerald-100 font-semibold">
+                    Prepaid Cloud Balance
+                  </span>
+                  <div className="text-3xl font-extrabold font-mono mt-1">৳{walletBalanceBDT.toLocaleString()}</div>
+                  <p className="text-xs text-emerald-100 mt-1">
+                    Funds auto-deduct for instant renewals, domain transfers &amp; VPS expansion.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsTopUpModalOpen(true)}
+                  className="px-4 py-2.5 rounded-xl bg-white text-emerald-800 hover:bg-emerald-50 font-bold text-xs shadow-sm cursor-pointer"
+                >
+                  + Add Funds via bKash / Nagad
+                </button>
+              </div>
+
+              {/* Invoices List */}
+              <div className="space-y-3">
+                <h3 className="text-sm font-bold text-slate-900 dark:text-white">Itemized Invoice History</h3>
+                <div className="rounded-xl border border-slate-200 dark:border-white/10 overflow-hidden divide-y divide-slate-100 dark:divide-white/5">
+                  {invoices.map((inv) => (
+                    <div
+                      key={inv.id}
+                      className="p-4 bg-white dark:bg-zinc-950/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-mono"
+                    >
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <strong className="text-sm font-bold text-slate-900 dark:text-white">{inv.id}</strong>
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            inv.status === 'Paid'
+                              ? 'bg-emerald-50 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400'
+                              : 'bg-rose-50 dark:bg-rose-950 text-rose-500'
+                          }`}>
+                            {inv.status}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-slate-400 mt-1">
+                          Date: {inv.date} • Due: {inv.dueDate} • Gateway: {inv.paymentMethod} (Trx: {inv.trxID})
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-3">
+                        <strong className="text-base text-slate-900 dark:text-white">৳{inv.amount}</strong>
+                        {inv.status === 'Unpaid' && (
+                          <button
+                            type="button"
+                            onClick={() => payInvoice(inv.id)}
+                            className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold cursor-pointer"
+                          >
+                            Pay from Wallet
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => window.print()}
+                          className="p-1.5 rounded-lg border border-slate-200 dark:border-white/10 text-slate-500 hover:text-slate-800 cursor-pointer"
+                          title="Print / Save PDF"
+                        >
+                          <Printer className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* =========================================================================
+              MODULE 5: SUPPORT TICKETS & ENGINEERING HELP
+             ========================================================================= */}
+          {activeTab === 'support' && (
+            <div className="space-y-6 animate-in fade-in duration-150">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900 dark:text-white">Support &amp; Engineering Desk</h2>
+                  <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
+                    Direct communication with senior DevOps engineers on Singapore &amp; USA nodes
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsNewTicketModalOpen(true)}
+                  className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs cursor-pointer"
+                >
+                  + Open New Ticket
+                </button>
+              </div>
+
+              {/* Tickets Accordion */}
+              <div className="space-y-3">
+                {tickets.map((tkt) => (
+                  <div
+                    key={tkt.id}
+                    className="p-5 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs space-y-4"
+                  >
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100 dark:border-white/5">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono font-bold text-blue-600 text-xs">#{tkt.id}</span>
+                          <h4 className="text-sm font-bold text-slate-900 dark:text-white">{tkt.subject}</h4>
+                        </div>
+                        <div className="text-[11px] font-mono text-slate-400 mt-1">
+                          Dept: {tkt.department} • Priority: {tkt.priority} • Last update: {tkt.lastUpdated}
+                        </div>
+                      </div>
+                      <span className={`px-2.5 py-1 rounded-full text-xs font-mono font-bold w-fit ${
+                        tkt.status === 'Resolved'
+                          ? 'bg-slate-100 dark:bg-zinc-800 text-slate-500'
+                          : 'bg-blue-50 dark:bg-blue-950 text-blue-600'
+                      }`}>
+                        {tkt.status}
+                      </span>
+                    </div>
+
+                    {/* Thread Messages */}
+                    <div className="space-y-3">
+                      {tkt.messages.map((msg) => (
+                        <div
+                          key={msg.id}
+                          className={`p-3.5 rounded-xl text-xs ${
+                            msg.sender === 'client'
+                              ? 'bg-slate-50 dark:bg-zinc-950/50 border border-slate-200 dark:border-white/5 text-slate-800 dark:text-zinc-200'
+                              : 'bg-blue-50/50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900/50 text-blue-950 dark:text-blue-100'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between font-bold text-[11px] mb-1">
+                            <span>{msg.senderName}</span>
+                            <span className="text-slate-400 font-mono font-normal">{msg.timestamp}</span>
+                          </div>
+                          <p className="leading-relaxed whitespace-pre-wrap">{msg.message}</p>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Reply Input */}
+                    {tkt.status !== 'Resolved' && (
+                      <div className="flex gap-2 pt-2">
+                        <input
+                          type="text"
+                          value={ticketReplyInput[tkt.id] || ''}
+                          onChange={(e) => setTicketReplyInput((prev) => ({ ...prev, [tkt.id]: e.target.value }))}
+                          placeholder="Type your response to the engineer..."
+                          className="flex-1 px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-sans text-slate-900 dark:text-white"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const val = ticketReplyInput[tkt.id];
+                            if (val && val.trim()) {
+                              replyToTicket(tkt.id, val.trim(), 'client');
+                              setTicketReplyInput((prev) => ({ ...prev, [tkt.id]: '' }));
+                            }
+                          }}
+                          className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
+                        >
+                          Send Reply
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* =========================================================================
+              MODULE 6: AFFILIATE PROGRAM & PAYOUTS
+             ========================================================================= */}
+          {activeTab === 'affiliate' && (
+            <div className="space-y-6 animate-in fade-in duration-150">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="p-5 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs">
+                  <span className="text-xs font-mono text-slate-400">Available Commission:</span>
+                  <div className="text-2xl font-bold font-mono text-emerald-600 dark:text-emerald-400 mt-1">
+                    ৳{affiliate.availableBalanceBDT.toLocaleString()}
+                  </div>
+                </div>
+                <div className="p-5 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs">
+                  <span className="text-xs font-mono text-slate-400">Total Lifetime Earned:</span>
+                  <div className="text-2xl font-bold font-mono text-slate-900 dark:text-white mt-1">
+                    ৳{affiliate.totalEarnedBDT.toLocaleString()}
+                  </div>
+                </div>
+                <div className="p-5 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs">
+                  <span className="text-xs font-mono text-slate-400">Referred Signups:</span>
+                  <div className="text-2xl font-bold font-mono text-blue-600 mt-1">
+                    {affiliate.signups} Accounts
+                  </div>
+                </div>
+              </div>
+
+              {/* Referral Link Box */}
+              <div className="p-5 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] space-y-2">
+                <label className="text-xs font-mono text-slate-500 uppercase tracking-wider">
+                  Your Unique Partner Tracking URL
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    readOnly
+                    value={affiliate.refLink}
+                    className="flex-1 px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => triggerCopy(affiliate.refLink, 'ref')}
+                    className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
+                  >
+                    {copiedKey === 'ref' ? 'Copied' : 'Copy'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* =========================================================================
+              MODULE 7: SECURITY & SSH KEYS
+             ========================================================================= */}
+          {activeTab === 'security' && (
+            <div className="space-y-6 animate-in fade-in duration-150">
+              {/* SSH Keys */}
+              <div className="p-5 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] space-y-4">
+                <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                  <Key className="w-4 h-4 text-blue-600" />
+                  <span>Jailed SSH Public Keys (ED25519 &amp; RSA)</span>
+                </h3>
+                <textarea
+                  value={sshKeyInput}
+                  onChange={(e) => setSshKeyInput(e.target.value)}
+                  rows={3}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono text-slate-900 dark:text-white"
+                  placeholder="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5..."
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    updateServiceSshKey(activeService.id, sshKeyInput);
+                    alert('SSH public key successfully updated for this container!');
+                  }}
+                  className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
+                >
+                  Save SSH Key
+                </button>
+              </div>
+
+              {/* API Tokens */}
+              <div className="p-5 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] space-y-3">
+                <h3 className="text-sm font-bold text-slate-900 dark:text-white">Active Deployment API Tokens</h3>
+                <div className="space-y-2">
+                  {apiTokens.map((tok) => (
+                    <div
+                      key={tok.id}
+                      className="p-3 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-100 dark:border-white/5 flex items-center justify-between text-xs font-mono"
+                    >
+                      <div>
+                        <div className="font-bold text-slate-900 dark:text-white">{tok.name}</div>
+                        <div className="text-[11px] text-slate-400">{tok.prefix} • {tok.permissions}</div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => revokeApiToken(tok.id)}
+                        className="text-slate-400 hover:text-rose-500 cursor-pointer"
+                      >
+                        Revoke
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </main>
+      </div>
+
+      {/* =========================================================================
+          5-TAB ADVANCED DOMAIN MANAGEMENT DRAWER
+         ========================================================================= */}
+      {selectedDomainForDrawer && (
+        <div className="fixed inset-0 z-50 overflow-hidden">
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity"
+            onClick={() => setSelectedDomainForDrawer(null)}
+          />
+          <div className="fixed inset-y-0 right-0 max-w-full flex pl-10">
+            <div className="w-screen max-w-2xl bg-white dark:bg-zinc-950 border-l border-slate-200 dark:border-white/[0.08] shadow-2xl flex flex-col justify-between">
+              {/* Drawer Header */}
+              <div className="p-6 border-b border-slate-200 dark:border-white/[0.08] flex items-center justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Globe className="w-4 h-4 text-blue-600" />
+                    <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                      {selectedDomainForDrawer.domain}
+                    </h3>
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
+                    Cloudflare-grade DNS zones, Glue Records &amp; URL Forwarding
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedDomainForDrawer(null)}
+                  className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200 cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Sub-Tabs Nav */}
+              <div className="flex items-center gap-1 px-6 py-2 border-b border-slate-200 dark:border-white/5 bg-slate-50 dark:bg-zinc-900/40 overflow-x-auto">
+                <button
+                  type="button"
+                  onClick={() => setDomainDrawerTab('nameservers')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap cursor-pointer ${
+                    domainDrawerTab === 'nameservers' ? 'bg-blue-600 text-white' : 'text-slate-600 dark:text-zinc-400'
+                  }`}
+                >
+                  Nameservers
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDomainDrawerTab('dns')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap cursor-pointer ${
+                    domainDrawerTab === 'dns' ? 'bg-blue-600 text-white' : 'text-slate-600 dark:text-zinc-400'
+                  }`}
+                >
+                  DNS Zone Editor
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDomainDrawerTab('child_ns')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap cursor-pointer ${
+                    domainDrawerTab === 'child_ns' ? 'bg-blue-600 text-white' : 'text-slate-600 dark:text-zinc-400'
+                  }`}
+                >
+                  Glue / Child NS
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDomainDrawerTab('whois_lock')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap cursor-pointer ${
+                    domainDrawerTab === 'whois_lock' ? 'bg-blue-600 text-white' : 'text-slate-600 dark:text-zinc-400'
+                  }`}
+                >
+                  WHOIS &amp; EPP Lock
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDomainDrawerTab('redirects')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap cursor-pointer ${
+                    domainDrawerTab === 'redirects' ? 'bg-blue-600 text-white' : 'text-slate-600 dark:text-zinc-400'
+                  }`}
+                >
+                  301/302 Redirects
+                </button>
+              </div>
+
+              {/* Drawer Content */}
+              <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                {/* 1. Nameservers */}
+                {domainDrawerTab === 'nameservers' && (
+                  <div className="space-y-4">
+                    <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/5 space-y-3">
+                      <h4 className="text-xs font-mono uppercase tracking-wider text-slate-900 dark:text-white font-bold">
+                        Global Anycast Nameservers
+                      </h4>
+                      <div className="space-y-2">
+                        <input
+                          type="text"
+                          defaultValue={selectedDomainForDrawer.nameservers[0] || 'ns1.devhost.cloud'}
+                          className="w-full px-3 py-2 rounded-xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-white/10 text-xs font-mono"
+                        />
+                        <input
+                          type="text"
+                          defaultValue={selectedDomainForDrawer.nameservers[1] || 'ns2.devhost.cloud'}
+                          className="w-full px-3 py-2 rounded-xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-white/10 text-xs font-mono"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => alert('Nameservers saved! Propagation will complete in 2-4 hours.')}
+                        className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
+                      >
+                        Save Nameservers
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* 2. DNS Zone Editor */}
+                {domainDrawerTab === 'dns' && (
+                  <div className="space-y-4">
+                    {/* 1-Click Mail Presets */}
+                    <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/5 space-y-2">
+                      <span className="text-[11px] font-mono text-slate-400 uppercase tracking-wider font-semibold">
+                        1-Click DNS Presets
+                      </span>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            applyDnsPreset(selectedDomainForDrawer.id, 'google');
+                            alert('Google Workspace MX & SPF records appended!');
+                          }}
+                          className="px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 border border-slate-200 dark:border-white/10 text-xs font-semibold cursor-pointer"
+                        >
+                          Google Workspace Mail
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            applyDnsPreset(selectedDomainForDrawer.id, 'zoho');
+                            alert('Zoho Mail MX & DKIM records appended!');
+                          }}
+                          className="px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 border border-slate-200 dark:border-white/10 text-xs font-semibold cursor-pointer"
+                        >
+                          Zoho Mail
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            applyDnsPreset(selectedDomainForDrawer.id, 'github_vercel');
+                            alert('GitHub Pages / Vercel DNS verified!');
+                          }}
+                          className="px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 border border-slate-200 dark:border-white/10 text-xs font-semibold cursor-pointer"
+                        >
+                          GitHub / Vercel CNAME
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Records List */}
+                    <div className="rounded-xl border border-slate-200 dark:border-white/10 overflow-hidden divide-y divide-slate-100 dark:divide-white/5">
+                      {selectedDomainForDrawer.dnsRecords.map((dns) => (
+                        <div
+                          key={dns.id}
+                          className="p-3 bg-white dark:bg-zinc-950/40 flex items-center justify-between text-xs font-mono"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="w-12 px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-950 text-blue-600 font-bold text-center">
+                              {dns.type}
+                            </span>
+                            <strong className="text-slate-900 dark:text-white">{dns.name}</strong>
+                            <span className="text-slate-500 truncate max-w-xs">{dns.content}</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => deleteDnsRecord(selectedDomainForDrawer.id, dns.id)}
+                            className="p-1 text-slate-400 hover:text-rose-500 cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Add DNS Form */}
+                    <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/5 space-y-2">
+                      <span className="text-[11px] font-mono text-slate-400">Add New Record</span>
+                      <div className="grid grid-cols-4 gap-2">
+                        <select
+                          value={newDnsType}
+                          onChange={(e) => setNewDnsType(e.target.value as any)}
+                          className="px-2 py-1.5 rounded-lg bg-white dark:bg-zinc-950 border border-slate-200 dark:border-white/10 text-xs font-mono"
+                        >
+                          <option value="A">A</option>
+                          <option value="AAAA">AAAA</option>
+                          <option value="CNAME">CNAME</option>
+                          <option value="MX">MX</option>
+                          <option value="TXT">TXT</option>
+                        </select>
+                        <input
+                          type="text"
+                          value={newDnsName}
+                          onChange={(e) => setNewDnsName(e.target.value)}
+                          placeholder="@"
+                          className="px-2 py-1.5 rounded-lg bg-white dark:bg-zinc-950 border border-slate-200 dark:border-white/10 text-xs font-mono"
+                        />
+                        <input
+                          type="text"
+                          value={newDnsContent}
+                          onChange={(e) => setNewDnsContent(e.target.value)}
+                          placeholder="IP or Target"
+                          className="px-2 py-1.5 rounded-lg bg-white dark:bg-zinc-950 border border-slate-200 dark:border-white/10 text-xs font-mono"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            addDnsRecord(selectedDomainForDrawer.id, {
+                              type: newDnsType,
+                              name: newDnsName,
+                              content: newDnsContent,
+                              ttl: newDnsTtl,
+                              proxied: true,
+                            });
+                          }}
+                          className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
+                        >
+                          Add
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 3. Glue Records / Child Nameservers */}
+                {domainDrawerTab === 'child_ns' && (
+                  <div className="space-y-4">
+                    <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/5 space-y-3">
+                      <h4 className="text-xs font-mono uppercase tracking-wider text-slate-900 dark:text-white font-bold">
+                        Register Child Nameserver (Glue Record)
+                      </h4>
+                      <p className="text-xs text-slate-500">
+                        Create custom agency nameservers like ns1.{selectedDomainForDrawer.domain} pointing to your server IP.
+                      </p>
+                      <div className="grid grid-cols-2 gap-2">
+                        <input
+                          type="text"
+                          value={newChildNsHost}
+                          onChange={(e) => setNewChildNsHost(e.target.value)}
+                          placeholder={`ns1.${selectedDomainForDrawer.domain}`}
+                          className="px-3 py-2 rounded-xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-white/10 text-xs font-mono"
+                        />
+                        <input
+                          type="text"
+                          value={newChildNsIp}
+                          onChange={(e) => setNewChildNsIp(e.target.value)}
+                          placeholder="103.145.22.40"
+                          className="px-3 py-2 rounded-xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-white/10 text-xs font-mono"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (newChildNsHost.trim()) {
+                            createChildNameserver(selectedDomainForDrawer.id, newChildNsHost.trim(), newChildNsIp.trim());
+                            setNewChildNsHost('');
+                            alert('Child Nameserver successfully registered with registry!');
+                          }
+                        }}
+                        className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
+                      >
+                        Register Glue Record
+                      </button>
+                    </div>
+
+                    {/* Active Glue Records */}
+                    <div className="space-y-2">
+                      {childNameservers
+                        .filter((c) => c.domainId === selectedDomainForDrawer.id)
+                        .map((cns) => (
+                          <div
+                            key={cns.id}
+                            className="p-3 rounded-xl border border-slate-200 dark:border-white/5 bg-white dark:bg-zinc-950/40 flex items-center justify-between text-xs font-mono"
+                          >
+                            <div>
+                              <strong className="text-slate-900 dark:text-white">{cns.hostname}</strong>
+                              <span className="text-slate-500 ml-2">→ {cns.ipAddress}</span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => deleteChildNameserver(cns.id)}
+                              className="text-slate-400 hover:text-rose-500 cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* 4. WHOIS Privacy & EPP */}
+                {domainDrawerTab === 'whois_lock' && (
+                  <div className="space-y-4">
+                    <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/5 flex items-center justify-between">
+                      <div>
+                        <div className="text-xs font-bold text-slate-900 dark:text-white">WHOIS ID Protection Shield</div>
+                        <p className="text-[11px] text-slate-500 mt-0.5">Mask your name, email and phone from public ICANN lookup</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => toggleDomainWhoisPrivacy(selectedDomainForDrawer.id)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer ${
+                          selectedDomainForDrawer.whoisPrivacy ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-600'
+                        }`}
+                      >
+                        {selectedDomainForDrawer.whoisPrivacy ? 'Protected' : 'Disabled'}
+                      </button>
+                    </div>
+
+                    <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/5 flex items-center justify-between">
+                      <div>
+                        <div className="text-xs font-bold text-slate-900 dark:text-white">Registrar Theft Lock</div>
+                        <p className="text-[11px] text-slate-500 mt-0.5">Prevent unauthorized domain transfers to other registrars</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => toggleDomainLock(selectedDomainForDrawer.id)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer ${
+                          selectedDomainForDrawer.registrarLock ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-600'
+                        }`}
+                      >
+                        {selectedDomainForDrawer.registrarLock ? 'Locked' : 'Unlocked'}
+                      </button>
+                    </div>
+
+                    {/* EPP Code Box */}
+                    <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/5 space-y-2">
+                      <div className="text-xs font-bold text-slate-900 dark:text-white">EPP / Auth Transfer Code</div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          readOnly
+                          value={revealedEpp ? selectedDomainForDrawer.eppCode : '••••••••••••••••'}
+                          className="flex-1 px-3 py-2 rounded-xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-white/10 text-xs font-mono"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setRevealedEpp(!revealedEpp)}
+                          className="px-3 py-2 rounded-xl bg-slate-200 dark:bg-zinc-800 text-xs font-semibold cursor-pointer"
+                        >
+                          {revealedEpp ? 'Hide' : 'Reveal'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 5. URL Redirects */}
+                {domainDrawerTab === 'redirects' && (
+                  <div className="space-y-4">
+                    <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/5 space-y-3">
+                      <h4 className="text-xs font-mono uppercase tracking-wider text-slate-900 dark:text-white font-bold">
+                        Create 301 / 302 URL Forwarding Rule
+                      </h4>
+                      <div className="grid grid-cols-3 gap-2">
+                        <input
+                          type="text"
+                          value={newRedirectSource}
+                          onChange={(e) => setNewRedirectSource(e.target.value)}
+                          placeholder="/path"
+                          className="px-3 py-2 rounded-xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-white/10 text-xs font-mono"
+                        />
+                        <input
+                          type="text"
+                          value={newRedirectTarget}
+                          onChange={(e) => setNewRedirectTarget(e.target.value)}
+                          placeholder="https://destination.com"
+                          className="px-3 py-2 rounded-xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-white/10 text-xs font-mono"
+                        />
+                        <select
+                          value={newRedirectType}
+                          onChange={(e) => setNewRedirectType(e.target.value as any)}
+                          className="px-3 py-2 rounded-xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-white/10 text-xs font-mono"
+                        >
+                          <option value="301">301 Permanent</option>
+                          <option value="302">302 Temporary</option>
+                        </select>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (newRedirectTarget.trim()) {
+                            createDomainRedirect(selectedDomainForDrawer.id, newRedirectSource, newRedirectTarget, newRedirectType);
+                            alert('URL redirect rule created!');
+                          }
+                        }}
+                        className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
+                      >
+                        Add Forwarding Rule
+                      </button>
+                    </div>
+
+                    <div className="space-y-2">
+                      {domainRedirects
+                        .filter((r) => r.domainId === selectedDomainForDrawer.id)
+                        .map((red) => (
+                          <div
+                            key={red.id}
+                            className="p-3 rounded-xl border border-slate-200 dark:border-white/5 bg-white dark:bg-zinc-950/40 flex items-center justify-between text-xs font-mono"
+                          >
+                            <div>
+                              <span className="text-blue-600 font-bold mr-2">{red.type}</span>
+                              <span className="text-slate-900 dark:text-white">{red.sourcePath}</span>
+                              <span className="text-slate-400 mx-2">→</span>
+                              <span className="text-slate-600 dark:text-zinc-400">{red.targetUrl}</span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => deleteDomainRedirect(red.id)}
+                              className="text-slate-400 hover:text-rose-500 cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          MODAL: DOMAIN TRANSFER-IN WORKFLOW
+         ========================================================================= */}
+      {isTransferInModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in">
+          <form
+            onSubmit={handleTransferInSubmit}
+            className="w-full max-w-md bg-white dark:bg-zinc-950 border border-slate-200 dark:border-white/10 rounded-2xl shadow-2xl p-6 space-y-4"
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-slate-900 dark:text-white">Transfer Domain to DevHost</h3>
+              <button
+                type="button"
+                onClick={() => setIsTransferInModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-xs text-slate-500 dark:text-zinc-400">
+              Includes 1-Year Free Domain Extension + Anycast DNS + WHOIS Privacy Protection
+            </p>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-mono text-slate-500">Domain to Transfer:</label>
+                <input
+                  type="text"
+                  value={transferDomainInput}
+                  onChange={(e) => setTransferDomainInput(e.target.value)}
+                  placeholder="e.g. my-app.com"
+                  className="w-full mt-1 px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono text-slate-900 dark:text-white"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-mono text-slate-500">EPP / Auth Code from current registrar:</label>
+                <input
+                  type="text"
+                  value={transferEppInput}
+                  onChange={(e) => setTransferEppInput(e.target.value)}
+                  placeholder="EPP-xxxx-xxxx"
+                  className="w-full mt-1 px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono text-slate-900 dark:text-white"
+                  required
+                />
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              className="w-full h-11 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
+            >
+              Initiate Transfer &amp; Verify EPP
+            </button>
+          </form>
+        </div>
+      )}
+
+      {/* =========================================================================
+          MODAL: JETBACKUP RESTORE PROGRESS SIMULATION
+         ========================================================================= */}
+      {restoreModalData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-md bg-white dark:bg-zinc-950 border border-slate-200 dark:border-white/10 rounded-2xl shadow-2xl p-6 space-y-4">
+            <h3 className="text-base font-bold text-slate-900 dark:text-white">
+              Confirm {restoreModalData.type.toUpperCase()} Restore
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-zinc-400">
+              Restoring snapshot from <strong className="text-slate-900 dark:text-white">{restoreModalData.backup.date}</strong> to {activeService.domain}.
+            </p>
+
+            {isRestoring ? (
+              <div className="space-y-3 py-3">
+                <div className="flex items-center gap-2 text-xs font-mono text-blue-600">
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>
+                    {restoreProgressStep === 1 && '1. Fetching snapshot from AWS S3 SG Vault...'}
+                    {restoreProgressStep === 2 && '2. Uncompressing tarball and verifying hashes...'}
+                    {restoreProgressStep === 3 && '3. Restoring files / MySQL tables...'}
+                    {restoreProgressStep === 4 && '4. Reloading passenger workers...'}
+                  </span>
+                </div>
+                <div className="w-full h-2 rounded-full bg-slate-200 dark:bg-zinc-800 overflow-hidden">
+                  <div
+                    className="h-full bg-blue-600 transition-all duration-300"
+                    style={{ width: `${restoreProgressStep * 25}%` }}
+                  />
+                </div>
+              </div>
+            ) : (
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setRestoreModalData(null)}
+                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExecuteRestore}
+                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold cursor-pointer"
+                >
+                  Start Restore
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          MODAL: PHPMYADMIN SSO SIMULATION
+         ========================================================================= */}
+      {phpMyAdminModalDb && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-2xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-white/10 rounded-2xl shadow-2xl p-6 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-white/5">
+              <div className="flex items-center gap-2">
+                <Database className="w-5 h-5 text-orange-500" />
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                  phpMyAdmin SSO — {phpMyAdminModalDb}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPhpMyAdminModalDb(null)}
+                className="text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 rounded-xl bg-slate-950 text-emerald-400 font-mono text-xs space-y-2">
+              <div>-- Connecting via secure single sign-on token...</div>
+              <div>-- Host: 127.0.0.1:3306 (MySQL 8.0 InnoDB)</div>
+              <div>-- Database: {phpMyAdminModalDb}</div>
+              <div>-- Tables: 14 loaded (InnoDB Engine, utf8mb4_unicode_ci)</div>
+              <div>-- Ready for SQL queries and schema inspection.</div>
+            </div>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => setPhpMyAdminModalDb(null)}
+                className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
+              >
+                Close SSO Session
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          MODAL: TOP UP WALLET
+         ========================================================================= */}
+      {isTopUpModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-md bg-white dark:bg-zinc-950 border border-slate-200 dark:border-white/10 rounded-2xl shadow-2xl p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-slate-900 dark:text-white">Top Up Prepaid Cloud Wallet</h3>
+              <button
+                type="button"
+                onClick={() => setIsTopUpModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs font-mono">
+              <div>
+                <label className="text-slate-500">Amount (BDT):</label>
+                <input
+                  type="number"
+                  value={topUpAmount}
+                  onChange={(e) => setTopUpAmount(Number(e.target.value))}
+                  className="w-full mt-1 px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-sm font-bold text-slate-900 dark:text-white"
+                />
+              </div>
+
+              <div>
+                <label className="text-slate-500">Gateway:</label>
+                <div className="grid grid-cols-2 gap-2 mt-1">
+                  <button
+                    type="button"
+                    onClick={() => setTopUpMethod('bKash')}
+                    className={`p-2 rounded-xl border text-center font-bold cursor-pointer ${
+                      topUpMethod === 'bKash' ? 'bg-pink-500 text-white border-pink-500' : 'bg-slate-100 text-slate-600'
+                    }`}
+                  >
+                    bKash Instant
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTopUpMethod('Nagad')}
+                    className={`p-2 rounded-xl border text-center font-bold cursor-pointer ${
+                      topUpMethod === 'Nagad' ? 'bg-orange-500 text-white border-orange-500' : 'bg-slate-100 text-slate-600'
+                    }`}
+                  >
+                    Nagad Merchant
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-slate-500">Mobile Number:</label>
+                <input
+                  type="text"
+                  value={topUpPhone}
+                  onChange={(e) => setTopUpPhone(e.target.value)}
+                  className="w-full mt-1 px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono"
+                />
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                topUpWallet(topUpAmount, topUpMethod);
+                setIsTopUpModalOpen(false);
+                alert(`৳${topUpAmount} added to your Prepaid Cloud Wallet via ${topUpMethod}!`);
+              }}
+              className="w-full h-11 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold cursor-pointer"
+            >
+              Confirm ৳{topUpAmount} Top-Up
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          MODAL: NEW SUPPORT TICKET
+         ========================================================================= */}
+      {isNewTicketModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (ticketSubject.trim() && ticketMessage.trim()) {
+                createSupportTicket({
+                  subject: ticketSubject.trim(),
+                  department: ticketDept,
+                  priority: ticketPriority,
+                  relatedService: `${activeService.domain} (${activeService.planName})`,
+                  message: ticketMessage.trim(),
+                });
+                setIsNewTicketModalOpen(false);
+                setTicketSubject('');
+                setTicketMessage('');
+              }
+            }}
+            className="w-full max-w-lg bg-white dark:bg-zinc-950 border border-slate-200 dark:border-white/10 rounded-2xl shadow-2xl p-6 space-y-4"
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-slate-900 dark:text-white">Open New Engineering Ticket</h3>
+              <button
+                type="button"
+                onClick={() => setIsNewTicketModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-mono text-slate-500">Subject:</label>
+                <input
+                  type="text"
+                  value={ticketSubject}
+                  onChange={(e) => setTicketSubject(e.target.value)}
+                  placeholder="e.g. Issue configuring Custom Wildcard SSL"
+                  className="w-full mt-1 px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs"
+                  required
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-xs font-mono text-slate-500">Department:</label>
+                  <select
+                    value={ticketDept}
+                    onChange={(e) => setTicketDept(e.target.value)}
+                    className="w-full mt-1 px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono"
+                  >
+                    <option value="Technical & DevOps Support">Technical &amp; DevOps</option>
+                    <option value="Billing & Finance">Billing &amp; Finance</option>
+                    <option value="Domain Registrar & DNS">Domain Registrar</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-xs font-mono text-slate-500">Priority:</label>
+                  <select
+                    value={ticketPriority}
+                    onChange={(e) => setTicketPriority(e.target.value as any)}
+                    className="w-full mt-1 px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono"
+                  >
+                    <option value="Normal">Normal</option>
+                    <option value="High">High</option>
+                    <option value="Critical — Production Site Down">Critical (Site Down)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-mono text-slate-500">Message &amp; Error Details:</label>
+                <textarea
+                  value={ticketMessage}
+                  onChange={(e) => setTicketMessage(e.target.value)}
+                  rows={4}
+                  placeholder="Provide step-by-step details..."
+                  className="w-full mt-1 px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs"
+                  required
+                />
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              className="w-full h-11 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
+            >
+              Submit Ticket to Engineering Desk
+            </button>
+          </form>
+        </div>
+      )}
+
+      {/* =========================================================================
+          MODAL: RESET CPANEL PASSWORD
+         ========================================================================= */}
+      {isPasswordModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-sm bg-white dark:bg-zinc-950 border border-slate-200 dark:border-white/10 rounded-2xl shadow-2xl p-6 space-y-4">
+            <h3 className="text-base font-bold text-slate-900 dark:text-white">Reset cPanel Password</h3>
+            <p className="text-xs text-slate-500">
+              User: <strong className="text-slate-900 dark:text-white font-mono">{activeService.cpanelUser}</strong>
+            </p>
+            <div>
+              <label className="text-xs font-mono text-slate-500">Generated Strong Password:</label>
+              <input
+                type="text"
+                value={newCpanelPass}
+                onChange={(e) => setNewCpanelPass(e.target.value)}
+                className="w-full mt-1 px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono text-slate-900 dark:text-white"
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsPasswordModalOpen(false)}
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  await resetCpanelPassword(activeService.id, newCpanelPass);
+                  setIsPasswordModalOpen(false);
+                  alert(`cPanel password for ${activeService.cpanelUser} reset to: ${newCpanelPass}`);
+                }}
+                className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
+              >
+                Save New Password
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

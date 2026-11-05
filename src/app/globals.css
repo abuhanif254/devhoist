@@ -1,0 +1,202 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    --bg-primary: #FFFFFF;
+    --bg-secondary: #F8FAFC;
+    --bg-surface: #FFFFFF;
+    --text-heading: #0F172A;
+    --text-body: #334155;
+    --text-muted: #475569;
+    --border-subtle: #E2E8F0;
+    --border-hover: #CBD5E1;
+    --brand-blue: #2563EB;
+    --brand-indigo: #4F46E5;
+    --status-emerald: #059669;
+  }
+
+  .dark {
+    --bg-primary: #090D16;
+    --bg-secondary: #0F172A;
+    --bg-surface: #111827;
+    --text-heading: #FFFFFF;
+    --text-body: #E2E8F0;
+    --text-muted: #CBD5E1;
+    --border-subtle: #1E293B;
+    --border-hover: #334155;
+    --brand-blue: #3B82F6;
+    --brand-indigo: #6366F1;
+    --status-emerald: #10B981;
+  }
+
+  /* Architectural grid pattern (Light by default, Dark adapted) */
+  .architectural-grid {
+    background-image: 
+      linear-gradient(to right, rgba(15, 23, 42, 0.04) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(15, 23, 42, 0.04) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+
+  .dark .architectural-grid {
+    background-image: 
+      linear-gradient(to right, rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  }
+
+  /* Structural glass & elevated cards */
+  .glass-card {
+    background: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.05);
+  }
+
+  .glass-card:hover {
+    border-color: #CBD5E1;
+    box-shadow: 0 10px 30px -3px rgba(15, 23, 42, 0.08);
+  }
+
+  .dark .glass-card {
+    background: rgba(17, 24, 39, 0.85);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+  }
+
+  .dark .glass-card:hover {
+    border-color: rgba(255, 255, 255, 0.16);
+  }
+
+  /* Crosshair marker for architectural grid intersections */
+  .crosshair-corner {
+    position: relative;
+  }
+  .crosshair-corner::before {
+    content: '+';
+    position: absolute;
+    color: rgba(15, 23, 42, 0.25);
+    font-family: var(--font-mono), monospace;
+    font-size: 11px;
+    line-height: 1;
+    pointer-events: none;
+    user-select: none;
+  }
+  .dark .crosshair-corner::before {
+    color: rgba(255, 255, 255, 0.25);
+  }
+  .crosshair-tl::before { top: -6px; left: -5px; }
+  .crosshair-tr::before { top: -6px; right: -5px; }
+  .crosshair-bl::before { bottom: -6px; left: -5px; }
+  .crosshair-br::before { bottom: -6px; right: -5px; }
+}
+
+/* Precision scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #F1F5F9;
+}
+.dark ::-webkit-scrollbar-track {
+  background: #090D16;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #CBD5E1;
+  border-radius: 3px;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: #1E293B;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94A3B8;
+}
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
+
+/* Crisp selection */
+::selection {
+  background-color: #2563EB;
+  color: #FFFFFF;
+}
+
+/* GPU-Accelerated Pipeline Beam Animation */
+@keyframes pipelineBeamFlow {
+  from {
+    stroke-dashoffset: 48;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.animate-pipeline-beam {
+  stroke-dasharray: 6 10;
+  animation: pipelineBeamFlow 1.6s linear infinite;
+}
+
+/* Smooth Floating Animation for 3D Isometric Components */
+@keyframes floatY {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+.animate-float {
+  animation: floatY 4s ease-in-out infinite;
+}
+
+/* Continuous Directional Marquee Animations */
+@keyframes marqueeLeft {
+  0% {
+    transform: translateX(0%);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+@keyframes marqueeRight {
+  0% {
+    transform: translateX(-50%);
+  }
+  100% {
+    transform: translateX(0%);
+  }
+}
+
+.animate-marquee-left {
+  display: flex;
+  width: 200%;
+  animation: marqueeLeft 28s linear infinite;
+}
+
+.animate-marquee-right {
+  display: flex;
+  width: 200%;
+  animation: marqueeRight 28s linear infinite;
+}
+
+.marquee-container:hover .animate-marquee-left,
+.marquee-container:hover .animate-marquee-right {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-pipeline-beam,
+  .animate-float,
+  .animate-marquee-left,
+  .animate-marquee-right {
+    animation: none;
+    stroke-dasharray: none;
+  }
+}

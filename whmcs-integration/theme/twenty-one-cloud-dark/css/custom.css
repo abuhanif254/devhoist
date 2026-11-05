@@ -1,0 +1,58 @@
+@import url('https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+
+:root {
+  --bg-primary: #0B0F19;
+  --bg-card: rgba(17, 24, 39, 0.85);
+  --brand-indigo: #4F46E5;
+  --cta-emerald: #10B981;
+  --accent-cyan: #06B6D4;
+  --text-light: #F8FAFC;
+  --text-muted: #94A3B8;
+  --border-glow: rgba(79, 70, 229, 0.28);
+}
+
+body, #main-body {
+  background-color: var(--bg-primary) !important;
+  color: var(--text-light) !important;
+  font-family: 'Plus Jakarta Sans', 'Hind Siliguri', sans-serif !important;
+}
+
+header.header, .navbar-main, footer.footer {
+  background-color: rgba(11, 15, 25, 0.92) !important;
+  backdrop-filter: blur(12px);
+  border-color: var(--border-glow) !important;
+}
+
+.card, .panel, .tile, .order-summary, #order-standard_cart .product {
+  background: var(--bg-card) !important;
+  border: 1px solid var(--border-glow) !important;
+  border-radius: 16px !important;
+  color: var(--text-light) !important;
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5) !important;
+}
+
+.btn-primary, .btn-checkout {
+  background-color: var(--cta-emerald) !important;
+  border-color: var(--cta-emerald) !important;
+  color: #0B0F19 !important;
+  font-weight: 700 !important;
+  border-radius: 10px !important;
+  transition: all 0.2s ease-in-out !important;
+}
+
+.btn-primary:hover, .btn-checkout:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 0 20px rgba(16, 185, 129, 0.45) !important;
+}
+
+.form-control, select.form-control, input.field {
+  background-color: #111827 !important;
+  border: 1px solid rgba(148, 163, 184, 0.25) !important;
+  color: #F8FAFC !important;
+  border-radius: 10px !important;
+}
+
+.form-control:focus {
+  border-color: var(--brand-indigo) !important;
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.25) !important;
+}

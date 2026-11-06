@@ -87,6 +87,9 @@ import { useLanguage } from '@/context/LanguageContext';
 import CustomerProfileView from '@/components/profiles/CustomerProfileView';
 import AffiliateProfileView from '@/components/profiles/AffiliateProfileView';
 import { useSudoGate } from '@/components/security/SudoGateModal';
+import DnsZoneManager from '@/components/domains/DnsZoneManager';
+import DomainTransferTracker from '@/components/domains/DomainTransferTracker';
+import HostingAddonManager from '@/components/domains/HostingAddonManager';
 
 type DashboardTab =
   | 'overview'
@@ -1579,6 +1582,12 @@ export default function CustomerDashboardPage() {
                      ========================================== */}
                   {serviceSubTab === 'domains_staging' && (
                     <div className="space-y-6">
+                      {/* Quota-Enforced Multi-Tenant Addon Domain & Subdomain Manager */}
+                      <HostingAddonManager
+                        serviceId={activeService.id}
+                        serviceDomain={activeService.domain}
+                        cpanelUsername={activeService.cpanelUser}
+                      />
                       {/* 1-Click Staging Cloner Bar */}
                       <div className="p-5 rounded-2xl bg-gradient-to-r from-purple-500/10 via-indigo-500/10 to-blue-500/10 border border-purple-500/20 space-y-3">
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -2983,116 +2992,12 @@ export default function CustomerDashboardPage() {
                 {/* 2. DNS Zone Editor */}
                 {domainDrawerTab === 'dns' && (
                   <div className="space-y-4">
-                    {/* 1-Click Mail Presets */}
-                    <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/5 space-y-2">
-                      <span className="text-[11px] font-mono text-slate-400 uppercase tracking-wider font-semibold">
-                        1-Click DNS Presets
-                      </span>
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            applyDnsPreset(selectedDomainForDrawer.id, 'google');
-                            alert('Google Workspace MX & SPF records appended!');
-                          }}
-                          className="px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 border border-slate-200 dark:border-white/10 text-xs font-semibold cursor-pointer"
-                        >
-                          Google Workspace Mail
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            applyDnsPreset(selectedDomainForDrawer.id, 'zoho');
-                            alert('Zoho Mail MX & DKIM records appended!');
-                          }}
-                          className="px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 border border-slate-200 dark:border-white/10 text-xs font-semibold cursor-pointer"
-                        >
-                          Zoho Mail
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            applyDnsPreset(selectedDomainForDrawer.id, 'github_vercel');
-                            alert('GitHub Pages / Vercel DNS verified!');
-                          }}
-                          className="px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 border border-slate-200 dark:border-white/10 text-xs font-semibold cursor-pointer"
-                        >
-                          GitHub / Vercel CNAME
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Records List */}
-                    <div className="rounded-xl border border-slate-200 dark:border-white/10 overflow-hidden divide-y divide-slate-100 dark:divide-white/5">
-                      {selectedDomainForDrawer.dnsRecords.map((dns) => (
-                        <div
-                          key={dns.id}
-                          className="p-3 bg-white dark:bg-zinc-950/40 flex items-center justify-between text-xs font-mono"
-                        >
-                          <div className="flex items-center gap-2">
-                            <span className="w-12 px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-950 text-blue-600 font-bold text-center">
-                              {dns.type}
-                            </span>
-                            <strong className="text-slate-900 dark:text-white">{dns.name}</strong>
-                            <span className="text-slate-500 truncate max-w-xs">{dns.content}</span>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => deleteDnsRecord(selectedDomainForDrawer.id, dns.id)}
-                            className="p-1 text-slate-400 hover:text-rose-500 cursor-pointer"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Add DNS Form */}
-                    <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/5 space-y-2">
-                      <span className="text-[11px] font-mono text-slate-400">Add New Record</span>
-                      <div className="grid grid-cols-4 gap-2">
-                        <select
-                          value={newDnsType}
-                          onChange={(e) => setNewDnsType(e.target.value as any)}
-                          className="px-2 py-1.5 rounded-lg bg-white dark:bg-zinc-950 border border-slate-200 dark:border-white/10 text-xs font-mono"
-                        >
-                          <option value="A">A</option>
-                          <option value="AAAA">AAAA</option>
-                          <option value="CNAME">CNAME</option>
-                          <option value="MX">MX</option>
-                          <option value="TXT">TXT</option>
-                        </select>
-                        <input
-                          type="text"
-                          value={newDnsName}
-                          onChange={(e) => setNewDnsName(e.target.value)}
-                          placeholder="@"
-                          className="px-2 py-1.5 rounded-lg bg-white dark:bg-zinc-950 border border-slate-200 dark:border-white/10 text-xs font-mono"
-                        />
-                        <input
-                          type="text"
-                          value={newDnsContent}
-                          onChange={(e) => setNewDnsContent(e.target.value)}
-                          placeholder="IP or Target"
-                          className="px-2 py-1.5 rounded-lg bg-white dark:bg-zinc-950 border border-slate-200 dark:border-white/10 text-xs font-mono"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => {
-                            addDnsRecord(selectedDomainForDrawer.id, {
-                              type: newDnsType,
-                              name: newDnsName,
-                              content: newDnsContent,
-                              ttl: newDnsTtl,
-                              proxied: true,
-                            });
-                          }}
-                          className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
-                        >
-                          Add
-                        </button>
-                      </div>
-                    </div>
+                    <DnsZoneManager
+                      domainId={selectedDomainForDrawer.id}
+                      domainName={selectedDomainForDrawer.domain}
+                      serverIp={activeService?.ipAddress || '103.151.102.45'}
+                      initialRecords={selectedDomainForDrawer.dnsRecords}
+                    />
                   </div>
                 )}
 
@@ -3189,7 +3094,16 @@ export default function CustomerDashboardPage() {
                       </div>
                       <button
                         type="button"
-                        onClick={() => toggleDomainLock(selectedDomainForDrawer.id)}
+                        onClick={() => {
+                          if (selectedDomainForDrawer.registrarLock) {
+                            requireSudo(
+                              () => toggleDomainLock(selectedDomainForDrawer.id),
+                              'Unlock Domain Registrar Protection'
+                            );
+                          } else {
+                            toggleDomainLock(selectedDomainForDrawer.id);
+                          }
+                        }}
                         className={`px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer ${
                           selectedDomainForDrawer.registrarLock ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-600'
                         }`}

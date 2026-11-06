@@ -111,6 +111,8 @@ export interface DnsRecord {
   ttl: number;
   proxied: boolean;
   priority?: number;
+  comment?: string;
+  isSystemManaged?: boolean;
 }
 
 export interface ChildNameserver {

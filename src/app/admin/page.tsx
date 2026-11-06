@@ -96,6 +96,7 @@ import {
 } from '@/lib/adminNotifier';
 import { calculateOrderProfitBreakdown } from '@/lib/profitEngine';
 import AdminSecurityProfileView from '@/components/profiles/AdminSecurityProfileView';
+import AdminDomainOperationsView from '@/components/domains/AdminDomainOperationsView';
 import { useSudoGate } from '@/components/security/SudoGateModal';
 
 type AdminModule =
@@ -105,6 +106,7 @@ type AdminModule =
   | 'billing_ledger'
   | 'affiliates_promos'
   | 'pricing'
+  | 'domain_operations'
   | 'migrations'
   | 'support_desk'
   | 'security_audit'
@@ -3034,6 +3036,15 @@ export default function AdminCommandCenterPage() {
           {activeModule === 'founder_security' && (
             <div className="space-y-6 animate-in fade-in duration-150">
               <AdminSecurityProfileView />
+            </div>
+          )}
+
+          {/* =========================================================================
+              MODULE 11: DOMAIN REGISTRAR & INBOUND TRANSFER COMMAND DESK
+             ========================================================================= */}
+          {activeModule === 'domain_operations' && (
+            <div className="space-y-6 animate-in fade-in duration-150">
+              <AdminDomainOperationsView />
             </div>
           )}
 

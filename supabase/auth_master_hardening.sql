@@ -1,5 +1,6 @@
 -- ==============================================================================
 -- DEVHOST CLOUD - AUTH MASTER SECURITY HARDENING & FAIL-SAFE DB TRIGGERS
+-- Execute this script in your Supabase SQL Editor (https://supabase.com/dashboard/project/_/sql)
 -- Automatic Profile Provisioning, Zero Admin Overwrite, Brute-Force Rate Limiting
 -- ==============================================================================
 
@@ -46,7 +47,6 @@ DECLARE
     v_company TEXT;
     v_clean_email TEXT;
     v_referral_slug TEXT;
-    v_clean_ref TEXT;
 BEGIN
     -- Extract clean email
     v_clean_email := lower(trim(NEW.email));
@@ -78,6 +78,7 @@ BEGIN
         company_name,
         role,
         wallet_balance_bdt,
+        affiliate_code,
         created_at,
         updated_at
     ) VALUES (
@@ -87,6 +88,7 @@ BEGIN
         v_company,
         'client', -- Default to client! Never admin on automated signup
         0,        -- Strictly 0 starting balance!
+        v_referral_slug,
         now(),
         now()
     )
@@ -97,77 +99,108 @@ BEGIN
         -- Notice: profiles.role and profiles.wallet_balance_bdt are NEVER touched on conflict!
 
     -- 2. Insert into public.customer_developer_profiles
-    INSERT INTO public.customer_developer_profiles (
-        user_id,
-        account_type,
-        company_legal_name,
-        default_datacenter_region,
-        created_at,
-        updated_at
-    ) VALUES (
-        NEW.id,
-        'individual',
-        v_company,
-        'sg1',
-        now(),
-        now()
-    )
-    ON CONFLICT (user_id) DO NOTHING;
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'customer_developer_profiles') THEN
+        INSERT INTO public.customer_developer_profiles (
+            user_id,
+            account_type,
+            company_legal_name,
+            default_datacenter_region,
+            created_at,
+            updated_at
+        ) VALUES (
+            NEW.id,
+            'individual',
+            v_company,
+            'sg1',
+            now(),
+            now()
+        )
+        ON CONFLICT (user_id) DO NOTHING;
+    END IF;
 
     -- 3. Insert into public.user_security_credentials (Default TOTP disabled, email 2FA enabled)
-    INSERT INTO public.user_security_credentials (
-        user_id,
-        totp_enabled,
-        email_2fa_enabled,
-        backup_recovery_hashes,
-        last_password_change,
-        created_at,
-        updated_at
-    ) VALUES (
-        NEW.id,
-        false,
-        true,
-        '{}'::TEXT[],
-        now(),
-        now(),
-        now()
-    )
-    ON CONFLICT (user_id) DO NOTHING;
-
-    -- 4. Insert into public.affiliate_marketer_profiles (Unique partner affiliate referral link)
-    INSERT INTO public.affiliate_marketer_profiles (
-        user_id,
-        partner_display_name,
-        custom_referral_slug,
-        created_at,
-        updated_at
-    ) VALUES (
-        NEW.id,
-        v_full_name,
-        v_referral_slug,
-        now(),
-        now()
-    )
-    ON CONFLICT (user_id) DO NOTHING
-    ON CONFLICT (custom_referral_slug) DO NOTHING;
-
-    -- 5. Record Initial Registration Event in Security Audit Logs
-    INSERT INTO public.security_audit_logs (
-        event_type,
-        actor_user_id,
-        target_entity,
-        severity,
-        details
-    ) VALUES (
-        'user_signup_completed',
-        NEW.id,
-        v_clean_email,
-        'LOW',
-        jsonb_build_object(
-            'provider', COALESCE(NEW.raw_app_meta_data->>'provider', 'email'),
-            'registered_at', now()
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'user_security_credentials') THEN
+        INSERT INTO public.user_security_credentials (
+            user_id,
+            totp_enabled,
+            email_2fa_enabled,
+            backup_recovery_hashes,
+            last_password_change,
+            created_at,
+            updated_at
+        ) VALUES (
+            NEW.id,
+            false,
+            true,
+            '{}'::TEXT[],
+            now(),
+            now(),
+            now()
         )
-    );
+        ON CONFLICT (user_id) DO NOTHING;
+    END IF;
+
+    -- 4. Insert into public.affiliate_profiles
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'affiliate_profiles') THEN
+        INSERT INTO public.affiliate_profiles (
+            user_id,
+            referral_code,
+            custom_slug,
+            tier_level,
+            commission_rate
+        ) VALUES (
+            NEW.id,
+            v_referral_slug,
+            v_referral_slug,
+            'starter_20',
+            20.00
+        )
+        ON CONFLICT (user_id) DO NOTHING
+        ON CONFLICT (referral_code) DO NOTHING;
+    END IF;
+
+    -- 5. Insert into public.affiliate_marketer_profiles (if table exists)
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'affiliate_marketer_profiles') THEN
+        INSERT INTO public.affiliate_marketer_profiles (
+            user_id,
+            partner_display_name,
+            custom_referral_slug,
+            created_at,
+            updated_at
+        ) VALUES (
+            NEW.id,
+            v_full_name,
+            v_referral_slug,
+            now(),
+            now()
+        )
+        ON CONFLICT (user_id) DO NOTHING
+        ON CONFLICT (custom_referral_slug) DO NOTHING;
+    END IF;
+
+    -- 6. Record Initial Registration Event in Security Audit Logs (if table exists)
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'security_audit_logs') THEN
+        INSERT INTO public.security_audit_logs (
+            actor_id,
+            actor_role,
+            action_type,
+            target_resource,
+            ip_address,
+            risk_level,
+            metadata
+        ) VALUES (
+            NEW.id,
+            'client',
+            'user_signup_completed',
+            v_clean_email,
+            '127.0.0.1',
+            'low',
+            jsonb_build_object(
+                'provider', COALESCE(NEW.raw_app_meta_data->>'provider', 'email'),
+                'registered_at', now()
+            )
+        );
+    END IF;
 
     RETURN NEW;
 EXCEPTION

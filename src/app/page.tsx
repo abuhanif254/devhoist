@@ -4,6 +4,7 @@ import Link from 'next/link';
 import Header from '@/components/layout/Header';
 import Footer from '@/components/layout/Footer';
 import HeroVisualShowcase from '@/components/visuals/HeroVisualShowcase';
+import Hero3DCloudAtmosphere from '@/components/visuals/Hero3DCloudAtmosphere';
 import DirectionalMarquee from '@/components/visuals/DirectionalMarquee';
 import DirectionalPipeline from '@/components/visuals/DirectionalPipeline';
 import WebsitePreviewCards from '@/components/visuals/WebsitePreviewCards';
@@ -130,8 +131,11 @@ export default function HomePage() {
           <span className="crosshair-corner crosshair-tr" />
 
           {/* 1. Hero Section with Rich Visual Showcase & Directional Reveal */}
-          <section className="px-4 sm:px-6 lg:px-8 pt-12 sm:pt-20 pb-16 relative z-10 border-b border-slate-200 dark:border-white/[0.07]">
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 lg:gap-8 items-center">
+          <section className="px-4 sm:px-6 lg:px-8 pt-12 sm:pt-20 pb-16 relative z-10 border-b border-slate-200 dark:border-white/[0.07] overflow-hidden">
+            {/* 3D Volumetric Cloud Atmospheric Canvas (High-Visual 3D Clouds Behind Content) */}
+            <Hero3DCloudAtmosphere />
+
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 lg:gap-8 items-center relative z-10">
               {/* Left Column: Proposition & CTAs (Slides in from Left) */}
               <DirectionalReveal direction="left" className="lg:col-span-6 space-y-6 text-center lg:text-left">
                 {/* Precision Trust Badge */}

@@ -139,15 +139,15 @@ export default function HomePage() {
               {/* Left Column: Proposition & CTAs (Slides in from Left) */}
               <DirectionalReveal direction="left" className="lg:col-span-6 space-y-6 text-center lg:text-left">
                 {/* Precision Trust Badge */}
-                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 dark:bg-zinc-900 border border-blue-200 dark:border-white/10 text-xs font-mono text-blue-700 dark:text-zinc-300">
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/80 dark:bg-zinc-900/80 backdrop-blur-md border border-blue-200/80 dark:border-white/10 text-xs font-mono text-blue-700 dark:text-zinc-300 shadow-sm">
                   <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                   <span className="font-semibold">99.99% Verified Uptime SLA</span>
-                  <span className="text-slate-300 dark:text-zinc-600">•</span>
+                  <span className="text-slate-400 dark:text-zinc-600">•</span>
                   <span>Singapore &amp; USA NVMe</span>
                 </div>
 
                 {/* Main Headline */}
-                <h1 className="text-4xl sm:text-6xl font-extrabold tracking-tight leading-[1.08] text-slate-900 dark:text-white">
+                <h1 className="text-4xl sm:text-6xl font-extrabold tracking-tight leading-[1.08] text-slate-950 dark:text-white drop-shadow-sm">
                   Developer Experience of Vercel.
                   <span className="block text-transparent bg-clip-text bg-gradient-to-r from-blue-600 via-indigo-600 to-cyan-600 dark:from-blue-400 dark:via-indigo-300 dark:to-cyan-400 mt-1">
                     Accessibility of cPanel.
@@ -155,7 +155,7 @@ export default function HomePage() {
                 </h1>
 
                 {/* Subheadline with high-contrast text */}
-                <p className="text-base sm:text-lg text-slate-700 dark:text-zinc-300 font-normal max-w-2xl mx-auto lg:mx-0 leading-relaxed">
+                <p className="text-base sm:text-lg text-slate-800 dark:text-zinc-200 font-normal max-w-2xl mx-auto lg:mx-0 leading-relaxed">
                   Deploy Next.js, Node.js, Python, and WordPress on enterprise NVMe SSD infrastructure. Automated zero-downtime GitHub pipelines, LiteSpeed caching, and instant bKash/Nagad checkout starting at just ৳200/mo.
                 </p>
 
@@ -179,7 +179,7 @@ export default function HomePage() {
                 </div>
 
                 {/* Structured Spec Highlights */}
-                <div className="pt-2 flex flex-wrap items-center justify-center lg:justify-start gap-5 text-xs font-mono text-slate-600 dark:text-zinc-400">
+                <div className="pt-2 flex flex-wrap items-center justify-center lg:justify-start gap-5 text-xs font-mono text-slate-700 dark:text-zinc-300 font-medium">
                   <div className="flex items-center gap-1.5">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                     <span>Zero-Downtime Deployments</span>

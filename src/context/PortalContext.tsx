@@ -1249,6 +1249,8 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     if (typeof window !== 'undefined') {
       try {
         localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem('devhost-portal-state-v9');
+        sessionStorage.removeItem('devhost_impersonate');
       } catch {}
       window.location.href = '/login';
     }

@@ -28,13 +28,17 @@ import {
   LayoutDashboard,
   Building,
   CheckCircle2,
+  LogOut,
+  User,
 } from 'lucide-react';
 import { useBilling } from '@/context/BillingContext';
 import { useLanguage } from '@/context/LanguageContext';
+import { usePortal } from '@/context/PortalContext';
 import { getWhmcsClientAreaUrl } from '@/config/whmcs';
 
 export default function Navbar() {
   const pathname = usePathname();
+  const { currentUser, logout } = usePortal();
   const { currency, setCurrency, theme, toggleTheme, setIsCommandPaletteOpen, openStackBuilder } = useBilling();
   const { language, setLanguage, t } = useLanguage();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -173,15 +177,36 @@ export default function Navbar() {
               )}
             </button>
 
-            {/* Client Area Portal */}
-            <Link
-              href="/dashboard"
-              className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-blue-50 dark:bg-blue-950/60 text-[11px] font-semibold text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800/60 hover:bg-blue-100 dark:hover:bg-blue-900/60 transition-colors"
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              <span>Client Area</span>
-              <ArrowRight className="w-3 h-3" />
-            </Link>
+            {/* User Session / Client Area */}
+            {currentUser ? (
+              <div className="hidden sm:inline-flex items-center gap-2">
+                <Link
+                  href={currentUser.role === 'admin' ? '/admin' : '/dashboard'}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-blue-50 dark:bg-blue-950/60 text-[11px] font-semibold text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800/60 hover:bg-blue-100 dark:hover:bg-blue-900/60 transition-colors"
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  <span>{currentUser.role === 'admin' ? 'Admin NOC' : 'Client Area'}</span>
+                  <ArrowRight className="w-3 h-3" />
+                </Link>
+                <button
+                  type="button"
+                  onClick={logout}
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 border border-transparent hover:border-rose-200 dark:border-rose-900/40 transition-colors cursor-pointer"
+                  title="Sign Out"
+                >
+                  <LogOut className="w-3 h-3" />
+                  <span>Sign Out</span>
+                </button>
+              </div>
+            ) : (
+              <Link
+                href="/login"
+                className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-blue-50 dark:bg-blue-950/60 text-[11px] font-semibold text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800/60 hover:bg-blue-100 dark:hover:bg-blue-900/60 transition-colors"
+              >
+                <span>Sign In</span>
+                <ArrowRight className="w-3 h-3" />
+              </Link>
+            )}
           </div>
         </div>
       </div>
@@ -654,14 +679,38 @@ export default function Navbar() {
           </div>
 
           <div className="border-t border-slate-100 dark:border-white/10 pt-4 flex flex-col gap-2.5">
-            <Link
-              href="/dashboard"
-              onClick={() => setMobileMenuOpen(false)}
-              className="w-full h-10 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-zinc-900 dark:hover:bg-zinc-800 text-slate-800 dark:text-zinc-200 text-sm font-semibold flex items-center justify-center gap-2 border border-slate-200 dark:border-white/10 transition-colors"
-            >
-              <span className="w-2 h-2 rounded-full bg-emerald-500" />
-              <span>Customer Portal (Client Area)</span>
-            </Link>
+            {currentUser ? (
+              <>
+                <Link
+                  href={currentUser.role === 'admin' ? '/admin' : '/dashboard'}
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="w-full h-10 rounded-lg bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 text-sm font-semibold flex items-center justify-center gap-2 border border-blue-200 dark:border-blue-800 transition-colors"
+                >
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  <span>{currentUser.role === 'admin' ? 'Founder Admin NOC' : 'Customer Portal (Client Area)'}</span>
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    logout();
+                  }}
+                  className="w-full h-10 rounded-lg bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 text-rose-600 dark:text-rose-400 text-sm font-semibold flex items-center justify-center gap-2 border border-rose-200 dark:border-rose-900/50 transition-colors cursor-pointer"
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span>Sign Out ({currentUser.name || currentUser.email})</span>
+                </button>
+              </>
+            ) : (
+              <Link
+                href="/login"
+                onClick={() => setMobileMenuOpen(false)}
+                className="w-full h-10 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-zinc-900 dark:hover:bg-zinc-800 text-slate-800 dark:text-zinc-200 text-sm font-semibold flex items-center justify-center gap-2 border border-slate-200 dark:border-white/10 transition-colors"
+              >
+                <span>Sign In to Cloud Account</span>
+                <ArrowRight className="w-4 h-4" />
+              </Link>
+            )}
             <button
               type="button"
               onClick={() => {

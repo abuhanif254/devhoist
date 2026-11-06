@@ -19,12 +19,13 @@ import {
   RefreshCw,
   Ban,
   Save,
+  LogOut,
 } from 'lucide-react';
 import { usePortal } from '@/context/PortalContext';
 import { useSudoGate } from '@/components/security/SudoGateModal';
 
 export default function AdminSecurityProfileView() {
-  const { auditLogs, fraudAlerts } = usePortal();
+  const { auditLogs, fraudAlerts, logout } = usePortal();
   const { isSudoActive, sudoExpiresAt, requireSudo, revokeSudo } = useSudoGate();
 
   // Whitelist IPs State
@@ -127,6 +128,16 @@ export default function AdminSecurityProfileView() {
               <span>Elevate Sudo Session</span>
             </button>
           )}
+
+          <button
+            type="button"
+            onClick={logout}
+            className="px-3 py-1.5 rounded-xl border border-rose-200 dark:border-rose-900/50 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 text-xs font-mono font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
+            title="Sign Out of Founder NOC"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            <span>Sign Out</span>
+          </button>
         </div>
       </div>
 

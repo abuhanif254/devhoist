@@ -62,6 +62,7 @@ import {
   ChevronRight,
   Database,
   Loader2,
+  LayoutDashboard,
 } from 'lucide-react';
 import {
   usePortal,
@@ -130,6 +131,7 @@ export default function AdminCommandCenterPage() {
   const {
     currentUser,
     authLoading,
+    logout,
     activeRole,
     switchRole,
     impersonateCustomer,
@@ -686,14 +688,25 @@ export default function AdminCommandCenterPage() {
           </div>
 
           <div className="flex items-center gap-3">
-            {/* Exit Admin Mode Pill */}
+            {/* Exit to Customer Portal */}
             <Link
               href="/dashboard"
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 text-xs font-semibold hover:bg-blue-100 transition-colors"
             >
-              <LogOut className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Exit to Customer Portal</span>
+              <LayoutDashboard className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Client Area</span>
             </Link>
+
+            {/* Admin Sign Out Button */}
+            <button
+              type="button"
+              onClick={logout}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-rose-200 dark:border-rose-900/50 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 text-rose-700 dark:text-rose-300 text-xs font-semibold transition-colors cursor-pointer"
+              title="Sign Out of Founder Admin"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Sign Out</span>
+            </button>
 
             {/* Theme Toggle */}
             <button
@@ -979,6 +992,18 @@ export default function AdminCommandCenterPage() {
                     Safe
                   </span>
                 )}
+              </button>
+            </div>
+
+            {/* Sidebar Sign Out Button */}
+            <div className="pt-2 border-t border-slate-100 dark:border-white/5">
+              <button
+                type="button"
+                onClick={logout}
+                className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-all cursor-pointer"
+              >
+                <LogOut className="w-4 h-4 text-rose-500" />
+                <span>Sign Out of Founder NOC</span>
               </button>
             </div>
           </div>

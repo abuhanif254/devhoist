@@ -605,13 +605,15 @@ export default function CustomerDashboardPage() {
             </button>
 
             {/* Role Switcher (Admin / Client quick switcher for founder) */}
-            <Link
-              href="/admin"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-zinc-200 text-white dark:text-zinc-950 text-xs font-semibold shadow-xs transition-colors"
-            >
-              <Shield className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Admin Console</span>
-            </Link>
+            {currentUser.role === 'admin' && (
+              <Link
+                href="/admin"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-zinc-200 text-white dark:text-zinc-950 text-xs font-semibold shadow-xs transition-colors"
+              >
+                <Shield className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Admin Console</span>
+              </Link>
+            )}
 
             {/* Theme Toggle */}
             <button
@@ -626,14 +628,25 @@ export default function CustomerDashboardPage() {
 
             {/* User Avatar */}
             <div className="flex items-center gap-2 pl-2 border-l border-slate-200 dark:border-white/10">
-              <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 text-white font-bold text-xs flex items-center justify-center">
+              <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 text-white font-bold text-xs flex items-center justify-center shrink-0">
                 {currentUser.avatar}
               </div>
               <div className="hidden md:block text-left">
                 <div className="text-xs font-bold text-slate-900 dark:text-white leading-tight">{currentUser.name}</div>
-                <div className="text-[10px] text-slate-400 font-mono leading-tight">{currentUser.company}</div>
+                <div className="text-[10px] text-slate-400 font-mono leading-tight">{currentUser.company || currentUser.email}</div>
               </div>
             </div>
+
+            {/* Header Sign Out Button */}
+            <button
+              type="button"
+              onClick={logout}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-rose-200 dark:border-rose-900/50 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 text-rose-700 dark:text-rose-300 text-xs font-semibold transition-colors cursor-pointer"
+              title="Sign Out of Cloud Session"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Sign Out</span>
+            </button>
           </div>
         </div>
       </header>
@@ -766,6 +779,18 @@ export default function CustomerDashboardPage() {
               <User className="w-4 h-4" />
               <span>Developer Profile &amp; BIN</span>
             </button>
+
+            {/* Sidebar Sign Out Button */}
+            <div className="pt-2 border-t border-slate-100 dark:border-white/5">
+              <button
+                type="button"
+                onClick={logout}
+                className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-all cursor-pointer"
+              >
+                <LogOut className="w-4 h-4 text-rose-500" />
+                <span>Sign Out</span>
+              </button>
+            </div>
           </div>
 
           {/* Quick Node Telemetry Card */}

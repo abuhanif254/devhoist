@@ -264,7 +264,22 @@ export default function Footer() {
 
         {/* Bottom Copyright */}
         <div className="mt-6 pt-5 border-t border-slate-200 dark:border-white/[0.06] flex flex-col sm:flex-row items-center justify-between text-[11px] text-slate-500 dark:text-zinc-500 gap-3 font-mono">
-          <p>© {currentYear} DevHost Cloud Inc. All rights reserved. Zero-Downtime cPanel &amp; GitHub Cloud Platform.</p>
+          <div className="flex flex-col sm:flex-row items-center gap-2 sm:gap-3 text-center sm:text-left">
+            <p>© {currentYear} DevHost Cloud Inc. All rights reserved.</p>
+            <span className="hidden sm:inline text-slate-300 dark:text-zinc-700">•</span>
+            <p className="text-slate-600 dark:text-zinc-400">
+              Founder &amp; Developer:{' '}
+              <a
+                href="https://abuhanifmia.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 dark:text-blue-400 font-semibold hover:underline inline-flex items-center gap-0.5 group"
+              >
+                <span>Abu Hanif</span>
+                <ArrowUpRight className="w-3 h-3 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+              </a>
+            </p>
+          </div>
           <div className="flex items-center gap-3">
             <span className="flex items-center gap-1 text-slate-600 dark:text-zinc-400 font-medium">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />

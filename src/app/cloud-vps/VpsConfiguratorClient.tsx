@@ -14,6 +14,7 @@ import {
   Server,
 } from 'lucide-react';
 import { useBilling } from '@/context/BillingContext';
+import { usePortal } from '@/context/PortalContext';
 import {
   VPS_PRECONFIGURED_TIERS,
   VPS_CONTROL_PANELS,
@@ -24,6 +25,7 @@ import { WHMCS_CONFIG } from '@/config/whmcs';
 
 export default function VpsConfiguratorClient() {
   const { currency, openStackBuilder } = useBilling();
+  const { dynamicPlans } = usePortal();
   const isBDT = currency === 'BDT';
   const symbol = isBDT ? '৳' : '$';
 
@@ -93,8 +95,13 @@ export default function VpsConfiguratorClient() {
         {/* 4 Tier Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
           {VPS_PRECONFIGURED_TIERS.map((tier) => {
+            const dynamicTier = dynamicPlans?.find(
+              (dp) => dp.type === 'vps' && (dp.slug === tier.id || dp.id === tier.id)
+            );
+            const tierMonthlyBDT = dynamicTier ? dynamicTier.priceMonthlyBDT : tier.monthlyBDT;
+            const tierMonthlyUSD = dynamicTier ? Number((dynamicTier.priceMonthlyBDT / 120).toFixed(2)) : tier.monthlyUSD;
             const isAnnual = preconfiguredCycle === 'annually';
-            const baseMonthly = isBDT ? tier.monthlyBDT : tier.monthlyUSD;
+            const baseMonthly = isBDT ? tierMonthlyBDT : tierMonthlyUSD;
             const effectiveMonthly = isAnnual
               ? isBDT
                 ? Math.round(baseMonthly * 0.85)
@@ -170,8 +177,8 @@ export default function VpsConfiguratorClient() {
                       openStackBuilder({
                         pid: tier.pid,
                         planName: tier.name,
-                        basePriceMonthlyBDT: tier.monthlyBDT,
-                        basePriceMonthlyUSD: tier.monthlyUSD,
+                        basePriceMonthlyBDT: tierMonthlyBDT,
+                        basePriceMonthlyUSD: tierMonthlyUSD,
                         specs: {
                           ram: tier.ram,
                           cpu: tier.cpu,

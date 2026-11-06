@@ -12,6 +12,7 @@ import FaqAccordion from '@/components/common/FaqAccordion';
 import { Terminal, ArrowRight, Code2 } from 'lucide-react';
 import { buildHostingOrderUrl } from '@/lib/whmcsRouter';
 import { COMPLETE_FAQ_LIST } from '@/config/faqData';
+import { generateSingleProductSchema } from '@/lib/seoSchema';
 
 const DependencyAnalyzer = dynamic(
   () => import('@/components/developer/DependencyAnalyzer'),
@@ -45,19 +46,13 @@ export const metadata: Metadata = {
 export default function NodeJsHostingPage() {
   const directCartUrl = buildHostingOrderUrl(2, false, 'BDT');
 
-  const productSchema = {
-    '@context': 'https://schema.org',
-    '@type': 'Product',
+  const productSchema = generateSingleProductSchema({
     name: 'Developer Pro Cloud Hosting',
+    slug: 'developer-pro',
+    priceMonthlyBDT: 450,
     description: 'High-speed NVMe hosting with GitHub Webhooks, Node.js, Next.js, and Jailed SSH.',
-    offers: {
-      '@type': 'Offer',
-      price: '450',
-      priceCurrency: 'BDT',
-      availability: 'https://schema.org/InStock',
-      url: directCartUrl,
-    },
-  };
+    category: 'developer',
+  });
 
   return (
     <>

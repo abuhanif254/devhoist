@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -94,6 +94,7 @@ import {
   testTelegramAlert,
   TelegramLogEntry,
 } from '@/lib/adminNotifier';
+import { calculateOrderProfitBreakdown } from '@/lib/profitEngine';
 
 type AdminModule =
   | 'overview'
@@ -379,6 +380,70 @@ export default function AdminCommandCenterPage() {
   const [editablePlans, setEditablePlans] = useState<DynamicHostingPlan[]>(dynamicPlans);
   const [editableTlds, setEditableTlds] = useState<DynamicTldPricing[]>(dynamicTlds);
   const [pricingSavedToast, setPricingSavedToast] = useState(false);
+
+  // Profit-Protected Unit Economics Simulator State
+  const [simPlanId, setSimPlanId] = useState<string>('developer-pro');
+  const [simSellingPrice, setSimSellingPrice] = useState<number>(450);
+  const [simServerCost, setSimServerCost] = useState<number>(90);
+  const [simMinProfit, setSimMinProfit] = useState<number>(225);
+  const [simPromoDiscount, setSimPromoDiscount] = useState<number>(0);
+  const [simAffiliateTier, setSimAffiliateTier] = useState<number>(25);
+
+  useEffect(() => {
+    if (dynamicPlans && dynamicPlans.length > 0) {
+      setEditablePlans(dynamicPlans);
+      const target = dynamicPlans.find((p) => p.id === simPlanId || p.slug === simPlanId) || dynamicPlans[1];
+      if (target) {
+        setSimSellingPrice(target.priceMonthlyBDT);
+        setSimServerCost(target.unitServerCostBDT || 0);
+        setSimMinProfit(target.minOwnerProfitBDT || 0);
+      }
+    }
+  }, [dynamicPlans]);
+
+  useEffect(() => {
+    if (dynamicTlds && dynamicTlds.length > 0) {
+      setEditableTlds(dynamicTlds);
+    }
+  }, [dynamicTlds]);
+
+  const handleSelectSimPlan = (planId: string) => {
+    setSimPlanId(planId);
+    const target = editablePlans.find((p) => p.id === planId || p.slug === planId);
+    if (target) {
+      setSimSellingPrice(target.priceMonthlyBDT);
+      setSimServerCost(target.unitServerCostBDT || 0);
+      setSimMinProfit(target.minOwnerProfitBDT || 0);
+    }
+  };
+
+  const handleApplySimToPlan = () => {
+    setEditablePlans((prev) =>
+      prev.map((p) => {
+        if (p.id === simPlanId || p.slug === simPlanId) {
+          return {
+            ...p,
+            priceMonthlyBDT: simSellingPrice,
+            unitServerCostBDT: simServerCost,
+            minOwnerProfitBDT: simMinProfit,
+            maxAffiliatePoolBDT: Math.max(0, simSellingPrice - (simServerCost + simMinProfit)),
+          };
+        }
+        return p;
+      })
+    );
+  };
+
+  const simBreakdown = useMemo(() => {
+    return calculateOrderProfitBreakdown({
+      sellingPriceBDT: simSellingPrice,
+      unitServerCostBDT: simServerCost,
+      minOwnerProfitBDT: simMinProfit,
+      promoDiscountPercent: simPromoDiscount,
+      affiliateRatePercent: simAffiliateTier,
+      billingCycle: 'monthly',
+    });
+  }, [simSellingPrice, simServerCost, simMinProfit, simPromoDiscount, simAffiliateTier]);
 
   // Custom Invoice Modal
   const [isInvoiceModalOpen, setIsInvoiceModalOpen] = useState(false);
@@ -1108,151 +1173,574 @@ export default function AdminCommandCenterPage() {
              ========================================================================= */}
           {activeModule === 'pricing' && (
             <div className="space-y-6 animate-in fade-in duration-150">
+              {/* Header Banner */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 rounded-2xl bg-gradient-to-r from-blue-600/10 via-indigo-600/10 to-blue-600/10 border border-blue-500/20">
                 <div>
-                  <h2 className="text-base font-bold text-slate-900 dark:text-white">
-                    Dynamic Product, Package &amp; TLD Pricing Engine
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-blue-100 dark:bg-blue-950/80 text-blue-700 dark:text-blue-300 text-[11px] font-mono font-semibold mb-1 border border-blue-200 dark:border-blue-800">
+                    <Sparkles className="w-3 h-3 text-blue-600" />
+                    <span>100% Supabase PostgreSQL Dynamic Catalog &amp; Profit Shield</span>
+                  </div>
+                  <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">
+                    Dynamic Pricing Engine &amp; Unit Economics Simulator
                   </h2>
                   <p className="text-xs text-slate-600 dark:text-zinc-400 mt-0.5">
-                    Edit prices, RAM, CPU &amp; disk limits directly. Publishing updates the frontend website, Stack Builder &amp; checkout instantly!
+                    Live rates synchronized with PostgreSQL. Strict mathematical constraints guarantee owner net profit before affiliate payouts.
                   </p>
                 </div>
                 <button
                   type="button"
                   onClick={handleSaveDynamicPricing}
-                  className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-md shadow-blue-600/20 cursor-pointer whitespace-nowrap"
+                  className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-md shadow-blue-600/20 cursor-pointer whitespace-nowrap flex items-center gap-2"
                 >
-                  Save &amp; Publish Live Rates
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>Save &amp; Publish Live Rates</span>
                 </button>
               </div>
 
               {pricingSavedToast && (
-                <div className="p-3.5 rounded-xl bg-emerald-500 text-white font-mono text-xs flex items-center gap-2 animate-in fade-in">
+                <div className="p-3.5 rounded-xl bg-emerald-500 text-white font-mono text-xs flex items-center gap-2 animate-in fade-in shadow-md shadow-emerald-500/20">
                   <CheckCircle2 className="w-4 h-4" />
-                  <span>Pricing saved! Synchronized across PortalContext and marketing tables.</span>
+                  <span>Catalog synced successfully to Supabase PostgreSQL &amp; Edge Runtime!</span>
                 </div>
               )}
 
-              {/* Hosting & VPS Plans Table */}
-              <div className="p-6 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs space-y-4">
-                <h3 className="text-sm font-bold text-slate-900 dark:text-white">Hosting &amp; VPS Compute Plans</h3>
-                <div className="space-y-3">
-                  {editablePlans.map((plan, idx) => (
-                    <div
-                      key={plan.id}
-                      className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-200 dark:border-white/5 grid grid-cols-1 sm:grid-cols-6 gap-3 items-center text-xs font-mono"
+              {/* ========================================================================= */}
+              {/* SECTION 1: INTERACTIVE UNIT-ECONOMICS & PROFIT SIMULATOR                  */}
+              {/* ========================================================================= */}
+              <div className="p-6 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-sm space-y-5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-white/5 pb-4">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/60 flex items-center justify-center text-indigo-600 dark:text-indigo-400 font-bold">
+                      <Sliders className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                        <span>Interactive Unit-Economics &amp; Profit Simulator</span>
+                        <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 font-semibold">
+                          Zero-Loss Protected
+                        </span>
+                      </h3>
+                      <p className="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5">
+                        Test pricing changes against base server infrastructure cost, promotional discounts, and affiliate tiers.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Plan Picker for Simulator */}
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs text-slate-500 dark:text-zinc-400 font-mono">Load Plan:</label>
+                    <select
+                      value={simPlanId}
+                      onChange={(e) => handleSelectSimPlan(e.target.value)}
+                      className="px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-white/10 text-xs font-mono text-slate-900 dark:text-white font-semibold cursor-pointer"
                     >
-                      <div className="sm:col-span-2">
-                        <strong className="text-slate-900 dark:text-white text-sm">{plan.name}</strong>
-                        <span className="block text-[11px] text-slate-400 truncate">{plan.tagline}</span>
+                      {editablePlans.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name} (৳{p.priceMonthlyBDT}/mo)
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+                  {/* Left Column: Input Sliders & Selectors */}
+                  <div className="lg:col-span-6 space-y-4 font-mono text-xs">
+                    {/* Selling Price */}
+                    <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-950/50 border border-slate-200/80 dark:border-white/5 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-700 dark:text-zinc-300 font-bold">Base Selling Price (Monthly):</span>
+                        <span className="text-blue-600 dark:text-blue-400 font-bold text-sm">৳{simSellingPrice} BDT</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={100}
+                        max={10000}
+                        step={50}
+                        value={simSellingPrice}
+                        onChange={(e) => setSimSellingPrice(Number(e.target.value))}
+                        className="w-full accent-blue-600 cursor-pointer"
+                      />
+                    </div>
+
+                    {/* Server Cost & Min Owner Profit in 2 Columns */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-950/50 border border-slate-200/80 dark:border-white/5 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-600 dark:text-zinc-400">Unit Server Cost:</span>
+                          <span className="text-slate-900 dark:text-zinc-200 font-bold">৳{simServerCost}</span>
+                        </div>
+                        <input
+                          type="range"
+                          min={20}
+                          max={4000}
+                          step={10}
+                          value={simServerCost}
+                          onChange={(e) => setSimServerCost(Number(e.target.value))}
+                          className="w-full accent-slate-500 cursor-pointer"
+                        />
+                        <span className="text-[10px] text-slate-400 block">Dedicated RAM + NVMe node slice</span>
                       </div>
 
-                      <div>
-                        <label className="text-[10px] text-slate-400 uppercase">Monthly (BDT):</label>
+                      <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-950/50 border border-slate-200/80 dark:border-white/5 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-600 dark:text-zinc-400">Min Owner Profit:</span>
+                          <span className="text-emerald-600 dark:text-emerald-400 font-bold">৳{simMinProfit}</span>
+                        </div>
                         <input
-                          type="number"
-                          value={plan.priceMonthlyBDT}
-                          onChange={(e) => {
-                            const val = Number(e.target.value);
-                            setEditablePlans((prev) =>
-                              prev.map((p, i) => (i === idx ? { ...p, priceMonthlyBDT: val } : p))
-                            );
-                          }}
-                          className="w-full mt-1 px-2.5 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 font-bold text-slate-900 dark:text-white"
+                          type="range"
+                          min={50}
+                          max={5000}
+                          step={25}
+                          value={simMinProfit}
+                          onChange={(e) => setSimMinProfit(Number(e.target.value))}
+                          className="w-full accent-emerald-600 cursor-pointer"
                         />
-                      </div>
-
-                      <div>
-                        <label className="text-[10px] text-slate-400 uppercase">Storage (GB):</label>
-                        <input
-                          type="number"
-                          value={plan.storageGB}
-                          onChange={(e) => {
-                            const val = Number(e.target.value);
-                            setEditablePlans((prev) =>
-                              prev.map((p, i) => (i === idx ? { ...p, storageGB: val } : p))
-                            );
-                          }}
-                          className="w-full mt-1 px-2.5 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="text-[10px] text-slate-400 uppercase">RAM (GB):</label>
-                        <input
-                          type="number"
-                          value={plan.ramGB}
-                          onChange={(e) => {
-                            const val = Number(e.target.value);
-                            setEditablePlans((prev) =>
-                              prev.map((p, i) => (i === idx ? { ...p, ramGB: val } : p))
-                            );
-                          }}
-                          className="w-full mt-1 px-2.5 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="text-[10px] text-slate-400 uppercase">CPU Cores:</label>
-                        <input
-                          type="number"
-                          value={plan.cpuCores}
-                          onChange={(e) => {
-                            const val = Number(e.target.value);
-                            setEditablePlans((prev) =>
-                              prev.map((p, i) => (i === idx ? { ...p, cpuCores: val } : p))
-                            );
-                          }}
-                          className="w-full mt-1 px-2.5 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white"
-                        />
+                        <span className="text-[10px] text-slate-400 block">Guaranteed before affiliate payout</span>
                       </div>
                     </div>
-                  ))}
+
+                    {/* Promo Discount & Affiliate Tier */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-950/50 border border-slate-200/80 dark:border-white/5 space-y-1.5">
+                        <label className="text-slate-600 dark:text-zinc-400 block">Promo Code Discount:</label>
+                        <select
+                          value={simPromoDiscount}
+                          onChange={(e) => setSimPromoDiscount(Number(e.target.value))}
+                          className="w-full px-2.5 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs text-slate-900 dark:text-white"
+                        >
+                          <option value={0}>0% (Standard Order)</option>
+                          <option value={10}>10% (WELCOME10)</option>
+                          <option value={15}>15% (MIGRATEFREE)</option>
+                          <option value={20}>20% (DEVPRO20)</option>
+                          <option value={30}>30% (PROMO30)</option>
+                        </select>
+                      </div>
+
+                      <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-950/50 border border-slate-200/80 dark:border-white/5 space-y-1.5">
+                        <label className="text-slate-600 dark:text-zinc-400 block">Affiliate Commission Tier:</label>
+                        <select
+                          value={simAffiliateTier}
+                          onChange={(e) => setSimAffiliateTier(Number(e.target.value))}
+                          className="w-full px-2.5 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs text-slate-900 dark:text-white"
+                        >
+                          <option value={0}>0% (Direct Sale - No Affiliate)</option>
+                          <option value={20}>Tier 1: Starter (20%)</option>
+                          <option value={25}>Tier 2: Pro (25%)</option>
+                          <option value={30}>Tier 3: Agency (30%)</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Action Button */}
+                    <button
+                      type="button"
+                      onClick={handleApplySimToPlan}
+                      className="w-full py-2.5 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-800 dark:text-zinc-100 font-bold text-xs transition-colors cursor-pointer flex items-center justify-center gap-2 border border-slate-300 dark:border-white/10"
+                    >
+                      <Layers className="w-3.5 h-3.5" />
+                      <span>Sync Simulator Values to Selected Plan in Table Below</span>
+                    </button>
+                  </div>
+
+                  {/* Right Column: Visual Breakdown & Profit Guarantees */}
+                  <div className="lg:col-span-6 space-y-4">
+                    {/* Visual 3-Segment Stacked Progress Bar */}
+                    <div className="p-4 rounded-xl bg-slate-900 text-white space-y-3 font-mono shadow-md">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-slate-300">Revenue Allocation Breakdown</span>
+                        <span className="font-bold text-white">Net Paid: ৳{simBreakdown.customerPaidBDT} BDT</span>
+                      </div>
+
+                      {/* Stacked Bar */}
+                      <div className="h-6 w-full rounded-lg overflow-hidden flex bg-zinc-800 p-0.5 gap-0.5">
+                        <div
+                          style={{ width: `${Math.max(5, simBreakdown.serverCostPercent)}%` }}
+                          className="bg-blue-500 rounded-l flex items-center justify-center text-[10px] font-bold text-white truncate transition-all duration-300"
+                          title={`Server Cost: ৳${simBreakdown.unitServerCostBDT} (${simBreakdown.serverCostPercent}%)`}
+                        >
+                          {simBreakdown.serverCostPercent > 12 ? `${simBreakdown.serverCostPercent}%` : ''}
+                        </div>
+                        <div
+                          style={{ width: `${Math.max(0, simBreakdown.affiliatePercent)}%` }}
+                          className="bg-amber-500 flex items-center justify-center text-[10px] font-bold text-slate-950 truncate transition-all duration-300"
+                          title={`Affiliate Payout: ৳${simBreakdown.actualAffiliateCommissionBDT} (${simBreakdown.affiliatePercent}%)`}
+                        >
+                          {simBreakdown.affiliatePercent > 12 ? `${simBreakdown.affiliatePercent}%` : ''}
+                        </div>
+                        <div
+                          style={{ width: `${Math.max(5, simBreakdown.ownerProfitMarginPercent)}%` }}
+                          className="bg-emerald-500 rounded-r flex items-center justify-center text-[10px] font-bold text-white truncate transition-all duration-300"
+                          title={`Owner Profit: ৳${simBreakdown.ownerNetProfitBDT} (${simBreakdown.ownerProfitMarginPercent}%)`}
+                        >
+                          {simBreakdown.ownerProfitMarginPercent > 12 ? `${simBreakdown.ownerProfitMarginPercent}%` : ''}
+                        </div>
+                      </div>
+
+                      {/* Legend */}
+                      <div className="grid grid-cols-3 gap-2 text-[11px] pt-1 border-t border-white/10">
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-2.5 h-2.5 rounded-full bg-blue-500 shrink-0" />
+                          <div className="truncate">
+                            <span className="text-slate-400 block text-[9px]">Server Cost</span>
+                            <span className="font-bold text-blue-400">৳{simBreakdown.unitServerCostBDT}</span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-2.5 h-2.5 rounded-full bg-amber-500 shrink-0" />
+                          <div className="truncate">
+                            <span className="text-slate-400 block text-[9px]">Affiliate Pay</span>
+                            <span className="font-bold text-amber-400">৳{simBreakdown.actualAffiliateCommissionBDT}</span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 shrink-0" />
+                          <div className="truncate">
+                            <span className="text-slate-400 block text-[9px]">Owner Profit</span>
+                            <span className="font-bold text-emerald-400">৳{simBreakdown.ownerNetProfitBDT}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Metrics Breakdown Cards */}
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs font-mono">
+                      <div className="p-3 rounded-xl bg-slate-50 dark:bg-zinc-950/50 border border-slate-200 dark:border-white/5">
+                        <span className="text-[10px] text-slate-500 dark:text-zinc-400 block">Gross Margin:</span>
+                        <strong className="text-sm text-slate-900 dark:text-white">৳{simBreakdown.grossMarginBDT}</strong>
+                        <span className="text-[9px] text-slate-400 block mt-0.5">Paid - Server Cost</span>
+                      </div>
+
+                      <div className="p-3 rounded-xl bg-slate-50 dark:bg-zinc-950/50 border border-slate-200 dark:border-white/5">
+                        <span className="text-[10px] text-slate-500 dark:text-zinc-400 block">Max Affiliate Pool:</span>
+                        <strong className="text-sm text-amber-600 dark:text-amber-400">৳{simBreakdown.maxAffiliatePoolBDT}</strong>
+                        <span className="text-[9px] text-slate-400 block mt-0.5">Margin - Min Profit</span>
+                      </div>
+
+                      <div className="p-3 rounded-xl bg-slate-50 dark:bg-zinc-950/50 border border-slate-200 dark:border-white/5 col-span-2 sm:col-span-1">
+                        <span className="text-[10px] text-slate-500 dark:text-zinc-400 block">Owner Net Margin:</span>
+                        <strong className="text-sm text-emerald-600 dark:text-emerald-400">
+                          {simBreakdown.ownerProfitMarginPercent}%
+                        </strong>
+                        <span className="text-[9px] text-slate-400 block mt-0.5">Guaranteed positive</span>
+                      </div>
+                    </div>
+
+                    {/* Alerts & Protection Signals */}
+                    {simBreakdown.isLossMaking ? (
+                      <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-600 dark:text-rose-400 text-xs font-mono space-y-1">
+                        <div className="flex items-center gap-1.5 font-bold">
+                          <AlertTriangle className="w-4 h-4 shrink-0" />
+                          <span>Unit Economics Constraint Violated!</span>
+                        </div>
+                        <p className="text-[11px] leading-relaxed">
+                          Selling price (৳{simSellingPrice}) is less than Server Cost (৳{simServerCost}) + Min Profit (৳{simMinProfit}). PostgreSQL check constraint will reject this price change.
+                        </p>
+                      </div>
+                    ) : simBreakdown.isAffiliateCapped ? (
+                      <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-300 text-xs font-mono space-y-1">
+                        <div className="flex items-center gap-1.5 font-bold">
+                          <ShieldCheck className="w-4 h-4 shrink-0 text-amber-600" />
+                          <span>Affiliate Auto-Capped to Protect Net Profit</span>
+                        </div>
+                        <p className="text-[11px] leading-relaxed">
+                          Nominal {simAffiliateTier}% commission (৳{simBreakdown.nominalAffiliateCommissionBDT}) was safely capped at ৳{simBreakdown.actualAffiliateCommissionBDT} so your guaranteed ৳{simMinProfit} owner profit remains 100% untouched.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 text-xs font-mono flex items-center gap-2">
+                        <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <span>Unit economics healthy. Both server cost and ৳{simBreakdown.ownerNetProfitBDT} net profit are guaranteed.</span>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 
-              {/* Domain TLD Pricing Editor */}
+              {/* ========================================================================= */}
+              {/* SECTION 2: HOSTING & VPS COMPUTE PLANS TABLE                              */}
+              {/* ========================================================================= */}
               <div className="p-6 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs space-y-4">
-                <h3 className="text-sm font-bold text-slate-900 dark:text-white">Top 10 Domain TLD Rates (BDT)</h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {editableTlds.map((tld, idx) => (
-                    <div
-                      key={tld.tld}
-                      className="p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-200 dark:border-white/5 flex items-center justify-between text-xs font-mono"
-                    >
-                      <strong className="text-blue-600 text-sm w-16">{tld.tld}</strong>
-                      <div className="flex items-center gap-2">
-                        <div>
-                          <label className="text-[9px] text-slate-400">Reg:</label>
-                          <input
-                            type="number"
-                            value={tld.registerBDT}
-                            onChange={(e) => {
-                              const val = Number(e.target.value);
-                              setEditableTlds((prev) =>
-                                prev.map((t, i) => (i === idx ? { ...t, registerBDT: val } : t))
-                              );
-                            }}
-                            className="w-20 px-2 py-1 rounded bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white"
-                          />
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                      Hosting &amp; VPS Compute Plans (Database Catalog)
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
+                      Directly sets production limits, unit costs, minimum owner margins, and max affiliate pools.
+                    </p>
+                  </div>
+                  <span className="px-2.5 py-1 rounded-full bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 text-[11px] font-mono font-semibold border border-blue-200 dark:border-blue-800">
+                    {editablePlans.length} Active Plans
+                  </span>
+                </div>
+
+                <div className="space-y-3">
+                  {editablePlans.map((plan, idx) => {
+                    const maxPool = Math.max(
+                      0,
+                      plan.priceMonthlyBDT - ((plan.unitServerCostBDT || 0) + (plan.minOwnerProfitBDT || 0))
+                    );
+                    const isInvalid = plan.priceMonthlyBDT < ((plan.unitServerCostBDT || 0) + (plan.minOwnerProfitBDT || 0));
+
+                    return (
+                      <div
+                        key={plan.id}
+                        className={`p-4 rounded-xl border transition-all text-xs font-mono space-y-3 ${
+                          isInvalid
+                            ? 'bg-rose-50/40 dark:bg-rose-950/20 border-rose-300 dark:border-rose-800'
+                            : 'bg-slate-50 dark:bg-zinc-950/40 border-slate-200 dark:border-white/5'
+                        }`}
+                      >
+                        {/* Plan Header */}
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200/60 dark:border-white/5 pb-2.5">
+                          <div className="flex items-center gap-2">
+                            <span className="px-2 py-0.5 rounded text-[10px] font-mono uppercase font-bold bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300">
+                              {plan.type}
+                            </span>
+                            <strong className="text-slate-900 dark:text-white text-sm font-sans">{plan.name}</strong>
+                            <span className="text-[11px] text-slate-400 font-sans">({plan.slug || plan.id})</span>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            {isInvalid ? (
+                              <span className="inline-flex items-center gap-1 text-[11px] text-rose-600 dark:text-rose-400 font-bold">
+                                <AlertTriangle className="w-3.5 h-3.5" />
+                                <span>Profit Constraint Violated</span>
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold">
+                                <ShieldCheck className="w-3.5 h-3.5" />
+                                <span>Safe Pool: ৳{maxPool}/mo</span>
+                              </span>
+                            )}
+                          </div>
                         </div>
-                        <div>
-                          <label className="text-[9px] text-slate-400">Renew:</label>
-                          <input
-                            type="number"
-                            value={tld.renewalBDT}
-                            onChange={(e) => {
-                              const val = Number(e.target.value);
-                              setEditableTlds((prev) =>
-                                prev.map((t, i) => (i === idx ? { ...t, renewalBDT: val } : t))
-                              );
-                            }}
-                            className="w-20 px-2 py-1 rounded bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white"
-                          />
+
+                        {/* Financial & Profit Inputs Grid */}
+                        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 items-center">
+                          <div>
+                            <label className="text-[10px] text-slate-500 uppercase font-semibold">Monthly Price (৳):</label>
+                            <input
+                              type="number"
+                              value={plan.priceMonthlyBDT}
+                              onChange={(e) => {
+                                const val = Number(e.target.value);
+                                setEditablePlans((prev) =>
+                                  prev.map((p, i) => (i === idx ? { ...p, priceMonthlyBDT: val } : p))
+                                );
+                              }}
+                              className="w-full mt-1 px-2.5 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 font-bold text-slate-900 dark:text-white"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-[10px] text-slate-500 uppercase font-semibold">Unit Server Cost (৳):</label>
+                            <input
+                              type="number"
+                              value={plan.unitServerCostBDT || 0}
+                              onChange={(e) => {
+                                const val = Number(e.target.value);
+                                setEditablePlans((prev) =>
+                                  prev.map((p, i) => (i === idx ? { ...p, unitServerCostBDT: val } : p))
+                                );
+                              }}
+                              className="w-full mt-1 px-2.5 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-[10px] text-slate-500 uppercase font-semibold">Min Net Profit (৳):</label>
+                            <input
+                              type="number"
+                              value={plan.minOwnerProfitBDT || 0}
+                              onChange={(e) => {
+                                const val = Number(e.target.value);
+                                setEditablePlans((prev) =>
+                                  prev.map((p, i) => (i === idx ? { ...p, minOwnerProfitBDT: val } : p))
+                                );
+                              }}
+                              className="w-full mt-1 px-2.5 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-emerald-600 dark:text-emerald-400 font-bold"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-[10px] text-slate-500 uppercase font-semibold">Affiliate Pool (৳):</label>
+                            <div className="w-full mt-1 px-2.5 py-1.5 rounded-lg bg-slate-100 dark:bg-zinc-800 border border-slate-200 dark:border-white/10 font-bold text-amber-600 dark:text-amber-400 truncate">
+                              ৳{maxPool}
+                            </div>
+                          </div>
+
+                          <div>
+                            <label className="text-[10px] text-slate-500 uppercase font-semibold">Storage (GB):</label>
+                            <input
+                              type="number"
+                              value={plan.storageGB}
+                              onChange={(e) => {
+                                const val = Number(e.target.value);
+                                setEditablePlans((prev) =>
+                                  prev.map((p, i) => (i === idx ? { ...p, storageGB: val } : p))
+                                );
+                              }}
+                              className="w-full mt-1 px-2.5 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-[10px] text-slate-500 uppercase font-semibold">RAM (GB):</label>
+                            <input
+                              type="number"
+                              value={plan.ramGB}
+                              onChange={(e) => {
+                                const val = Number(e.target.value);
+                                setEditablePlans((prev) =>
+                                  prev.map((p, i) => (i === idx ? { ...p, ramGB: val } : p))
+                                );
+                              }}
+                              className="w-full mt-1 px-2.5 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-[10px] text-slate-500 uppercase font-semibold">CPU Cores:</label>
+                            <input
+                              type="number"
+                              value={plan.cpuCores}
+                              onChange={(e) => {
+                                const val = Number(e.target.value);
+                                setEditablePlans((prev) =>
+                                  prev.map((p, i) => (i === idx ? { ...p, cpuCores: val } : p))
+                                );
+                              }}
+                              className="w-full mt-1 px-2.5 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white"
+                            />
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* ========================================================================= */}
+              {/* SECTION 3: TOP 10 DOMAIN TLD PRICING & REGISTRAR MARGINS                  */}
+              {/* ========================================================================= */}
+              <div className="p-6 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                      Top 10 Domain TLD Rates &amp; Wholesale Registrar Margins
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
+                      Guaranteed renewal pricing transparency with live registrar wholesale cost tracking.
+                    </p>
+                  </div>
+                  <span className="px-2.5 py-1 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 text-[11px] font-mono font-semibold border border-indigo-200 dark:border-indigo-800">
+                    10 TLDs Managed
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                  {editableTlds.map((tld, idx) => {
+                    const netRegMargin = Math.max(0, tld.registerBDT - (tld.registrarCostBDT || 0));
+
+                    return (
+                      <div
+                        key={tld.tld}
+                        className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-200 dark:border-white/5 space-y-3 text-xs font-mono"
+                      >
+                        <div className="flex items-center justify-between border-b border-slate-200/60 dark:border-white/5 pb-2">
+                          <div className="flex items-center gap-2">
+                            <strong className="text-blue-600 dark:text-blue-400 text-base">{tld.tld}</strong>
+                            <span className="text-[10px] text-slate-400 font-sans">{tld.category || 'General'}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-bold">
+                              Margin: ৳{netRegMargin}
+                            </span>
+                            <label className="flex items-center gap-1 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={tld.affiliateEligible ?? false}
+                                onChange={(e) => {
+                                  const checked = e.target.checked;
+                                  setEditableTlds((prev) =>
+                                    prev.map((t, i) => (i === idx ? { ...t, affiliateEligible: checked } : t))
+                                  );
+                                }}
+                                className="accent-blue-600"
+                              />
+                              <span className="text-[10px] text-slate-500">Affiliate</span>
+                            </label>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-4 gap-2">
+                          <div>
+                            <label className="text-[9px] text-slate-500 uppercase block">Cost (৳):</label>
+                            <input
+                              type="number"
+                              value={tld.registrarCostBDT || 0}
+                              onChange={(e) => {
+                                const val = Number(e.target.value);
+                                setEditableTlds((prev) =>
+                                  prev.map((t, i) => (i === idx ? { ...t, registrarCostBDT: val } : t))
+                                );
+                              }}
+                              className="w-full px-2 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-[9px] text-slate-500 uppercase block">Reg (৳):</label>
+                            <input
+                              type="number"
+                              value={tld.registerBDT}
+                              onChange={(e) => {
+                                const val = Number(e.target.value);
+                                setEditableTlds((prev) =>
+                                  prev.map((t, i) => (i === idx ? { ...t, registerBDT: val } : t))
+                                );
+                              }}
+                              className="w-full px-2 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 font-bold text-slate-900 dark:text-white"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-[9px] text-slate-500 uppercase block">Renew (৳):</label>
+                            <input
+                              type="number"
+                              value={tld.renewalBDT}
+                              onChange={(e) => {
+                                const val = Number(e.target.value);
+                                setEditableTlds((prev) =>
+                                  prev.map((t, i) => (i === idx ? { ...t, renewalBDT: val } : t))
+                                );
+                              }}
+                              className="w-full px-2 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-[9px] text-slate-500 uppercase block">Transfer (৳):</label>
+                            <input
+                              type="number"
+                              value={tld.transferBDT}
+                              onChange={(e) => {
+                                const val = Number(e.target.value);
+                                setEditableTlds((prev) =>
+                                  prev.map((t, i) => (i === idx ? { ...t, transferBDT: val } : t))
+                                );
+                              }}
+                              className="w-full px-2 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             </div>

@@ -4,22 +4,32 @@ import React, { useState, useMemo } from 'react';
 import { Search, ShieldCheck, ArrowRight } from 'lucide-react';
 import { EXACT_10_TLD_DATA, getFormattedDomainPrice } from '@/config/domainData';
 import { useBilling } from '@/context/BillingContext';
+import { usePortal } from '@/context/PortalContext';
 import { buildDomainOrderUrl } from '@/lib/whmcsRouter';
 
 export default function DomainPricingTable() {
   const { currency } = useBilling();
+  const { dynamicTlds } = usePortal();
   const [filterCategory, setFilterCategory] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   const categories = ['All', 'Popular', 'Budget', 'Developer', 'Business', 'Organization', 'Personal'];
 
   const filteredTlds = useMemo(() => {
-    return EXACT_10_TLD_DATA.filter((item) => {
+    return EXACT_10_TLD_DATA.map((item) => {
+      const override = dynamicTlds?.find((dt) => dt.tld === item.tld);
+      return {
+        ...item,
+        registerBDT: override ? override.registerBDT : item.registerBDT,
+        renewalBDT: override ? override.renewalBDT : item.renewalBDT,
+        transferBDT: override ? override.transferBDT : item.transferBDT,
+      };
+    }).filter((item) => {
       const matchCat = filterCategory === 'All' || item.category === filterCategory;
       const matchSearch = item.tld.toLowerCase().includes(searchQuery.toLowerCase().trim());
       return matchCat && matchSearch;
     });
-  }, [filterCategory, searchQuery]);
+  }, [filterCategory, searchQuery, dynamicTlds]);
 
   return (
     <div id="pricing-table" className="w-full transition-colors duration-200">

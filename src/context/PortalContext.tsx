@@ -344,22 +344,34 @@ export interface PromoCode {
 
 export interface DynamicHostingPlan {
   id: string;
+  slug?: string;
   pid: number;
   name: string;
-  type: 'shared' | 'vps';
+  nameBn?: string;
+  type: 'shared' | 'developer' | 'vps' | 'enterprise';
   tagline: string;
   priceMonthlyBDT: number;
+  unitServerCostBDT: number;
+  minOwnerProfitBDT: number;
+  maxAffiliatePoolBDT: number;
   storageGB: number;
   ramGB: number;
   cpuCores: number;
   inodes: number;
+  features?: string[];
+  isPopular?: boolean;
 }
 
 export interface DynamicTldPricing {
   tld: string;
+  category?: string;
   registerBDT: number;
   renewalBDT: number;
   transferBDT: number;
+  registrarCostBDT: number;
+  ownerNetProfitRegBDT: number;
+  affiliateEligible?: boolean;
+  featuredBadge?: string;
 }
 
 export interface SystemNotification {
@@ -961,26 +973,176 @@ const INITIAL_PROMOS: PromoCode[] = [
 ];
 
 const INITIAL_DYNAMIC_PLANS: DynamicHostingPlan[] = [
-  { id: 'starter', pid: 1, name: 'Starter Pack', type: 'shared', tagline: 'Ideal for small blogs & personal websites', priceMonthlyBDT: 200, storageGB: 2, ramGB: 1, cpuCores: 1, inodes: 150000 },
-  { id: 'developer-pro', pid: 2, name: 'Developer Pro', type: 'shared', tagline: 'Engineered for full-stack developers & Next.js', priceMonthlyBDT: 450, storageGB: 5, ramGB: 2, cpuCores: 2, inodes: 300000 },
-  { id: 'business-max', pid: 3, name: 'Business Max', type: 'shared', tagline: 'High-throughput power for WooCommerce & high traffic', priceMonthlyBDT: 900, storageGB: 15, ramGB: 4, cpuCores: 2, inodes: 600000 },
-  { id: 'vps-1', pid: 101, name: 'Cloud VPS 1', type: 'vps', tagline: 'Dedicated KVM compute with dedicated IPv4', priceMonthlyBDT: 1500, storageGB: 40, ramGB: 4, cpuCores: 2, inodes: 1000000 },
-  { id: 'vps-2', pid: 102, name: 'Cloud VPS 2', type: 'vps', tagline: 'Production grade performance for growing startups', priceMonthlyBDT: 2800, storageGB: 80, ramGB: 8, cpuCores: 4, inodes: 2000000 },
-  { id: 'vps-3', pid: 103, name: 'Cloud VPS 3', type: 'vps', tagline: 'High concurrency cluster for agencies', priceMonthlyBDT: 5400, storageGB: 160, ramGB: 16, cpuCores: 8, inodes: 4000000 },
-  { id: 'vps-4', pid: 104, name: 'Cloud VPS 4', type: 'vps', tagline: 'Enterprise powerhouse with high NVMe I/O', priceMonthlyBDT: 9800, storageGB: 320, ramGB: 32, cpuCores: 16, inodes: 8000000 },
+  {
+    id: 'starter',
+    slug: 'starter',
+    pid: 1,
+    name: 'Starter Pack',
+    nameBn: 'স্টার্টার প্যাক',
+    type: 'shared',
+    tagline: 'Ideal for small blogs & personal websites',
+    priceMonthlyBDT: 200,
+    unitServerCostBDT: 45,
+    minOwnerProfitBDT: 95,
+    maxAffiliatePoolBDT: 60,
+    storageGB: 2,
+    ramGB: 1,
+    cpuCores: 1,
+    inodes: 150000,
+    isPopular: false,
+    features: [
+      '2 GB Pure NVMe SSD',
+      '1 GB Dedicated CloudLinux RAM',
+      '1 Core CPU | 25 MB/s Disk I/O',
+      '1-Click WordPress (Softaculous)',
+      'Free Automated Wildcard SSL',
+      'Sitejet AI Website Builder Included',
+      'Weekly Automated Backups',
+    ],
+  },
+  {
+    id: 'developer-pro',
+    slug: 'developer-pro',
+    pid: 2,
+    name: 'Developer Pro',
+    nameBn: 'ডেভেলপার প্রো',
+    type: 'developer',
+    tagline: 'Engineered for full-stack developers & Next.js',
+    priceMonthlyBDT: 450,
+    unitServerCostBDT: 90,
+    minOwnerProfitBDT: 225,
+    maxAffiliatePoolBDT: 135,
+    storageGB: 5,
+    ramGB: 2,
+    cpuCores: 2,
+    inodes: 300000,
+    isPopular: true,
+    features: [
+      '5 GB Pure NVMe SSD',
+      '2 GB Dedicated CloudLinux RAM',
+      '2 Cores CPU | 50 MB/s Disk I/O',
+      'Node.js (v18-v22), Next.js & Python',
+      '1-Click GitHub Webhook Auto-Deploy',
+      'Jailed SSH & WP-CLI Access',
+      'Backups Shipped Every 3 Days',
+    ],
+  },
+  {
+    id: 'business-max',
+    slug: 'business-max',
+    pid: 3,
+    name: 'Business Max',
+    nameBn: 'বিজনেস ম্যাক্স',
+    type: 'shared',
+    tagline: 'High-throughput power for WooCommerce & high traffic',
+    priceMonthlyBDT: 900,
+    unitServerCostBDT: 180,
+    minOwnerProfitBDT: 450,
+    maxAffiliatePoolBDT: 270,
+    storageGB: 15,
+    ramGB: 4,
+    cpuCores: 4,
+    inodes: 600000,
+    isPopular: false,
+    features: [
+      '15 GB Pure NVMe SSD',
+      '4 GB Dedicated CloudLinux RAM',
+      '4 Cores CPU | 100 MB/s Disk I/O',
+      'Enterprise Redis & Object Cache 100/100',
+      'WooCommerce High-Concurrency Engine',
+      'Priority Tier-1 VIP NOC Routing',
+      'Daily Automated Offsite Snapshots',
+    ],
+  },
+  {
+    id: 'cloud-kvm-1',
+    slug: 'cloud-kvm-1',
+    pid: 101,
+    name: 'Cloud KVM-1',
+    nameBn: 'ক্লাউড কেভিএম-১',
+    type: 'vps',
+    tagline: 'Dedicated KVM compute with dedicated IPv4',
+    priceMonthlyBDT: 1450,
+    unitServerCostBDT: 500,
+    minOwnerProfitBDT: 650,
+    maxAffiliatePoolBDT: 300,
+    storageGB: 60,
+    ramGB: 4,
+    cpuCores: 2,
+    inodes: 1000000,
+    isPopular: false,
+    features: ['2 vCPU Cores AMD EPYC', '4 GB DDR5 ECC RAM', '60 GB Pure NVMe Gen4', '2 TB Bandwidth', '1 Dedicated IPv4'],
+  },
+  {
+    id: 'cloud-kvm-2',
+    slug: 'cloud-kvm-2',
+    pid: 102,
+    name: 'Cloud KVM-2',
+    nameBn: 'ক্লাউড কেভিএম-২',
+    type: 'vps',
+    tagline: 'Production grade performance for growing startups',
+    priceMonthlyBDT: 2750,
+    unitServerCostBDT: 950,
+    minOwnerProfitBDT: 1250,
+    maxAffiliatePoolBDT: 550,
+    storageGB: 120,
+    ramGB: 8,
+    cpuCores: 4,
+    inodes: 2000000,
+    isPopular: true,
+    features: ['4 vCPU Cores AMD EPYC', '8 GB DDR5 ECC RAM', '120 GB Pure NVMe Gen4', '4 TB Bandwidth', '1 Dedicated IPv4'],
+  },
+  {
+    id: 'cloud-kvm-4',
+    slug: 'cloud-kvm-4',
+    pid: 103,
+    name: 'Cloud KVM-4',
+    nameBn: 'ক্লাউড কেভিএম-৪',
+    type: 'vps',
+    tagline: 'High concurrency cluster for agencies',
+    priceMonthlyBDT: 5200,
+    unitServerCostBDT: 1800,
+    minOwnerProfitBDT: 2400,
+    maxAffiliatePoolBDT: 1000,
+    storageGB: 240,
+    ramGB: 16,
+    cpuCores: 6,
+    inodes: 5000000,
+    isPopular: false,
+    features: ['6 vCPU Cores AMD EPYC', '16 GB DDR5 ECC RAM', '240 GB Pure NVMe Gen4', '8 TB Bandwidth', '1 Dedicated IPv4'],
+  },
+  {
+    id: 'cloud-kvm-8',
+    slug: 'cloud-kvm-8',
+    pid: 104,
+    name: 'Cloud KVM-8',
+    nameBn: 'ক্লাউড কেভিএম-৮',
+    type: 'vps',
+    tagline: 'Enterprise powerhouse with high NVMe I/O',
+    priceMonthlyBDT: 9800,
+    unitServerCostBDT: 3400,
+    minOwnerProfitBDT: 4600,
+    maxAffiliatePoolBDT: 1800,
+    storageGB: 480,
+    ramGB: 32,
+    cpuCores: 8,
+    inodes: 10000000,
+    isPopular: false,
+    features: ['8 vCPU Cores AMD EPYC', '32 GB DDR5 ECC RAM', '480 GB Pure NVMe Gen4', '16 TB Bandwidth', '1 Dedicated IPv4'],
+  },
 ];
 
 const INITIAL_DYNAMIC_TLDS: DynamicTldPricing[] = [
-  { tld: '.com', registerBDT: 1350, renewalBDT: 1650, transferBDT: 1350 },
-  { tld: '.net', registerBDT: 1650, renewalBDT: 1850, transferBDT: 1650 },
-  { tld: '.org', registerBDT: 1550, renewalBDT: 1750, transferBDT: 1550 },
-  { tld: '.xyz', registerBDT: 350, renewalBDT: 1450, transferBDT: 1350 },
-  { tld: '.io', registerBDT: 4800, renewalBDT: 5200, transferBDT: 4800 },
-  { tld: '.tech', registerBDT: 450, renewalBDT: 2600, transferBDT: 2400 },
-  { tld: '.shop', registerBDT: 350, renewalBDT: 3600, transferBDT: 3400 },
-  { tld: '.ai', registerBDT: 8900, renewalBDT: 9500, transferBDT: 8900 },
-  { tld: '.co', registerBDT: 1450, renewalBDT: 3200, transferBDT: 2900 },
-  { tld: '.info', registerBDT: 650, renewalBDT: 2450, transferBDT: 2200 },
+  { tld: '.com', category: 'General', registerBDT: 1350, renewalBDT: 1650, transferBDT: 1350, registrarCostBDT: 1150, ownerNetProfitRegBDT: 200, affiliateEligible: false, featuredBadge: 'Most Popular' },
+  { tld: '.net', category: 'General', registerBDT: 1650, renewalBDT: 1850, transferBDT: 1650, registrarCostBDT: 1450, ownerNetProfitRegBDT: 200, affiliateEligible: false },
+  { tld: '.org', category: 'Non-Profit', registerBDT: 1550, renewalBDT: 1750, transferBDT: 1550, registrarCostBDT: 1350, ownerNetProfitRegBDT: 200, affiliateEligible: false },
+  { tld: '.xyz', category: 'Web3 / Tech', registerBDT: 350, renewalBDT: 1450, transferBDT: 1350, registrarCostBDT: 250, ownerNetProfitRegBDT: 100, affiliateEligible: false, featuredBadge: 'Lowest Price' },
+  { tld: '.io', category: 'Tech / SaaS', registerBDT: 4800, renewalBDT: 5200, transferBDT: 4800, registrarCostBDT: 4200, ownerNetProfitRegBDT: 600, affiliateEligible: false, featuredBadge: 'Dev Choice' },
+  { tld: '.tech', category: 'Tech', registerBDT: 450, renewalBDT: 2600, transferBDT: 2400, registrarCostBDT: 350, ownerNetProfitRegBDT: 100, affiliateEligible: false },
+  { tld: '.shop', category: 'E-Commerce', registerBDT: 350, renewalBDT: 3600, transferBDT: 3400, registrarCostBDT: 250, ownerNetProfitRegBDT: 100, affiliateEligible: false },
+  { tld: '.ai', category: 'AI / Future', registerBDT: 8900, renewalBDT: 9500, transferBDT: 8900, registrarCostBDT: 7900, ownerNetProfitRegBDT: 1000, affiliateEligible: false },
+  { tld: '.co', category: 'Startups', registerBDT: 1450, renewalBDT: 3200, transferBDT: 2900, registrarCostBDT: 1250, ownerNetProfitRegBDT: 200, affiliateEligible: false },
+  { tld: '.info', category: 'Information', registerBDT: 650, renewalBDT: 2450, transferBDT: 2200, registrarCostBDT: 500, ownerNetProfitRegBDT: 150, affiliateEligible: false },
 ];
 
 const INITIAL_NOTIFICATIONS: SystemNotification[] = [
@@ -1216,8 +1378,31 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         if (parsed.ordersLedger) setOrdersLedger(parsed.ordersLedger);
         if (parsed.migrationQueue) setMigrationQueue(parsed.migrationQueue);
         if (parsed.promoCodes) setPromoCodes(parsed.promoCodes);
-        if (parsed.dynamicPlans) setDynamicPlans(parsed.dynamicPlans);
-        if (parsed.dynamicTlds) setDynamicTlds(parsed.dynamicTlds);
+        if (parsed.dynamicPlans) {
+          const mergedPlans = parsed.dynamicPlans.map((p: DynamicHostingPlan) => {
+            const defP = INITIAL_DYNAMIC_PLANS.find((dp) => dp.id === p.id || dp.slug === p.slug);
+            return {
+              ...defP,
+              ...p,
+              unitServerCostBDT: p.unitServerCostBDT ?? defP?.unitServerCostBDT ?? 0,
+              minOwnerProfitBDT: p.minOwnerProfitBDT ?? defP?.minOwnerProfitBDT ?? 0,
+              maxAffiliatePoolBDT: p.maxAffiliatePoolBDT ?? defP?.maxAffiliatePoolBDT ?? 0,
+            };
+          });
+          setDynamicPlans(mergedPlans);
+        }
+        if (parsed.dynamicTlds) {
+          const mergedTlds = parsed.dynamicTlds.map((t: DynamicTldPricing) => {
+            const defT = INITIAL_DYNAMIC_TLDS.find((dt) => dt.tld === t.tld);
+            return {
+              ...defT,
+              ...t,
+              registrarCostBDT: t.registrarCostBDT ?? defT?.registrarCostBDT ?? 0,
+              ownerNetProfitRegBDT: t.ownerNetProfitRegBDT ?? defT?.ownerNetProfitRegBDT ?? 0,
+            };
+          });
+          setDynamicTlds(mergedTlds);
+        }
         if (parsed.notifications) setNotifications(parsed.notifications);
         if (parsed.systemBroadcast) setSystemBroadcast(parsed.systemBroadcast);
         if (parsed.dunningRules) setDunningRules(parsed.dunningRules);
@@ -1226,6 +1411,60 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       // Fallback to seeds
     }
     setIsClientLoaded(true);
+  }, []);
+
+  // Fetch dynamic catalog from /api/catalog (Supabase Postgres)
+  useEffect(() => {
+    async function syncDynamicCatalog() {
+      try {
+        const res = await fetch('/api/catalog');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.allPlans && data.allPlans.length > 0) {
+            const mappedPlans: DynamicHostingPlan[] = data.allPlans.map((p: any) => ({
+              id: p.slug,
+              slug: p.slug,
+              pid: p.id,
+              name: p.name_en,
+              nameBn: p.name_bn,
+              type: p.category,
+              tagline:
+                p.category === 'vps'
+                  ? 'Dedicated KVM compute with dedicated IPv4'
+                  : 'Engineered for high performance',
+              priceMonthlyBDT: Number(p.selling_price_monthly_bdt),
+              unitServerCostBDT: Number(p.unit_server_cost_bdt || 0),
+              minOwnerProfitBDT: Number(p.min_owner_profit_bdt || 0),
+              maxAffiliatePoolBDT: Number(p.max_affiliate_pool_bdt || 0),
+              storageGB: Number(p.storage_gb),
+              ramGB: Math.round(Number(p.ram_mb) / 1024),
+              cpuCores: Number(p.cpu_cores),
+              inodes: Number(p.inode_limit),
+              features: p.features_json || [],
+              isPopular: !!p.is_popular,
+            }));
+            setDynamicPlans(mappedPlans);
+          }
+          if (data.domainTlds && data.domainTlds.length > 0) {
+            const mappedTlds: DynamicTldPricing[] = data.domainTlds.map((t: any) => ({
+              tld: t.tld,
+              category: t.category,
+              registerBDT: Number(t.reg_price_bdt),
+              renewalBDT: Number(t.renew_price_bdt),
+              transferBDT: Number(t.transfer_price_bdt),
+              registrarCostBDT: Number(t.registrar_cost_bdt || 0),
+              ownerNetProfitRegBDT: Number(t.owner_net_profit_reg_bdt || 0),
+              affiliateEligible: !!t.affiliate_eligible,
+              featuredBadge: t.featured_badge,
+            }));
+            setDynamicTlds(mappedTlds);
+          }
+        }
+      } catch (err) {
+        console.warn('[PortalContext] Dynamic catalog load deferred to local state cache:', err);
+      }
+    }
+    syncDynamicCatalog();
   }, []);
 
   // Save to LocalStorage on state updates
@@ -2051,11 +2290,73 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   // ---------------------------------------------------------------------------
 
   const updateHostingPlan = (id: string, updates: Partial<DynamicHostingPlan>) => {
-    setDynamicPlans((prev) => prev.map((p) => (p.id === id ? { ...p, ...updates } : p)));
+    setDynamicPlans((prev) =>
+      prev.map((p) => {
+        if (p.id === id || p.slug === id) {
+          const updated = { ...p, ...updates };
+          const netPool = Math.max(0, updated.priceMonthlyBDT - (updated.unitServerCostBDT + updated.minOwnerProfitBDT));
+          updated.maxAffiliatePoolBDT = netPool;
+          return updated;
+        }
+        return p;
+      })
+    );
+
+    // Sync to Supabase via Edge API
+    const target = dynamicPlans.find((p) => p.id === id || p.slug === id);
+    if (target) {
+      const merged = { ...target, ...updates };
+      fetch('/api/catalog', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          entityType: 'plan',
+          data: {
+            slug: merged.slug || merged.id,
+            selling_price_monthly_bdt: merged.priceMonthlyBDT,
+            unit_server_cost_bdt: merged.unitServerCostBDT,
+            min_owner_profit_bdt: merged.minOwnerProfitBDT,
+            storage_gb: merged.storageGB,
+            ram_mb: merged.ramGB * 1024,
+            cpu_cores: merged.cpuCores,
+          },
+        }),
+      }).catch((err) => console.error('[PortalContext] Failed to persist plan to backend:', err));
+    }
   };
 
   const updateTldPricing = (tld: string, updates: Partial<DynamicTldPricing>) => {
-    setDynamicTlds((prev) => prev.map((t) => (t.tld === tld ? { ...t, ...updates } : t)));
+    setDynamicTlds((prev) =>
+      prev.map((t) => {
+        if (t.tld === tld) {
+          const updated = { ...t, ...updates };
+          updated.ownerNetProfitRegBDT = Math.max(0, updated.registerBDT - updated.registrarCostBDT);
+          return updated;
+        }
+        return t;
+      })
+    );
+
+    // Sync to Supabase via Edge API
+    const target = dynamicTlds.find((t) => t.tld === tld);
+    if (target) {
+      const merged = { ...target, ...updates };
+      fetch('/api/catalog', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          entityType: 'tld',
+          data: {
+            tld: merged.tld,
+            registrar_cost_bdt: merged.registrarCostBDT,
+            reg_price_bdt: merged.registerBDT,
+            renew_price_bdt: merged.renewalBDT,
+            transfer_price_bdt: merged.transferBDT,
+            affiliate_eligible: merged.affiliateEligible ?? false,
+          },
+        }),
+      }).catch((err) => console.error('[PortalContext] Failed to persist TLD to backend:', err));
+    }
   };
 
   // ---------------------------------------------------------------------------

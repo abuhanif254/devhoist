@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { Check, ArrowRight, ShieldCheck, Sparkles } from 'lucide-react';
 import { useBilling } from '@/context/BillingContext';
+import { usePortal } from '@/context/PortalContext';
 import { HOSTING_PACKAGES } from '@/config/hostingData';
 import { calculateBilling } from '@/config/constants';
 import { buildHostingOrderUrl } from '@/lib/whmcsRouter';
@@ -12,6 +13,7 @@ import { BkashBadge, NagadBadge, StripeBadge } from '@/components/visuals/BrandL
 
 export default function PricingSection() {
   const { billingCycle, setBillingCycle, currency, setCurrency, openStackBuilder } = useBilling();
+  const { dynamicPlans } = usePortal();
   const [mobileActivePlanId, setMobileActivePlanId] = useState<string>('developer-pro');
 
   const isAnnual = billingCycle === 'annually';
@@ -114,7 +116,13 @@ export default function PricingSection() {
         {/* Pricing Cards Grid (Desktop: 3 columns, Mobile: selected tab visible) */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-stretch">
           {HOSTING_PACKAGES.map((plan) => {
-            const bill = calculateBilling(plan.baseMonthlyBDT, isAnnual, currency);
+            const override = dynamicPlans?.find((dp) => dp.id === plan.id || dp.slug === plan.id);
+            const monthlyBDT = override ? override.priceMonthlyBDT : plan.baseMonthlyBDT;
+            const storageText = override ? `${override.storageGB} GB NVMe SSD` : plan.nvmeStorage;
+            const ramText = override ? `${override.ramGB} GB RAM` : plan.ram;
+            const cpuText = override ? `${override.cpuCores} Core vCPU` : plan.cpu;
+            const inodesText = override ? `${override.inodes.toLocaleString()} Inodes` : plan.inodes;
+            const bill = calculateBilling(monthlyBDT, isAnnual, currency);
             const isHighlighted = plan.highlighted;
             const isMobileVisible = mobileActivePlanId === plan.id;
 
@@ -175,15 +183,15 @@ export default function PricingSection() {
                 <div className="mb-5 p-3 rounded-xl bg-slate-50 dark:bg-zinc-900/60 border border-slate-200/80 dark:border-white/[0.06] space-y-1.5 text-xs font-mono">
                   <div className="flex items-center justify-between text-slate-700 dark:text-zinc-300">
                     <span className="text-slate-500 dark:text-zinc-500">NVMe SSD Storage:</span>
-                    <strong className="text-slate-900 dark:text-zinc-100">{plan.nvmeStorage}</strong>
+                    <strong className="text-slate-900 dark:text-zinc-100">{storageText}</strong>
                   </div>
                   <div className="flex items-center justify-between text-slate-700 dark:text-zinc-300">
                     <span className="text-slate-500 dark:text-zinc-500">Dedicated RAM:</span>
-                    <strong className="text-slate-900 dark:text-zinc-100">{plan.ram}</strong>
+                    <strong className="text-slate-900 dark:text-zinc-100">{ramText}</strong>
                   </div>
                   <div className="flex items-center justify-between text-slate-700 dark:text-zinc-300">
                     <span className="text-slate-500 dark:text-zinc-500">CPU &amp; Disk I/O:</span>
-                    <strong className="text-slate-900 dark:text-zinc-100">{plan.cpu} ({plan.ioLimit})</strong>
+                    <strong className="text-slate-900 dark:text-zinc-100">{cpuText} ({plan.ioLimit})</strong>
                   </div>
                 </div>
 
@@ -208,13 +216,13 @@ export default function PricingSection() {
                       openStackBuilder({
                         pid: plan.pid,
                         planName: plan.name,
-                        basePriceMonthlyBDT: plan.baseMonthlyBDT,
-                        basePriceMonthlyUSD: Number((plan.baseMonthlyBDT / 120).toFixed(2)),
+                        basePriceMonthlyBDT: monthlyBDT,
+                        basePriceMonthlyUSD: Number((monthlyBDT / 120).toFixed(2)),
                         specs: {
-                          ram: plan.ram,
-                          cpu: plan.cpu,
-                          storage: plan.nvmeStorage,
-                          inodes: plan.inodes,
+                          ram: ramText,
+                          cpu: cpuText,
+                          storage: storageText,
+                          inodes: inodesText,
                         },
                       })
                     }

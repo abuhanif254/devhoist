@@ -13,9 +13,11 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { useBilling } from '@/context/BillingContext';
+import { usePortal } from '@/context/PortalContext';
 
 export default function ComparePageClient() {
   const { currency, openStackBuilder } = useBilling();
+  const { dynamicPlans } = usePortal();
   const isBDT = currency === 'BDT';
   const symbol = isBDT ? '৳' : '$';
 
@@ -23,11 +25,15 @@ export default function ComparePageClient() {
 
   // Math for 3-Year TCO Calculation
   const isDev = selectedTier === 'developer';
+  const devPlan = dynamicPlans?.find((p) => p.slug === 'developer-pro' || p.id === 'developer-pro');
+  const bizPlan = dynamicPlans?.find((p) => p.slug === 'business-max' || p.id === 'business-max');
+  const devRate = devPlan ? Math.round(devPlan.priceMonthlyBDT * 12 * 0.8) : 4320;
+  const bizRate = bizPlan ? Math.round(bizPlan.priceMonthlyBDT * 12 * 0.8) : 8640;
 
   // DevHost Cloud: Locked price, zero hike, 0% VAT
-  const devHostYear1 = isDev ? 4320 : 8640;
-  const devHostYear2 = isDev ? 4320 : 8640;
-  const devHostYear3 = isDev ? 4320 : 8640;
+  const devHostYear1 = isDev ? devRate : bizRate;
+  const devHostYear2 = isDev ? devRate : bizRate;
+  const devHostYear3 = isDev ? devRate : bizRate;
   const devHost3YearTotal = devHostYear1 + devHostYear2 + devHostYear3;
 
   // International Shared Hosting (Hostinger / Namecheap):

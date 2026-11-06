@@ -1,0 +1,471 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { supabase, getServiceSupabase, isSupabaseConfigured } from '@/lib/supabase';
+import { validatePricingPlanChange } from '@/lib/profitEngine';
+
+export const runtime = 'edge';
+
+// Default Production Fallback & Seeding Datasets
+export const DEFAULT_PRODUCTION_HOSTING_PLANS = [
+  {
+    id: 1,
+    slug: 'starter',
+    name_en: 'Starter Pack',
+    name_bn: 'স্টার্টার প্যাক',
+    category: 'shared',
+    selling_price_monthly_bdt: 200,
+    unit_server_cost_bdt: 45,
+    min_owner_profit_bdt: 95,
+    max_affiliate_pool_bdt: 60,
+    annual_discount_percent: 20,
+    storage_gb: 2,
+    ram_mb: 1024,
+    cpu_cores: 1,
+    io_speed_mbps: 25,
+    entry_processes: 20,
+    inode_limit: 150000,
+    max_addon_domains: 1,
+    ssh_enabled: false,
+    git_auto_deploy: false,
+    backup_frequency: 'Weekly Backup',
+    whm_package_name: 'devhost_starter_2g',
+    is_popular: false,
+    is_active: true,
+    sort_order: 1,
+    features_json: [
+      '2 GB Pure NVMe SSD',
+      '1 GB Dedicated CloudLinux RAM',
+      '1 Core CPU | 25 MB/s Disk I/O',
+      '1-Click WordPress (Softaculous)',
+      'Free Automated Wildcard SSL',
+      'Sitejet AI Website Builder Included',
+      'cPanel File Manager & PHP Selector',
+      'Weekly Automated Backups',
+    ],
+  },
+  {
+    id: 2,
+    slug: 'developer-pro',
+    name_en: 'Developer Pro',
+    name_bn: 'ডেভেলপার প্রো',
+    category: 'developer',
+    selling_price_monthly_bdt: 450,
+    unit_server_cost_bdt: 90,
+    min_owner_profit_bdt: 225,
+    max_affiliate_pool_bdt: 135,
+    annual_discount_percent: 20,
+    storage_gb: 5,
+    ram_mb: 2048,
+    cpu_cores: 2,
+    io_speed_mbps: 50,
+    entry_processes: 40,
+    inode_limit: 300000,
+    max_addon_domains: 5,
+    ssh_enabled: true,
+    git_auto_deploy: true,
+    backup_frequency: 'Every 3 Days',
+    whm_package_name: 'devhost_devpro_5g',
+    is_popular: true,
+    is_active: true,
+    sort_order: 2,
+    features_json: [
+      '5 GB Pure NVMe SSD',
+      '2 GB Dedicated CloudLinux RAM',
+      '2 Cores CPU | 50 MB/s Disk I/O',
+      'Node.js (v18-v22), Next.js & Python',
+      '1-Click GitHub Webhook Auto-Deploy',
+      'Jailed SSH & WP-CLI Access',
+      'Smart In-Place Overwrite Pipeline',
+      'Backups Shipped Every 3 Days',
+    ],
+  },
+  {
+    id: 3,
+    slug: 'business-max',
+    name_en: 'Business Max',
+    name_bn: 'বিজনেস ম্যাক্স',
+    category: 'shared',
+    selling_price_monthly_bdt: 900,
+    unit_server_cost_bdt: 180,
+    min_owner_profit_bdt: 450,
+    max_affiliate_pool_bdt: 270,
+    annual_discount_percent: 20,
+    storage_gb: 15,
+    ram_mb: 4096,
+    cpu_cores: 4,
+    io_speed_mbps: 100,
+    entry_processes: 80,
+    inode_limit: 600000,
+    max_addon_domains: 15,
+    ssh_enabled: true,
+    git_auto_deploy: true,
+    backup_frequency: 'Daily Automated',
+    whm_package_name: 'devhost_bizmax_15g',
+    is_popular: false,
+    is_active: true,
+    sort_order: 3,
+    features_json: [
+      '15 GB Pure NVMe SSD',
+      '4 GB Dedicated CloudLinux RAM',
+      '4 Cores CPU | 100 MB/s Disk I/O',
+      'Enterprise Redis & Object Cache 100/100',
+      'WooCommerce High-Concurrency Engine',
+      'Priority Tier-1 VIP NOC Routing',
+      'White-Label Staging & Cloning Tools',
+      'Daily Automated Offsite Snapshots',
+    ],
+  },
+  {
+    id: 101,
+    slug: 'cloud-kvm-1',
+    name_en: 'Cloud KVM-1',
+    name_bn: 'ক্লাউড কেভিএম-১',
+    category: 'vps',
+    selling_price_monthly_bdt: 1450,
+    unit_server_cost_bdt: 500,
+    min_owner_profit_bdt: 650,
+    max_affiliate_pool_bdt: 300,
+    annual_discount_percent: 15,
+    storage_gb: 60,
+    ram_mb: 4096,
+    cpu_cores: 2,
+    io_speed_mbps: 350,
+    entry_processes: 100,
+    inode_limit: 1000000,
+    max_addon_domains: 999,
+    ssh_enabled: true,
+    git_auto_deploy: true,
+    backup_frequency: 'Weekly Automated',
+    whm_package_name: 'devhost_vps_kvm1',
+    is_popular: false,
+    is_active: true,
+    sort_order: 10,
+    features_json: [
+      '2 vCPU Cores AMD EPYC',
+      '4 GB DDR5 ECC RAM',
+      '60 GB Pure NVMe Gen4',
+      '2 TB High-Speed Bandwidth',
+      '1 Dedicated IPv4',
+      'Full Root SSH & Custom ISO',
+      'Singapore SG1 & USA East',
+    ],
+  },
+  {
+    id: 102,
+    slug: 'cloud-kvm-2',
+    name_en: 'Cloud KVM-2',
+    name_bn: 'ক্লাউড কেভিএম-২',
+    category: 'vps',
+    selling_price_monthly_bdt: 2750,
+    unit_server_cost_bdt: 950,
+    min_owner_profit_bdt: 1250,
+    max_affiliate_pool_bdt: 550,
+    annual_discount_percent: 15,
+    storage_gb: 120,
+    ram_mb: 8192,
+    cpu_cores: 4,
+    io_speed_mbps: 350,
+    entry_processes: 200,
+    inode_limit: 2000000,
+    max_addon_domains: 999,
+    ssh_enabled: true,
+    git_auto_deploy: true,
+    backup_frequency: 'Weekly Automated',
+    whm_package_name: 'devhost_vps_kvm2',
+    is_popular: true,
+    is_active: true,
+    sort_order: 11,
+    features_json: [
+      '4 vCPU Cores AMD EPYC',
+      '8 GB DDR5 ECC RAM',
+      '120 GB Pure NVMe Gen4',
+      '4 TB High-Speed Bandwidth',
+      '1 Dedicated IPv4',
+      'Docker & Kubernetes MicroK8s Ready',
+      '10 Gbps Redundant Uplink',
+    ],
+  },
+  {
+    id: 103,
+    slug: 'cloud-kvm-4',
+    name_en: 'Cloud KVM-4',
+    name_bn: 'ক্লাউড কেভিএম-৪',
+    category: 'vps',
+    selling_price_monthly_bdt: 5200,
+    unit_server_cost_bdt: 1800,
+    min_owner_profit_bdt: 2400,
+    max_affiliate_pool_bdt: 1000,
+    annual_discount_percent: 15,
+    storage_gb: 240,
+    ram_mb: 16384,
+    cpu_cores: 6,
+    io_speed_mbps: 500,
+    entry_processes: 400,
+    inode_limit: 5000000,
+    max_addon_domains: 999,
+    ssh_enabled: true,
+    git_auto_deploy: true,
+    backup_frequency: 'Daily Automated',
+    whm_package_name: 'devhost_vps_kvm4',
+    is_popular: false,
+    is_active: true,
+    sort_order: 12,
+    features_json: [
+      '6 vCPU Cores AMD EPYC',
+      '16 GB DDR5 ECC RAM',
+      '240 GB Pure NVMe Gen4',
+      '8 TB High-Speed Bandwidth',
+      '1 Dedicated IPv4',
+      'Multi-Tenant E-Commerce Scale',
+      'Enterprise Redis Tuning',
+    ],
+  },
+  {
+    id: 104,
+    slug: 'cloud-kvm-8',
+    name_en: 'Cloud KVM-8',
+    name_bn: 'ক্লাউড কেভিএম-৮',
+    category: 'vps',
+    selling_price_monthly_bdt: 9800,
+    unit_server_cost_bdt: 3400,
+    min_owner_profit_bdt: 4600,
+    max_affiliate_pool_bdt: 1800,
+    annual_discount_percent: 15,
+    storage_gb: 480,
+    ram_mb: 32768,
+    cpu_cores: 8,
+    io_speed_mbps: 500,
+    entry_processes: 800,
+    inode_limit: 10000000,
+    max_addon_domains: 999,
+    ssh_enabled: true,
+    git_auto_deploy: true,
+    backup_frequency: 'Daily Automated',
+    whm_package_name: 'devhost_vps_kvm8',
+    is_popular: false,
+    is_active: true,
+    sort_order: 13,
+    features_json: [
+      '8 vCPU Cores AMD EPYC',
+      '32 GB DDR5 ECC RAM',
+      '480 GB Pure NVMe Gen4',
+      '12 TB High-Speed Bandwidth',
+      '2 Dedicated IPv4',
+      'Bare-Metal Virtual Isolation',
+      '24/7 Dedicated NOC Support',
+    ],
+  },
+];
+
+export const DEFAULT_PRODUCTION_DOMAIN_TLDS = [
+  { tld: '.com', category: 'Popular', registrar_cost_bdt: 1150, reg_price_bdt: 1350, renew_price_bdt: 1450, transfer_price_bdt: 1350, owner_net_profit_reg_bdt: 200, affiliate_eligible: false, featured_badge: 'Most Popular', is_active: true },
+  { tld: '.net', category: 'Popular', registrar_cost_bdt: 1450, reg_price_bdt: 1650, renew_price_bdt: 1750, transfer_price_bdt: 1650, owner_net_profit_reg_bdt: 200, affiliate_eligible: false, featured_badge: 'Network Standard', is_active: true },
+  { tld: '.org', category: 'Organization', registrar_cost_bdt: 1300, reg_price_bdt: 1500, renew_price_bdt: 1600, transfer_price_bdt: 1500, owner_net_profit_reg_bdt: 200, affiliate_eligible: false, featured_badge: 'Trusted Non-Profit', is_active: true },
+  { tld: '.xyz', category: 'Budget', registrar_cost_bdt: 190, reg_price_bdt: 290, renew_price_bdt: 1400, transfer_price_bdt: 1300, owner_net_profit_reg_bdt: 100, affiliate_eligible: false, featured_badge: 'Best Starter', is_active: true },
+  { tld: '.io', category: 'Developer', registrar_cost_bdt: 4200, reg_price_bdt: 4800, renew_price_bdt: 5200, transfer_price_bdt: 4800, owner_net_profit_reg_bdt: 600, affiliate_eligible: true, featured_badge: 'Startup Favorite', is_active: true },
+  { tld: '.ai', category: 'Developer', registrar_cost_bdt: 8700, reg_price_bdt: 9500, renew_price_bdt: 9800, transfer_price_bdt: 9500, owner_net_profit_reg_bdt: 800, affiliate_eligible: true, featured_badge: 'AI & SaaS Standard', is_active: true },
+  { tld: '.co', category: 'Business', registrar_cost_bdt: 2700, reg_price_bdt: 3100, renew_price_bdt: 3400, transfer_price_bdt: 3100, owner_net_profit_reg_bdt: 400, affiliate_eligible: false, featured_badge: 'Global Corp', is_active: true },
+  { tld: '.me', category: 'Personal', registrar_cost_bdt: 1650, reg_price_bdt: 1900, renew_price_bdt: 2200, transfer_price_bdt: 1900, owner_net_profit_reg_bdt: 250, affiliate_eligible: false, featured_badge: 'Personal Portfolio', is_active: true },
+  { tld: '.tech', category: 'Developer', registrar_cost_bdt: 480, reg_price_bdt: 650, renew_price_bdt: 4200, transfer_price_bdt: 3900, owner_net_profit_reg_bdt: 170, affiliate_eligible: false, featured_badge: 'Tech Brand', is_active: true },
+  { tld: '.shop', category: 'Business', registrar_cost_bdt: 350, reg_price_bdt: 450, renew_price_bdt: 3200, transfer_price_bdt: 3000, owner_net_profit_reg_bdt: 100, affiliate_eligible: false, featured_badge: 'E-Commerce Store', is_active: true },
+];
+
+export const DEFAULT_PRODUCTION_PROMOS = [
+  { code: 'BDIX50', discount_type: 'percentage', discount_value: 50, applies_to: 'hosting', max_uses: 100, current_uses: 14, reduce_affiliate_commission_proportionally: true, is_active: true },
+  { code: 'DEVHOST20', discount_type: 'percentage', discount_value: 20, applies_to: 'all', max_uses: 500, current_uses: 48, reduce_affiliate_commission_proportionally: true, is_active: true },
+  { code: 'WELCOME10', discount_type: 'percentage', discount_value: 10, applies_to: 'all', max_uses: 1000, current_uses: 92, reduce_affiliate_commission_proportionally: false, is_active: true },
+];
+
+/**
+ * GET /api/catalog
+ * Returns dynamic hosting plans, VPS tiers, domain TLDs, promos & platform settings.
+ * Auto-seeds Supabase if tables are currently empty!
+ */
+export async function GET() {
+  try {
+    let plans = DEFAULT_PRODUCTION_HOSTING_PLANS;
+    let tlds = DEFAULT_PRODUCTION_DOMAIN_TLDS;
+    let promos = DEFAULT_PRODUCTION_PROMOS;
+    let settings: Record<string, any> = {
+      bdix_status: { status: 'online', peering_mbps: 10000, node: 'Equinix SG1' },
+      usd_bdt_rate: 120,
+    };
+    let isLiveDatabase = false;
+
+    if (isSupabaseConfigured()) {
+      const db = getServiceSupabase();
+
+      // Query Plans
+      const { data: dbPlans, error: plansErr } = await db
+        .from('catalog_hosting_plans')
+        .select('*')
+        .order('sort_order', { ascending: true });
+
+      if (!plansErr && dbPlans && dbPlans.length > 0) {
+        plans = dbPlans;
+        isLiveDatabase = true;
+      } else if (!plansErr && (!dbPlans || dbPlans.length === 0)) {
+        // Auto-seed plans if empty
+        console.log('[Catalog API] Auto-seeding catalog_hosting_plans in Supabase...');
+        try {
+          await db.from('catalog_hosting_plans').upsert(DEFAULT_PRODUCTION_HOSTING_PLANS);
+        } catch {
+          // ignore seeding conflicts
+        }
+      }
+
+      // Query Domain TLDs
+      const { data: dbTlds, error: tldsErr } = await db
+        .from('catalog_domain_tlds')
+        .select('*')
+        .order('reg_price_bdt', { ascending: true });
+
+      if (!tldsErr && dbTlds && dbTlds.length > 0) {
+        tlds = dbTlds;
+      } else if (!tldsErr && (!dbTlds || dbTlds.length === 0)) {
+        console.log('[Catalog API] Auto-seeding catalog_domain_tlds in Supabase...');
+        try {
+          await db.from('catalog_domain_tlds').upsert(DEFAULT_PRODUCTION_DOMAIN_TLDS);
+        } catch {
+          // ignore seeding conflicts
+        }
+      }
+
+      // Query Promos
+      const { data: dbPromos, error: promosErr } = await db
+        .from('promo_codes')
+        .select('*')
+        .eq('is_active', true);
+
+      if (!promosErr && dbPromos && dbPromos.length > 0) {
+        promos = dbPromos;
+      }
+
+      // Query Platform Settings
+      const { data: dbSettings } = await db.from('platform_settings').select('*');
+      if (dbSettings && dbSettings.length > 0) {
+        dbSettings.forEach((s) => {
+          settings[s.key] = s.value;
+        });
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
+      isLiveDatabase,
+      plans: plans.filter((p) => p.category !== 'vps'),
+      vpsPlans: plans.filter((p) => p.category === 'vps'),
+      allPlans: plans,
+      domainTlds: tlds,
+      promoCodes: promos,
+      platformSettings: settings,
+      meta: {
+        totalPlans: plans.length,
+        totalTlds: tlds.length,
+        activePromos: promos.length,
+        currency: 'BDT',
+      },
+    });
+  } catch (error: any) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: error?.message || 'Failed to fetch dynamic catalog',
+        plans: DEFAULT_PRODUCTION_HOSTING_PLANS.filter((p) => p.category !== 'vps'),
+        vpsPlans: DEFAULT_PRODUCTION_HOSTING_PLANS.filter((p) => p.category === 'vps'),
+        domainTlds: DEFAULT_PRODUCTION_DOMAIN_TLDS,
+        promoCodes: DEFAULT_PRODUCTION_PROMOS,
+      },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * PUT /api/catalog
+ * Update a plan, domain TLD, promo, or setting with profit-protection verification.
+ */
+export async function PUT(req: NextRequest) {
+  try {
+    const body = await req.json();
+    const { entityType, data } = body as {
+      entityType: 'plan' | 'tld' | 'promo' | 'setting';
+      data: any;
+    };
+
+    if (!entityType || !data) {
+      return NextResponse.json(
+        { error: 'Missing entityType or data in request body' },
+        { status: 400 }
+      );
+    }
+
+    // 1. Profit Protection Validation for Plan updates
+    if (entityType === 'plan') {
+      const validation = validatePricingPlanChange({
+        sellingPriceBDT: Number(data.selling_price_monthly_bdt),
+        unitServerCostBDT: Number(data.unit_server_cost_bdt),
+        minOwnerProfitBDT: Number(data.min_owner_profit_bdt),
+      });
+
+      if (!validation.valid) {
+        return NextResponse.json({ error: validation.error }, { status: 422 });
+      }
+    }
+
+    // 2. Perform Supabase database update if configured
+    if (isSupabaseConfigured()) {
+      const db = getServiceSupabase();
+
+      if (entityType === 'plan') {
+        const { error } = await db
+          .from('catalog_hosting_plans')
+          .update({
+            selling_price_monthly_bdt: data.selling_price_monthly_bdt,
+            unit_server_cost_bdt: data.unit_server_cost_bdt,
+            min_owner_profit_bdt: data.min_owner_profit_bdt,
+            storage_gb: data.storage_gb,
+            ram_mb: data.ram_mb,
+            cpu_cores: data.cpu_cores,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('slug', data.slug);
+
+        if (error) {
+          return NextResponse.json({ error: error.message }, { status: 500 });
+        }
+      } else if (entityType === 'tld') {
+        const { error } = await db
+          .from('catalog_domain_tlds')
+          .update({
+            registrar_cost_bdt: data.registrar_cost_bdt,
+            reg_price_bdt: data.reg_price_bdt,
+            renew_price_bdt: data.renew_price_bdt,
+            transfer_price_bdt: data.transfer_price_bdt,
+            affiliate_eligible: data.affiliate_eligible,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('tld', data.tld);
+
+        if (error) {
+          return NextResponse.json({ error: error.message }, { status: 500 });
+        }
+      } else if (entityType === 'promo') {
+        const { error } = await db.from('promo_codes').upsert(data);
+        if (error) {
+          return NextResponse.json({ error: error.message }, { status: 500 });
+        }
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
+      message: `${entityType.toUpperCase()} updated and persisted successfully!`,
+      data,
+    });
+  } catch (err: any) {
+    return NextResponse.json(
+      { error: err?.message || 'Failed to update catalog entity' },
+      { status: 500 }
+    );
+  }
+}

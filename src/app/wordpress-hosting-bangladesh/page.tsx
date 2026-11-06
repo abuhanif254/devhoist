@@ -9,6 +9,7 @@ import FaqAccordion from '@/components/common/FaqAccordion';
 import { Server, ArrowRight, Clock } from 'lucide-react';
 import { buildHostingOrderUrl } from '@/lib/whmcsRouter';
 import { COMPLETE_FAQ_LIST } from '@/config/faqData';
+import { generateAggregateOfferSchema } from '@/lib/seoSchema';
 
 export const metadata: Metadata = {
   title: 'WordPress Hosting Bangladesh | LiteSpeed NVMe & Sitejet AI Builder',
@@ -28,19 +29,11 @@ export const metadata: Metadata = {
 export default function WordPressHostingPage() {
   const starterCartUrl = buildHostingOrderUrl(1, false, 'BDT');
 
-  const productSchema = {
-    '@context': 'https://schema.org',
-    '@type': 'Product',
-    name: 'LiteSpeed WordPress Hosting Bangladesh',
-    description: 'High-speed WordPress hosting with LiteSpeed Enterprise and NVMe SSD.',
-    offers: {
-      '@type': 'AggregateOffer',
-      priceCurrency: 'BDT',
-      lowPrice: '200',
-      highPrice: '900',
-      offerCount: '3',
-    },
-  };
+  const productSchema = generateAggregateOfferSchema([
+    { name: 'Starter Pack', priceMonthlyBDT: 200, description: '1-Click WordPress Softaculous on LiteSpeed' },
+    { name: 'Developer Pro', priceMonthlyBDT: 450, description: 'High-speed WordPress with LiteSpeed LSCache & staging' },
+    { name: 'Business Max', priceMonthlyBDT: 900, description: 'WooCommerce High-Concurrency Engine with Redis' },
+  ]);
 
   return (
     <>

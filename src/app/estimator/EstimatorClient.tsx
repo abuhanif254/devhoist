@@ -20,6 +20,7 @@ import {
   CreditCard,
 } from 'lucide-react';
 import { useBilling } from '@/context/BillingContext';
+import { usePortal } from '@/context/PortalContext';
 
 interface ServiceItem {
   id: string;
@@ -149,8 +150,47 @@ const CATALOG_ITEMS: ServiceItem[] = [
 
 export default function EstimatorClient() {
   const { currency } = useBilling();
+  const { dynamicPlans, dynamicTlds } = usePortal();
   const isBDT = currency === 'BDT';
   const symbol = isBDT ? '৳' : '$';
+
+  // Dynamic Catalog Overrides from Supabase / PortalContext
+  const activeCatalog = useMemo(() => {
+    return CATALOG_ITEMS.map((item) => {
+      if (item.type === 'hosting') {
+        const match = dynamicPlans?.find(
+          (p) => p.slug === item.id || p.id === item.id || (item.id === 'developer' && p.slug === 'developer-pro') || (item.id === 'business' && p.slug === 'business-max')
+        );
+        if (match) {
+          return {
+            ...item,
+            priceMonthlyBDT: match.priceMonthlyBDT,
+            desc: `${match.storageGB} GB NVMe, ${match.ramGB} GB RAM, ${match.cpuCores} Cores, ${match.inodes.toLocaleString()} Inodes`,
+          };
+        }
+      } else if (item.type === 'vps') {
+        const match = dynamicPlans?.find(
+          (p) => p.type === 'vps' && (p.slug?.includes(item.id.replace('kvm', '')) || p.id.includes(item.id.replace('kvm', '')))
+        );
+        if (match) {
+          return {
+            ...item,
+            priceMonthlyBDT: match.priceMonthlyBDT,
+          };
+        }
+      } else if (item.type === 'domain') {
+        const tldKey = item.id.replace('dom_', '.');
+        const match = dynamicTlds?.find((t) => t.tld === tldKey);
+        if (match) {
+          return {
+            ...item,
+            priceAnnualBDT: match.registerBDT,
+          };
+        }
+      }
+      return item;
+    });
+  }, [dynamicPlans, dynamicTlds]);
 
   // Client Details for PDF Quote
   const [preparedFor, setPreparedFor] = useState('Acme Technologies Ltd.');
@@ -180,7 +220,7 @@ export default function EstimatorClient() {
 
     const selectedItems: { item: ServiceItem; qty: number; monthlyBDT: number; annualBDT: number }[] = [];
 
-    for (const item of CATALOG_ITEMS) {
+    for (const item of activeCatalog) {
       const qty = quantities[item.id] || 0;
       if (qty > 0) {
         if (item.type === 'hosting' || item.type === 'vps') {
@@ -333,7 +373,7 @@ export default function EstimatorClient() {
           </div>
 
           <div className="space-y-3">
-            {CATALOG_ITEMS.map((item) => {
+            {activeCatalog.map((item) => {
               const qty = quantities[item.id] || 0;
               const unitPrice = item.isAnnualOnly
                 ? isBDT

@@ -21,12 +21,19 @@ import {
   Loader2,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
+import { getClientLockoutState, recordClientFailedAttempt, resetClientFailedAttempts, sanitizeRedirect } from '@/lib/authSecurity';
 import Auth3DScene from '@/components/visuals/Auth3DScene';
 
 export default function LoginPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const redirectParam = searchParams.get('redirect') || searchParams.get('from');
+  const rawRedirect = searchParams.get('redirect') || searchParams.get('from') || searchParams.get('next');
+  const redirectParam = sanitizeRedirect(rawRedirect);
+
+  // Lockout & Brute-force state
+  const [isLocked, setIsLocked] = useState(false);
+  const [lockoutSeconds, setLockoutSeconds] = useState(0);
+  const [authUserId, setAuthUserId] = useState<string | null>(searchParams.get('userId'));
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -46,8 +53,32 @@ export default function LoginPage() {
   const [forgotSuccess, setForgotSuccess] = useState(false);
 
   // If redirected with registered flag
+  // 1. Live Lockout & Brute Force Timer
   useEffect(() => {
-    if (searchParams.get('registered') === '1') {
+    const checkLock = () => {
+      const state = getClientLockoutState();
+      setIsLocked(state.isLocked);
+      setLockoutSeconds(state.remainingSeconds);
+    };
+
+    checkLock();
+    const interval = setInterval(checkLock, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // 2. Detect 2FA Challenge from OAuth Callback or direct redirect
+  useEffect(() => {
+    if (searchParams.get('challenge_2fa') === '1') {
+      const uId = searchParams.get('userId');
+      const uEmail = searchParams.get('email');
+      if (uId) setAuthUserId(uId);
+      if (uEmail) setEmail(uEmail);
+      setRequire2FA(true);
+      setShow2FAScreen(true);
+      setLoginError(null);
+    } else if (searchParams.get('registered') === '1') {
+      setLoginError(null);
+    } else if (searchParams.get('logged_out') === 'true') {
       setLoginError(null);
     }
   }, [searchParams]);
@@ -78,6 +109,8 @@ export default function LoginPage() {
       }
 
       const userId = authData.user.id;
+      setAuthUserId(userId);
+      resetClientFailedAttempts();
 
       // 2. Check if 2FA TOTP is required for this user
       try {
@@ -118,7 +151,14 @@ export default function LoginPage() {
         router.push('/dashboard');
       }
     } catch (err: any) {
-      setLoginError(err.message || 'Failed to sign in. Please check your credentials.');
+      const lockout = recordClientFailedAttempt();
+      if (lockout.isLocked) {
+        setIsLocked(true);
+        setLockoutSeconds(lockout.remainingSeconds);
+        setLoginError('Security Alert: Too many failed login attempts. Workstation temporarily locked for 15 minutes to prevent brute-force attacks.');
+      } else {
+        setLoginError(err.message || 'Failed to sign in. Please check your credentials.');
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -129,7 +169,7 @@ export default function LoginPage() {
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider,
         options: {
-          redirectTo: `${window.location.origin}/dashboard`,
+          redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(redirectParam || '/dashboard')}`,
         },
       });
       if (error) {
@@ -410,10 +450,15 @@ export default function LoginPage() {
 
                 <button
                   type="submit"
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || isLocked}
                   className="w-full h-11 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-md shadow-blue-500/20 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
                 >
-                  {isSubmitting ? (
+                  {isLocked ? (
+                    <>
+                      <Lock className="w-4 h-4 text-amber-400" />
+                      <span>Locked ({Math.floor(lockoutSeconds / 60)}:{String(lockoutSeconds % 60).padStart(2, '0')})</span>
+                    </>
+                  ) : isSubmitting ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
                       <span>Verifying Credentials...</span>

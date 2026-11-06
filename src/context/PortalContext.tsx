@@ -416,7 +416,8 @@ export interface CurrentUser {
 interface PortalContextType {
   currentUser: CurrentUser | null;
   authLoading: boolean;
-  logout: () => Promise<void>;
+  logout: (scopeOrEvent?: 'local' | 'global' | React.MouseEvent | any) => Promise<void>;
+  signOutGlobal: () => Promise<void>;
   refreshUserData: () => Promise<void>;
   activeRole: UserRole;
   switchRole: (role: UserRole) => void;
@@ -1232,10 +1233,11 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     syncDynamicCatalog();
   }, []);
 
-  const logout = async () => {
+  const logout = async (scopeOrEvent?: 'local' | 'global' | React.MouseEvent | any) => {
+    const scope: 'local' | 'global' = scopeOrEvent === 'global' ? 'global' : 'local';
     try {
       if (isSupabaseConfigured()) {
-        await supabase.auth.signOut();
+        await supabase.auth.signOut({ scope });
       }
     } catch (err) {
       console.error('[PortalContext] SignOut error:', err);
@@ -1246,14 +1248,23 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     setDomains([]);
     setInvoices([]);
     setWalletBalanceBDT(0);
+    setWalletTransactions([]);
+    setTickets([]);
     if (typeof window !== 'undefined') {
       try {
         localStorage.removeItem(STORAGE_KEY);
         localStorage.removeItem('devhost-portal-state-v9');
+        localStorage.removeItem('devhost_auth_failed_attempts');
         sessionStorage.removeItem('devhost_impersonate');
+        sessionStorage.removeItem('devhost_sudo_expires');
       } catch {}
-      window.location.href = '/login';
+      // Replace window history to prevent back-button cache resurrection
+      window.location.replace('/login?logged_out=true');
     }
+  };
+
+  const signOutGlobal = async () => {
+    await logout('global');
   };
 
   const activeService = services.find((s) => s.id === activeServiceId) || services[0] || FALLBACK_EMPTY_SERVICE;
@@ -2506,6 +2517,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         currentUser,
         authLoading,
         logout,
+        signOutGlobal,
         refreshUserData,
         activeRole,
         switchRole,

@@ -112,6 +112,37 @@ export default function ResetPasswordPage() {
         if (error) {
           throw new Error(error.message || 'Failed to update password.');
         }
+
+        // Global Session Revocation on Password Change (Critical Security Rule)
+        try {
+          const { data: userRes } = await supabase.auth.getUser();
+          if (userRes?.user?.id) {
+            await supabase
+              .from('user_security_credentials')
+              .update({
+                last_password_change: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+              })
+              .eq('user_id', userRes.user.id);
+
+            await supabase
+              .from('security_audit_logs')
+              .insert({
+                event_type: 'password_reset_completed',
+                actor_user_id: userRes.user.id,
+                severity: 'HIGH',
+                details: {
+                  timestamp: new Date().toISOString(),
+                  revoked_other_sessions: true,
+                },
+              });
+          }
+
+          // Revoke other active sessions on other devices
+          await supabase.auth.signOut({ scope: 'others' });
+        } catch (revokeErr) {
+          console.warn('[Global Session Revocation Notice]:', revokeErr);
+        }
       }
 
       setIsSuccess(true);

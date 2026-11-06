@@ -11,6 +11,16 @@ export default function ForgotPasswordPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSent, setIsSent] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [cooldown, setCooldown] = useState(0);
+
+
+  React.useEffect(() => {
+    if (cooldown <= 0) return;
+    const timer = setInterval(() => {
+      setCooldown((prev) => prev - 1);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [cooldown]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -25,7 +35,7 @@ export default function ForgotPasswordPage() {
     setIsSubmitting(true);
     try {
       if (isSupabaseConfigured()) {
-        const redirectUrl = `${window.location.origin}/reset-password`;
+        const redirectUrl = `${window.location.origin}/auth/callback?next=/reset-password`;
         const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
           redirectTo: redirectUrl,
         });
@@ -38,6 +48,7 @@ export default function ForgotPasswordPage() {
 
       // Display secure confirmation (prevents email enumeration attacks)
       setIsSent(true);
+      setCooldown(60);
     } catch (err: any) {
       console.error('[ForgotPassword Exception]:', err);
       setIsSent(true);
@@ -129,10 +140,11 @@ export default function ForgotPasswordPage() {
                 </Link>
                 <button
                   type="button"
+                  disabled={cooldown > 0}
                   onClick={() => setIsSent(false)}
-                  className="text-xs text-emerald-700 dark:text-emerald-400 hover:underline cursor-pointer"
+                  className="text-xs text-emerald-700 dark:text-emerald-400 hover:underline cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Resend Link
+                  {cooldown > 0 ? `Resend in ${cooldown}s` : 'Resend Link'}
                 </button>
               </div>
             </div>

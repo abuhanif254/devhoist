@@ -15,6 +15,57 @@ import { getServiceSupabase, isSupabaseConfigured } from '@/lib/supabase';
 
 export const runtime = 'edge';
 
+export async function GET(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const userId = searchParams.get('userId');
+    const email = searchParams.get('email');
+
+    if (!userId && !email) {
+      return NextResponse.json({ enabled: false }, { status: 200 });
+    }
+
+    if (!isSupabaseConfigured()) {
+      return NextResponse.json({ enabled: false }, { status: 200 });
+    }
+
+    const db = getServiceSupabase();
+    let queryUserId = userId;
+
+    if (!queryUserId && email) {
+      const { data: userProfile } = await db
+        .from('profiles')
+        .select('id')
+        .eq('email', email.trim().toLowerCase())
+        .maybeSingle();
+      queryUserId = userProfile?.id;
+    }
+
+    if (!queryUserId) {
+      return NextResponse.json({ enabled: false }, { status: 200 });
+    }
+
+    const { data: creds, error } = await db
+      .from('user_security_credentials')
+      .select('totp_enabled, totp_secret_base32, backup_recovery_hashes, sudo_security_pin_hash')
+      .eq('user_id', queryUserId)
+      .maybeSingle();
+
+    if (error || !creds) {
+      return NextResponse.json({ enabled: false }, { status: 200 });
+    }
+
+    return NextResponse.json({
+      enabled: Boolean(creds.totp_enabled),
+      hasSecret: Boolean(creds.totp_secret_base32),
+      hasBackupCodes: (creds.backup_recovery_hashes?.length || 0) > 0,
+      hasSudoPin: Boolean(creds.sudo_security_pin_hash),
+    });
+  } catch (err: any) {
+    return NextResponse.json({ enabled: false, error: err?.message }, { status: 200 });
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();

@@ -18,6 +18,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
+import { isDisposableEmail } from '@/lib/authSecurity';
 import Auth3DScene from '@/components/visuals/Auth3DScene';
 
 export default function RegisterPage() {
@@ -31,6 +32,39 @@ export default function RegisterPage() {
   const [agreeTerms, setAgreeTerms] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [requiresVerification, setRequiresVerification] = useState(false);
+  const [registeredEmail, setRegisteredEmail] = useState('');
+  const [resendCooldown, setResendCooldown] = useState(0);
+  const [isResending, setIsResending] = useState(false);
+  const [resendSuccess, setResendSuccess] = useState(false);
+  React.useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const timer = setInterval(() => {
+      setResendCooldown((prev) => prev - 1);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [resendCooldown]);
+
+  const handleResendVerification = async () => {
+    if (resendCooldown > 0 || !registeredEmail) return;
+    setIsResending(true);
+    setResendSuccess(false);
+    try {
+      await supabase.auth.resend({
+        type: 'signup',
+        email: registeredEmail,
+      });
+      setResendSuccess(true);
+      setResendCooldown(60);
+    } catch (err: any) {
+      console.warn('[Resend verification error]:', err);
+      setResendSuccess(true);
+      setResendCooldown(60);
+    } finally {
+      setIsResending(false);
+    }
+  };
+
 
   const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -54,6 +88,11 @@ export default function RegisterPage() {
     setIsSubmitting(true);
     try {
       const cleanEmail = email.trim().toLowerCase();
+      if (isDisposableEmail(cleanEmail)) {
+        setErrorMsg('Temporary and disposable email addresses are not permitted. Please register with a permanent email.');
+        setIsSubmitting(false);
+        return;
+      }
       const cleanName = fullName.trim();
       const cleanCompany = company.trim();
 
@@ -118,8 +157,10 @@ export default function RegisterPage() {
       });
 
       if (signInErr) {
-        // Redirect to login if email confirmation is required
-        router.push('/login?registered=1');
+        // If email verification is required by Supabase Auth
+        setRegisteredEmail(cleanEmail);
+        setRequiresVerification(true);
+        setResendCooldown(60);
       } else {
         router.push('/dashboard');
       }
@@ -135,7 +176,7 @@ export default function RegisterPage() {
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider,
         options: {
-          redirectTo: `${window.location.origin}/dashboard`,
+          redirectTo: `${window.location.origin}/auth/callback?next=/dashboard`,
         },
       });
       if (error) {
@@ -200,7 +241,60 @@ export default function RegisterPage() {
             </div>
           )}
 
-          {/* Quick OAuth */}
+          {requiresVerification ? (
+            <div className="p-6 rounded-2xl bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 text-slate-800 dark:text-zinc-200 space-y-4 animate-in fade-in duration-200">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-blue-100 dark:bg-blue-900/50 flex items-center justify-center text-blue-600 dark:text-blue-400 shrink-0">
+                  <Mail className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                    Verify Your Email Address
+                  </h3>
+                  <p className="text-xs text-slate-600 dark:text-zinc-400 mt-0.5">
+                    We have dispatched a verification link to <span className="font-mono font-semibold text-blue-600 dark:text-blue-400">{registeredEmail}</span>.
+                  </p>
+                </div>
+              </div>
+
+              <div className="text-xs text-slate-600 dark:text-zinc-400 space-y-1 pt-2 border-t border-blue-200/60 dark:border-blue-900/40">
+                <p>• Click the confirmation link in the email to activate your account.</p>
+                <p>• Check your inbox and spam folder.</p>
+                <p>• Once verified, return to sign in to your Cloud Console.</p>
+              </div>
+
+              {resendSuccess && (
+                <div className="text-[11px] font-mono text-emerald-600 dark:text-emerald-400">
+                  ✓ A new verification link has been dispatched to your inbox.
+                </div>
+              )}
+
+              <div className="flex items-center justify-between pt-2">
+                <Link
+                  href="/login"
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline"
+                >
+                  <span>Return to Sign In</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </Link>
+
+                <button
+                  type="button"
+                  onClick={handleResendVerification}
+                  disabled={resendCooldown > 0 || isResending}
+                  className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-white/10 text-xs text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-900 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed transition-colors"
+                >
+                  {isResending
+                    ? 'Resending...'
+                    : resendCooldown > 0
+                    ? `Resend in ${resendCooldown}s`
+                    : 'Resend Verification Email'}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+            {/* Quick OAuth */}
           <div className="grid grid-cols-2 gap-3">
             <button
               type="button"
@@ -372,6 +466,8 @@ export default function RegisterPage() {
               </Link>
             </p>
           </div>
+          </>
+          )}
         </div>
 
         {/* Footer info */}

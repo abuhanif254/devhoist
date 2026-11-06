@@ -18,6 +18,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
+import Auth3DScene from '@/components/visuals/Auth3DScene';
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -52,31 +53,72 @@ export default function RegisterPage() {
 
     setIsSubmitting(true);
     try {
-      // 1. Register user via dedicated Edge API route
-      const res = await fetch('/api/auth/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fullName: fullName.trim(),
-          email: email.trim().toLowerCase(),
-          password,
-          company: company.trim(),
-        }),
+      const cleanEmail = email.trim().toLowerCase();
+      const cleanName = fullName.trim();
+      const cleanCompany = company.trim();
+
+      // 1. Primary: Direct Client-Side Registration via Supabase Auth
+      const { data: signUpData, error: signUpErr } = await supabase.auth.signUp({
+        email: cleanEmail,
+        password,
+        options: {
+          data: {
+            full_name: cleanName,
+            company: cleanCompany,
+          },
+        },
       });
 
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || 'Registration failed.');
+      if (signUpErr) {
+        // If client-side failed, attempt server route as fallback
+        const res = await fetch('/api/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fullName: cleanName,
+            email: cleanEmail,
+            password,
+            company: cleanCompany,
+          }),
+        });
+
+        const text = await res.text();
+        let data: any = {};
+        try {
+          data = JSON.parse(text);
+        } catch {
+          throw new Error(signUpErr.message || 'Registration failed. Please check your details.');
+        }
+
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || signUpErr.message || 'Registration failed.');
+        }
       }
 
-      // 2. Sign in with the registered credentials to establish Supabase session
+      // 2. Ensure Profile row exists with strictly role='client' and wallet_balance_bdt=0
+      if (signUpData?.user) {
+        await supabase.from('profiles').upsert(
+          {
+            id: signUpData.user.id,
+            email: cleanEmail,
+            full_name: cleanName,
+            company_name: cleanCompany,
+            role: 'client',
+            wallet_balance_bdt: 0,
+            created_at: new Date().toISOString(),
+          },
+          { onConflict: 'id' }
+        );
+      }
+
+      // 3. Authenticate and redirect to dashboard
       const { error: signInErr } = await supabase.auth.signInWithPassword({
-        email: email.trim().toLowerCase(),
+        email: cleanEmail,
         password,
       });
 
       if (signInErr) {
-        // Redirect to login if confirmation email is required
+        // Redirect to login if email confirmation is required
         router.push('/login?registered=1');
       } else {
         router.push('/dashboard');
@@ -349,50 +391,9 @@ export default function RegisterPage() {
         </div>
       </div>
 
-      {/* Right Column: Architectural Highlights */}
-      <div className="hidden lg:flex w-1/2 bg-slate-900 dark:bg-black p-12 lg:p-16 flex-col justify-between relative overflow-hidden text-white">
-        <div className="absolute inset-0 architectural-grid opacity-20 pointer-events-none" />
-
-        <div className="relative z-10 flex items-center justify-between">
-          <span className="text-xs font-mono tracking-widest text-blue-400 uppercase font-semibold">
-            Enterprise Cloud Infrastructure
-          </span>
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-[11px] font-mono text-blue-300">
-            <Sparkles className="w-3 h-3 text-blue-400" />
-            <span>Singapore SG1 &amp; US-East</span>
-          </div>
-        </div>
-
-        <div className="relative z-10 max-w-lg space-y-6">
-          <h2 className="text-3xl lg:text-4xl font-extrabold tracking-tight leading-tight">
-            Developer Experience of Vercel. Accessibility of cPanel.
-          </h2>
-          <p className="text-sm text-slate-300 leading-relaxed font-normal">
-            Automate Git deployments with sub-second commit hooks, LiteSpeed enterprise caching, and zero node_modules bloat.
-          </p>
-
-          <div className="space-y-3 pt-2">
-            <div className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/10">
-              <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0" />
-              <div className="text-xs">
-                <div className="font-semibold text-white">Strict Row Level Security (RLS)</div>
-                <div className="text-slate-400">Every project and database is isolated at the PostgreSQL kernel level.</div>
-              </div>
-            </div>
-            <div className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/10">
-              <Lock className="w-5 h-5 text-blue-400 shrink-0" />
-              <div className="text-xs">
-                <div className="font-semibold text-white">RFC 6238 TOTP 2-Step Verification</div>
-                <div className="text-slate-400">Hardware-grade Authenticator app login with Sudo elevation gates.</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="relative z-10 flex items-center justify-between text-xs font-mono text-slate-400 pt-6 border-t border-white/10">
-          <span>SLA: 99.99% Global Uptime</span>
-          <span>BDIX: Sub-5ms Latency</span>
-        </div>
+      {/* Right Column: Real 3D Moving Object */}
+      <div className="hidden lg:block w-1/2 min-h-screen">
+        <Auth3DScene />
       </div>
     </div>
   );

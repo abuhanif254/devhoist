@@ -21,6 +21,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
+import Auth3DScene from '@/components/visuals/Auth3DScene';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -230,7 +231,7 @@ export default function LoginPage() {
 
     try {
       await supabase.auth.resetPasswordForEmail(forgotEmail.trim().toLowerCase(), {
-        redirectTo: `${window.location.origin}/login?reset=1`,
+        redirectTo: `${window.location.origin}/reset-password`,
       });
       setForgotSuccess(true);
     } catch {
@@ -368,13 +369,12 @@ export default function LoginPage() {
                     <label className="text-xs font-semibold text-slate-700 dark:text-zinc-300">
                       Password
                     </label>
-                    <button
-                      type="button"
-                      onClick={() => setShowForgotModal(true)}
+                    <Link
+                      href="/forgot-password"
                       className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
                     >
                       Forgot password?
-                    </button>
+                    </Link>
                   </div>
                   <div className="relative">
                     <Lock className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -556,50 +556,9 @@ export default function LoginPage() {
         </div>
       </div>
 
-      {/* RIGHT COLUMN: ARCHITECTURAL HIGHLIGHTS */}
-      <div className="hidden lg:flex w-1/2 bg-slate-900 dark:bg-black p-12 lg:p-16 flex-col justify-between relative overflow-hidden text-white">
-        <div className="absolute inset-0 architectural-grid opacity-20 pointer-events-none" />
-
-        <div className="relative z-10 flex items-center justify-between">
-          <span className="text-xs font-mono tracking-widest text-blue-400 uppercase font-semibold">
-            Enterprise Cloud Infrastructure
-          </span>
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-[11px] font-mono text-blue-300">
-            <Sparkles className="w-3 h-3 text-blue-400" />
-            <span>Singapore SG1 &amp; US-East</span>
-          </div>
-        </div>
-
-        <div className="relative z-10 max-w-lg space-y-6">
-          <h2 className="text-3xl lg:text-4xl font-extrabold tracking-tight leading-tight">
-            Developer Experience of Vercel. Accessibility of cPanel.
-          </h2>
-          <p className="text-sm text-slate-300 leading-relaxed font-normal">
-            Automate Git deployments with sub-second commit hooks, LiteSpeed enterprise caching, and zero node_modules bloat.
-          </p>
-
-          <div className="space-y-3 pt-2">
-            <div className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/10">
-              <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0" />
-              <div className="text-xs">
-                <div className="font-semibold text-white">Strict Row Level Security (RLS)</div>
-                <div className="text-slate-400">Every project and database is isolated at the PostgreSQL kernel level.</div>
-              </div>
-            </div>
-            <div className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/10">
-              <Lock className="w-5 h-5 text-blue-400 shrink-0" />
-              <div className="text-xs">
-                <div className="font-semibold text-white">RFC 6238 TOTP 2-Step Verification</div>
-                <div className="text-slate-400">Hardware-grade Authenticator app login with Sudo elevation gates.</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="relative z-10 flex items-center justify-between text-xs font-mono text-slate-400 pt-6 border-t border-white/10">
-          <span>SLA: 99.99% Global Uptime</span>
-          <span>BDIX: Sub-5ms Latency</span>
-        </div>
+      {/* RIGHT COLUMN: REAL 3D MOVING OBJECT */}
+      <div className="hidden lg:block w-1/2 min-h-screen">
+        <Auth3DScene />
       </div>
 
       {/* Forgot Password Modal */}

@@ -64,15 +64,15 @@ export default function PartnersClient() {
       {/* SECTION A: INTERACTIVE RECURRING EARNINGS CALCULATOR                 */}
       {/* -------------------------------------------------------------------- */}
       <section className="space-y-8">
-        <div className="border-b border-white/[0.08] pb-4">
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-zinc-900 border border-white/10 text-xs font-mono text-zinc-300 mb-3">
-            <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
+        <div className="border-b border-slate-200 dark:border-white/[0.08] pb-4">
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-50 dark:bg-zinc-900 border border-blue-200 dark:border-white/10 text-xs font-mono text-blue-700 dark:text-zinc-300 mb-3 shadow-xs">
+            <TrendingUp className="w-3.5 h-3.5 text-emerald-500" />
             <span>Interactive Passive Income Simulator</span>
           </div>
-          <h2 className="text-2xl sm:text-3xl font-semibold tracking-[-0.03em] text-zinc-100">
+          <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 dark:text-zinc-100">
             Estimate Your Monthly Recurring Earnings
           </h2>
-          <p className="text-zinc-400 text-xs sm:text-sm mt-1 font-normal max-w-2xl">
+          <p className="text-slate-600 dark:text-zinc-400 text-xs sm:text-sm mt-1 font-normal max-w-2xl leading-relaxed">
             Unlike one-time bounty programs, our partner commissions are 100% recurring for every active month your client stays with DevHost Cloud.
           </p>
         </div>

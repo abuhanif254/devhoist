@@ -294,16 +294,16 @@ export default function PanelPreviewClient() {
           {activeTab === 'cicd' && (
             <div className="space-y-6">
               {/* App Status Banner */}
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 rounded-xl bg-zinc-900/60 border border-white/[0.08]">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 rounded-xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs">
                 <div className="space-y-1">
                   <div className="flex items-center gap-2">
                     <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                    <h3 className="text-sm font-semibold text-zinc-100">nextjs-commerce-prod</h3>
-                    <span className="px-2 py-0.5 rounded bg-zinc-800 text-[10px] font-mono text-zinc-300 border border-white/10">
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-zinc-100">nextjs-commerce-prod</h3>
+                    <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-zinc-800 text-[10px] font-mono text-slate-700 dark:text-zinc-300 border border-slate-200 dark:border-white/10 font-semibold">
                       main branch
                     </span>
                   </div>
-                  <div className="text-xs text-zinc-400 font-mono">
+                  <div className="text-xs text-slate-600 dark:text-zinc-400 font-mono">
                     Repository: github.com/acme/storefront • Node 22 Standalone
                   </div>
                 </div>
@@ -312,7 +312,7 @@ export default function PanelPreviewClient() {
                   type="button"
                   onClick={triggerDeploy}
                   disabled={isDeploying}
-                  className="inline-flex items-center gap-2 h-9 px-4 rounded-lg bg-zinc-100 text-zinc-950 hover:bg-white text-xs font-medium transition-all shadow-sm disabled:opacity-50 cursor-pointer"
+                  className="inline-flex items-center gap-2 h-9 px-4 rounded-lg bg-blue-600 hover:bg-blue-700 text-white dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white text-xs font-semibold transition-all shadow-sm disabled:opacity-50 cursor-pointer"
                 >
                   <Play className={`w-3.5 h-3.5 ${isDeploying ? 'animate-spin' : ''}`} />
                   <span>{isDeploying ? 'Building Release...' : 'Trigger Git Rebuild'}</span>
@@ -321,7 +321,7 @@ export default function PanelPreviewClient() {
 
               {/* Live Terminal Stream */}
               <div className="space-y-2">
-                <div className="flex items-center justify-between text-xs font-mono text-zinc-400">
+                <div className="flex items-center justify-between text-xs font-mono text-slate-600 dark:text-zinc-400 font-medium">
                   <span className="flex items-center gap-1.5">
                     <Terminal className="w-3.5 h-3.5 text-zinc-500" />
                     <span>Real-Time Deployment Terminal Output</span>
@@ -353,13 +353,13 @@ export default function PanelPreviewClient() {
 
               {/* Release Commit History Table */}
               <div className="space-y-2">
-                <div className="text-xs font-mono text-zinc-400 uppercase tracking-wider">
+                <div className="text-xs font-mono text-slate-700 dark:text-zinc-400 uppercase tracking-wider font-semibold">
                   Release History & 1-Click Rollback
                 </div>
-                <div className="rounded-xl border border-white/[0.08] overflow-hidden">
+                <div className="rounded-xl border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-zinc-950 overflow-hidden shadow-xs">
                   <table className="w-full text-left text-xs font-mono">
                     <thead>
-                      <tr className="border-b border-white/[0.08] bg-zinc-900/50 text-zinc-400">
+                      <tr className="border-b border-slate-200 dark:border-white/[0.08] bg-slate-100 dark:bg-zinc-900/80 text-slate-700 dark:text-zinc-400 font-semibold">
                         <th className="py-2.5 px-4">Commit</th>
                         <th className="py-2.5 px-4">Message</th>
                         <th className="py-2.5 px-4">Author</th>
@@ -367,20 +367,20 @@ export default function PanelPreviewClient() {
                         <th className="py-2.5 px-4 text-right">Action</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-white/[0.04]">
+                    <tbody className="divide-y divide-slate-100 dark:divide-white/[0.04]">
                       {releases.map((rel) => (
-                        <tr key={rel.id} className="hover:bg-zinc-900/30">
-                          <td className="py-3 px-4 text-zinc-200 font-bold">#{rel.hash}</td>
-                          <td className="py-3 px-4 text-zinc-300 max-w-xs truncate">{rel.message}</td>
-                          <td className="py-3 px-4 text-zinc-500">{rel.author}</td>
+                        <tr key={rel.id} className="hover:bg-slate-50 dark:hover:bg-zinc-900/40 transition-colors">
+                          <td className="py-3 px-4 text-slate-900 dark:text-zinc-200 font-bold">#{rel.hash}</td>
+                          <td className="py-3 px-4 text-slate-800 dark:text-zinc-300 max-w-xs truncate font-medium">{rel.message}</td>
+                          <td className="py-3 px-4 text-slate-500 dark:text-zinc-400">{rel.author}</td>
                           <td className="py-3 px-4">
                             {rel.active ? (
-                              <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-semibold">
+                              <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/30 font-semibold">
                                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
                                 ACTIVE PRODUCTION
                               </span>
                             ) : (
-                              <span className="text-[10px] text-zinc-500 font-mono">Archived</span>
+                              <span className="text-[10px] text-slate-400 dark:text-zinc-500 font-mono">Archived</span>
                             )}
                           </td>
                           <td className="py-3 px-4 text-right">
@@ -388,7 +388,7 @@ export default function PanelPreviewClient() {
                               <button
                                 type="button"
                                 onClick={() => rollbackToCommit(rel.hash)}
-                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-zinc-900 border border-white/10 hover:border-white/25 text-zinc-300 hover:text-white text-[11px] transition-colors cursor-pointer"
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-slate-100 hover:bg-slate-200 dark:bg-zinc-900 border border-slate-300 dark:border-white/10 text-slate-700 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white text-[11px] font-semibold transition-colors cursor-pointer"
                               >
                                 <RotateCcw className="w-3 h-3" />
                                 <span>Rollback</span>
@@ -415,7 +415,7 @@ export default function PanelPreviewClient() {
                   <div className="text-xs text-zinc-400 font-mono uppercase">
                     CloudLinux Runtime Manager
                   </div>
-                  <h3 className="text-sm font-semibold text-zinc-100 mt-0.5">
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-zinc-100 mt-0.5">
                     Isolated Application Execution Environment
                   </h3>
                 </div>
@@ -466,10 +466,10 @@ export default function PanelPreviewClient() {
                   {envVars.map((v) => (
                     <div
                       key={v.id}
-                      className="p-3 rounded-xl bg-zinc-900/40 border border-white/[0.06] flex items-center justify-between gap-3 text-xs font-mono"
+                      className="p-3 rounded-xl bg-white dark:bg-zinc-900/40 border border-slate-200 dark:border-white/[0.06] flex items-center justify-between gap-3 text-xs font-mono"
                     >
-                      <span className="text-zinc-200 font-semibold">{v.key}</span>
-                      <span className="flex-1 text-zinc-400 truncate">
+                      <span className="text-slate-900 dark:text-zinc-200 font-bold">{v.key}</span>
+                      <span className="flex-1 text-slate-600 dark:text-zinc-400 truncate">
                         {v.masked ? '••••••••••••••••••••••••••••••' : v.value}
                       </span>
                       <div className="flex items-center gap-2">
@@ -504,14 +504,14 @@ export default function PanelPreviewClient() {
                     placeholder="KEY (e.g. STRIPE_SECRET_KEY)"
                     value={newKey}
                     onChange={(e) => setNewKey(e.target.value)}
-                    className="flex-1 h-9 px-3 rounded-lg bg-zinc-900 border border-white/10 text-zinc-100 placeholder:text-zinc-600 focus:outline-hidden"
+                    className="flex-1 h-9 px-3 rounded-lg bg-white dark:bg-zinc-900 border border-slate-300 dark:border-white/10 text-slate-900 dark:text-zinc-100 placeholder:text-slate-400 dark:placeholder:text-zinc-600 focus:outline-hidden"
                   />
                   <input
                     type="text"
                     placeholder="VALUE"
                     value={newVal}
                     onChange={(e) => setNewVal(e.target.value)}
-                    className="flex-1 h-9 px-3 rounded-lg bg-zinc-900 border border-white/10 text-zinc-100 placeholder:text-zinc-600 focus:outline-hidden"
+                    className="flex-1 h-9 px-3 rounded-lg bg-white dark:bg-zinc-900 border border-slate-300 dark:border-white/10 text-slate-900 dark:text-zinc-100 placeholder:text-slate-400 dark:placeholder:text-zinc-600 focus:outline-hidden"
                   />
                   <button
                     type="submit"

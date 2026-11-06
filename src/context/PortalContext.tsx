@@ -1,6 +1,7 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { HOSTING_PACKAGES } from '@/config/hostingData';
 import { TLD_PRICING_LIST } from '@/config/whmcs';
 
@@ -402,13 +403,21 @@ export interface DunningRules {
 // PORTAL CONTEXT INTERFACE
 // ---------------------------------------------------------------------------
 
+export interface CurrentUser {
+  id: string;
+  name: string;
+  email: string;
+  avatar: string;
+  company: string;
+  role: UserRole;
+  phone?: string;
+}
+
 interface PortalContextType {
-  currentUser: {
-    name: string;
-    email: string;
-    avatar: string;
-    company: string;
-  };
+  currentUser: CurrentUser | null;
+  authLoading: boolean;
+  logout: () => Promise<void>;
+  refreshUserData: () => Promise<void>;
   activeRole: UserRole;
   switchRole: (role: UserRole) => void;
   impersonateCustomer: (customerId: string) => void;
@@ -599,287 +608,47 @@ const PortalContext = createContext<PortalContextType | undefined>(undefined);
 // INITIAL SEED DATA
 // ---------------------------------------------------------------------------
 
-const INITIAL_SERVICES: CloudService[] = [
-  {
-    id: 'srv_1',
-    domain: 'ecommerce-live.com',
-    planName: 'Developer Pro Cloud',
-    status: 'Active',
-    datacenter: 'Singapore SG1 (Equinix)',
-    ipAddress: '103.145.22.40',
-    cpanelUser: 'dev_hanif',
-    diskUsedGB: 1.4,
-    diskLimitGB: 5.0,
-    inodesUsed: 32450,
-    inodeLimit: 250000,
-    ramUsedMB: 780,
-    ramLimitMB: 2048,
-    cpuCores: 2,
-    ioLimitMB: 50,
-    nodeVersion: 'Node.js 22 LTS',
-    gitRepoUrl: 'github.com/hanif/ecommerce-live',
-    gitBranch: 'main',
-    webhookUrl: 'https://api.devhostcloud.com/webhooks/deploy/wh_9f82d1c3a81',
-    autoRenew: true,
-    nextDueDate: '2026-12-05',
-    monthlyPriceBDT: 450,
-    envVars: [
-      { key: 'NODE_ENV', value: 'production' },
-      { key: 'PORT', value: '3000' },
-      { key: 'DATABASE_URL', value: 'mysql://dev_hanif:SecurePass_2026!@127.0.0.1:3306/devhanif_shop' },
-      { key: 'NEXT_PUBLIC_API_URL', value: 'https://ecommerce-live.com/api' },
-      { key: 'REDIS_CACHE_URL', value: 'redis://127.0.0.1:6379' },
-    ],
-    releases: [
-      { id: 'rel_4', commit: 'e89a12c', message: 'feat: add bkash payment webhook handler', timestamp: '10 mins ago', status: 'Active' },
-      { id: 'rel_3', commit: 'b45c99d', message: 'perf: optimize sharp image loaders and tailwind purge', timestamp: 'Yesterday at 11:20 PM', status: 'Success' },
-      { id: 'rel_2', commit: 'a12f78b', message: 'fix: passenger worker memory limit configuration', timestamp: '3 days ago', status: 'Success' },
-      { id: 'rel_1', commit: 'c34d56e', message: 'chore: initial next.js 15 production scaffolding', timestamp: '7 days ago', status: 'Success' },
-    ],
-    sshPublicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOmX8b1QJ4R7T9k2M0z8y3W6u1P5n4L7s8E9v0a1B2C3 user@devhost-sg1',
-  },
-  {
-    id: 'srv_2',
-    domain: 'bangla-portfolio.dev',
-    planName: 'Starter Pack',
-    status: 'Active',
-    datacenter: 'Singapore SG1 (Equinix)',
-    ipAddress: '103.145.22.42',
-    cpanelUser: 'dev_bangla',
-    diskUsedGB: 0.65,
-    diskLimitGB: 2.0,
-    inodesUsed: 14200,
-    inodeLimit: 150000,
-    ramUsedMB: 310,
-    ramLimitMB: 1024,
-    cpuCores: 1,
-    ioLimitMB: 25,
-    nodeVersion: 'Node.js 20 LTS',
-    gitRepoUrl: 'github.com/hanif/bangla-portfolio',
-    gitBranch: 'main',
-    webhookUrl: 'https://api.devhostcloud.com/webhooks/deploy/wh_7a18e44b901',
-    autoRenew: true,
-    nextDueDate: '2026-11-28',
-    monthlyPriceBDT: 200,
-    envVars: [
-      { key: 'NODE_ENV', value: 'production' },
-      { key: 'SITE_TITLE', value: 'Portfolio Developer' },
-    ],
-    releases: [
-      { id: 'rel_b1', commit: 'f99c11a', message: 'deploy: updated resume and case study 2026', timestamp: '4 days ago', status: 'Active' },
-    ],
-  },
-];
+export const FALLBACK_EMPTY_SERVICE: CloudService = {
+  id: '',
+  domain: '',
+  planName: 'No Active Cloud Service',
+  status: 'Pending',
+  datacenter: 'Singapore SG1 (Equinix)',
+  ipAddress: '103.145.22.40',
+  cpanelUser: '',
+  diskUsedGB: 0,
+  diskLimitGB: 5.0,
+  inodesUsed: 0,
+  inodeLimit: 250000,
+  ramUsedMB: 0,
+  ramLimitMB: 2048,
+  cpuCores: 2,
+  ioLimitMB: 50,
+  nodeVersion: 'Node.js 22 LTS',
+  gitRepoUrl: '',
+  gitBranch: 'main',
+  webhookUrl: '',
+  autoRenew: false,
+  nextDueDate: '',
+  monthlyPriceBDT: 0,
+  envVars: [],
+  releases: [],
+  sshPublicKey: '',
+};
 
-const INITIAL_DATABASES: DatabaseItem[] = [
-  { id: 'db_1', serviceId: 'srv_1', dbName: 'devhanif_shop', dbUser: 'devhanif_dbu', dbHost: 'localhost', sizeMB: 48.5, collation: 'utf8mb4_unicode_ci' },
-  { id: 'db_2', serviceId: 'srv_1', dbName: 'devhanif_analytics', dbUser: 'devhanif_stats', dbHost: 'localhost', sizeMB: 12.2, collation: 'utf8mb4_unicode_ci' },
-  { id: 'db_3', serviceId: 'srv_2', dbName: 'devbangla_cms', dbUser: 'devbangla_usr', dbHost: 'localhost', sizeMB: 8.4, collation: 'utf8mb4_unicode_ci' },
-];
-
-const INITIAL_SUBDOMAINS: SubdomainItem[] = [
-  { id: 'sub_1', serviceId: 'srv_1', subdomain: 'api.ecommerce-live.com', documentRoot: '/public_html/api', sslActive: true, forceHttps: true, isStaging: false },
-  { id: 'sub_2', serviceId: 'srv_1', subdomain: 'staging.ecommerce-live.com', documentRoot: '/public_html/staging', sslActive: true, forceHttps: true, isStaging: true },
-  { id: 'sub_3', serviceId: 'srv_2', subdomain: 'v1.bangla-portfolio.dev', documentRoot: '/public_html/v1', sslActive: true, forceHttps: false, isStaging: false },
-];
-
-const INITIAL_BACKUPS: BackupSnapshot[] = [
-  { id: 'bk_1', serviceId: 'srv_1', date: 'Today at 03:00 AM (Daily)', type: 'Incremental', sizeMB: 384, destination: 'AWS S3 SG Vault', location: 'Singapore Equinix' },
-  { id: 'bk_2', serviceId: 'srv_1', date: 'Yesterday at 03:00 AM', type: 'Full cPanel', sizeMB: 1820, destination: 'Backblaze B2 EU', location: 'Frankfurt Offsite' },
-  { id: 'bk_3', serviceId: 'srv_1', date: '3 days ago at 03:00 AM', type: 'Incremental', sizeMB: 360, destination: 'AWS S3 SG Vault', location: 'Singapore Equinix' },
-  { id: 'bk_4', serviceId: 'srv_1', date: '5 days ago at 03:00 AM', type: 'Incremental', sizeMB: 345, destination: 'AWS S3 SG Vault', location: 'Singapore Equinix' },
-  { id: 'bk_5', serviceId: 'srv_1', date: '7 days ago at 03:00 AM (Weekly)', type: 'Full cPanel', sizeMB: 1790, destination: 'Backblaze B2 EU', location: 'Frankfurt Offsite' },
-  { id: 'bk_6', serviceId: 'srv_1', date: '10 days ago at 03:00 AM', type: 'Incremental', sizeMB: 320, destination: 'AWS S3 SG Vault', location: 'Singapore Equinix' },
-  { id: 'bk_7', serviceId: 'srv_1', date: '14 days ago at 03:00 AM (Bi-weekly)', type: 'Full cPanel', sizeMB: 1750, destination: 'Backblaze B2 EU', location: 'Frankfurt Offsite' },
-];
-
-const INITIAL_CRONS: CronJobItem[] = [
-  { id: 'cron_1', serviceId: 'srv_1', schedule: '0 0 * * *', command: 'node /home/dev_hanif/ecommerce-live/scripts/daily-report.js', description: 'Daily midnight sales & telemetry digest', status: 'Active' },
-  { id: 'cron_2', serviceId: 'srv_1', schedule: '*/15 * * * *', command: 'node /home/dev_hanif/ecommerce-live/scripts/sync-inventory.js', description: 'bKash/Nagad pending payment reconciler', status: 'Active' },
-];
-
-const INITIAL_LOGS: ServerLogItem[] = [
-  { id: 'log_1', serviceId: 'srv_1', timestamp: '12:44:02', statusCode: 200, method: 'GET', path: '/api/checkout/verify', ip: '103.112.44.12', responseTimeMs: 18, type: 'access' },
-  { id: 'log_2', serviceId: 'srv_1', timestamp: '12:43:55', statusCode: 200, method: 'POST', path: '/api/v1/auth/session', ip: '119.30.34.88', responseTimeMs: 24, type: 'access' },
-  { id: 'log_3', serviceId: 'srv_1', timestamp: '12:43:10', statusCode: 404, method: 'GET', path: '/wp-login.php', ip: '185.220.101.5', responseTimeMs: 2, type: 'error', message: 'Target script not found (Automated bot probe blocked)' },
-  { id: 'log_4', serviceId: 'srv_1', timestamp: '12:42:01', statusCode: 200, method: 'GET', path: '/', ip: '103.205.71.18', responseTimeMs: 12, type: 'access' },
-  { id: 'log_5', serviceId: 'srv_1', timestamp: '12:40:19', statusCode: 500, method: 'POST', path: '/api/webhooks/mock-fail', ip: '103.145.22.40', responseTimeMs: 82, type: 'error', message: 'stderr: Unhandled rejection in worker PID 1842: Connection timed out' },
-];
-
-const INITIAL_DOMAINS: DomainItem[] = [
-  {
-    id: 'dom_1',
-    domain: 'ecommerce-live.com',
-    expiryDate: '2027-10-14',
-    daysRemaining: 708,
-    status: 'Active',
-    registrarLock: true,
-    whoisPrivacy: true,
-    autoRenew: true,
-    nameservers: ['ns1.devhost.cloud', 'ns2.devhost.cloud'],
-    eppCode: 'EPP-LIVE-98F1-XYZ',
-    dnsRecords: [
-      { id: 'dns_1', type: 'A', name: '@', content: '103.145.22.40', ttl: 300, proxied: true },
-      { id: 'dns_2', type: 'CNAME', name: 'www', content: 'ecommerce-live.com', ttl: 300, proxied: true },
-      { id: 'dns_3', type: 'CNAME', name: 'api', content: 'ecommerce-live.com', ttl: 300, proxied: true },
-      { id: 'dns_4', type: 'MX', name: '@', content: 'mail.ecommerce-live.com', ttl: 3600, proxied: false, priority: 10 },
-      { id: 'dns_5', type: 'TXT', name: '@', content: 'v=spf1 include:_spf.devhostcloud.com ~all', ttl: 3600, proxied: false },
-    ],
-  },
-  {
-    id: 'dom_2',
-    domain: 'bangla-portfolio.dev',
-    expiryDate: '2026-11-20',
-    daysRemaining: 15,
-    status: 'Expiring Soon',
-    registrarLock: true,
-    whoisPrivacy: true,
-    autoRenew: false,
-    nameservers: ['ns1.devhost.cloud', 'ns2.devhost.cloud'],
-    eppCode: 'EPP-DEV-44B2-BD',
-    dnsRecords: [
-      { id: 'dns_b1', type: 'A', name: '@', content: '103.145.22.42', ttl: 300, proxied: true },
-      { id: 'dns_b2', type: 'CNAME', name: 'www', content: 'bangla-portfolio.dev', ttl: 300, proxied: true },
-    ],
-  },
-];
-
-const INITIAL_CHILD_NS: ChildNameserver[] = [
-  { id: 'cns_1', domainId: 'dom_1', hostname: 'ns1.ecommerce-live.com', ipAddress: '103.145.22.40' },
-  { id: 'cns_2', domainId: 'dom_1', hostname: 'ns2.ecommerce-live.com', ipAddress: '103.145.22.41' },
-];
-
-const INITIAL_REDIRECTS: DomainRedirect[] = [
-  { id: 'red_1', domainId: 'dom_1', sourcePath: '/shop', targetUrl: 'https://ecommerce-live.com/#products', type: '301' },
-  { id: 'red_2', domainId: 'dom_1', sourcePath: '/fb', targetUrl: 'https://facebook.com/ecommerce-live', type: '302' },
-];
-
-const INITIAL_INVOICES: Invoice[] = [
-  {
-    id: 'INV-2026-8941',
-    date: '2026-11-01',
-    dueDate: '2026-11-05',
-    amount: 450,
-    status: 'Paid',
-    paymentMethod: 'bKash Instant',
-    trxID: 'BKASH_9A8F12X',
-    plan: 'Developer Pro Cloud (Monthly)',
-    items: [
-      { desc: 'Developer Pro Cloud — Singapore SG1 NVMe (Nov 2026)', amount: 450 },
-    ],
-  },
-  {
-    id: 'INV-2026-8712',
-    date: '2026-10-01',
-    dueDate: '2026-10-05',
-    amount: 450,
-    status: 'Paid',
-    paymentMethod: 'bKash Instant',
-    trxID: 'BKASH_87B44Q1',
-    plan: 'Developer Pro Cloud (Monthly)',
-    items: [
-      { desc: 'Developer Pro Cloud — Singapore SG1 NVMe (Oct 2026)', amount: 450 },
-    ],
-  },
-  {
-    id: 'INV-2026-8550',
-    date: '2026-09-01',
-    dueDate: '2026-09-05',
-    amount: 450,
-    status: 'Paid',
-    paymentMethod: 'Nagad Merchant',
-    trxID: 'NGD_55C89L0',
-    plan: 'Developer Pro Cloud (Monthly)',
-    items: [
-      { desc: 'Developer Pro Cloud — Singapore SG1 NVMe (Sep 2026)', amount: 450 },
-    ],
-  },
-];
-
-const INITIAL_TRANSACTIONS: WalletTransaction[] = [
-  { id: 'wtx_1', date: '2026-10-15', type: 'Top-Up', amount: 3000, method: 'bKash Checkout (Trx: BK_99812)', balanceAfter: 3000 },
-  { id: 'wtx_2', date: '2026-11-01', type: 'Debit', amount: 500, method: 'Auto-Debit: .dev Domain Renewal', balanceAfter: 2500 },
-];
-
-const INITIAL_TICKETS: SupportTicket[] = [
-  {
-    id: 'TKT-9941',
-    subject: 'Request assistance configuring custom Wildcard SSL for staging subdomain',
-    department: 'Technical & DevOps Support',
-    priority: 'Normal',
-    status: 'Answered',
-    relatedService: 'ecommerce-live.com (Developer Pro)',
-    lastUpdated: '2 hours ago',
-    messages: [
-      {
-        id: 'msg_1',
-        sender: 'client',
-        senderName: 'Hanif Khan',
-        timestamp: 'Today at 09:15 AM',
-        message: 'Hello, I have created staging.ecommerce-live.com and need to verify if AutoSSL certificates will issue automatically or if I need to adjust CNAME records.',
-      },
-      {
-        id: 'msg_2',
-        sender: 'support',
-        senderName: 'Siam (Senior Cloud Engineer)',
-        timestamp: 'Today at 10:30 AM',
-        message: 'Hi Hanif! Sectigo AutoSSL runs every 4 hours on our Singapore SG1 node. We have triggered an instant Sectigo renewal for staging.ecommerce-live.com — your wildcard TLS 1.3 is now active and verified.',
-      },
-    ],
-  },
-];
-
-const INITIAL_CUSTOMERS: AdminCustomer[] = [
-  {
-    id: 'cust_1',
-    name: 'Hanif Khan',
-    email: 'hanif@ecommerce-live.com',
-    phone: '+8801712345678',
-    company: 'Khan Commerce Ltd',
-    servicesCount: 2,
-    totalSpendBDT: 4850,
-    walletBalanceBDT: 2500,
-    status: 'Active',
-    joinedDate: '2026-06-12',
-    primaryServiceId: 'srv_1',
-  },
-  {
-    id: 'cust_2',
-    name: 'Tanvir Ahmed',
-    email: 'tanvir@nextdev.bd',
-    phone: '+8801819876543',
-    company: 'NextDev Studios',
-    servicesCount: 4,
-    totalSpendBDT: 14200,
-    walletBalanceBDT: 1200,
-    status: 'Active',
-    joinedDate: '2026-03-01',
-  },
-  {
-    id: 'cust_3',
-    name: 'Shamim Hossain',
-    email: 'shamim@bdhostinger.com',
-    phone: '+8801911223344',
-    company: 'Apex Media BD',
-    servicesCount: 1,
-    totalSpendBDT: 1200,
-    walletBalanceBDT: 0,
-    status: 'High Resource',
-    joinedDate: '2026-08-19',
-  },
-  {
-    id: 'cust_4',
-    name: 'Fariha Yasmin',
-    email: 'fariha@designcraft.xyz',
-    phone: '+8801615566778',
-    company: 'DesignCraft Global',
-    servicesCount: 1,
-    totalSpendBDT: 450,
-    walletBalanceBDT: 450,
-    status: 'Suspended',
-    joinedDate: '2026-10-10',
-  },
-];
+const INITIAL_SERVICES: CloudService[] = [];
+const INITIAL_DATABASES: DatabaseItem[] = [];
+const INITIAL_SUBDOMAINS: SubdomainItem[] = [];
+const INITIAL_BACKUPS: BackupSnapshot[] = [];
+const INITIAL_CRONS: CronJobItem[] = [];
+const INITIAL_LOGS: ServerLogItem[] = [];
+const INITIAL_DOMAINS: DomainItem[] = [];
+const INITIAL_CHILD_NS: ChildNameserver[] = [];
+const INITIAL_REDIRECTS: DomainRedirect[] = [];
+const INITIAL_INVOICES: Invoice[] = [];
+const INITIAL_TRANSACTIONS: WalletTransaction[] = [];
+const INITIAL_TICKETS: SupportTicket[] = [];
+const INITIAL_CUSTOMERS: AdminCustomer[] = [];
 
 const INITIAL_NODES: ServerNode[] = [
   {
@@ -914,59 +683,8 @@ const INITIAL_NODES: ServerNode[] = [
   },
 ];
 
-const INITIAL_LEDGER: LedgerOrder[] = [
-  { id: 'LED-9812', invoiceId: 'INV-2026-8941', customerName: 'Hanif Khan', gateway: 'bKash', trxID: 'BKASH_9A8F12X', amountBDT: 450, provisionStatus: 'Auto-Provisioned', timestamp: '2026-11-01 14:22' },
-  { id: 'LED-9811', invoiceId: 'INV-2026-8940', customerName: 'Tanvir Ahmed', gateway: 'Nagad', trxID: 'NGD_77P102M', amountBDT: 900, provisionStatus: 'Auto-Provisioned', timestamp: '2026-11-01 11:10' },
-  { id: 'LED-9810', invoiceId: 'INV-2026-8939', customerName: 'Apex Media BD', gateway: 'Stripe', trxID: 'ch_3N82f9H21', amountBDT: 2400, provisionStatus: 'Auto-Provisioned', timestamp: '2026-10-31 19:40' },
-  { id: 'LED-9809', invoiceId: 'INV-2026-8938', customerName: 'Rafiqul Islam', gateway: 'bKash', trxID: 'BKASH_MANUAL_1', amountBDT: 450, provisionStatus: 'Pending Approval', timestamp: '2026-10-31 16:15' },
-];
-
-const INITIAL_MIGRATIONS: MigrationRequest[] = [
-  {
-    id: 'mig_1',
-    domain: 'bengal-superstore.com',
-    customerName: 'Tanvir Ahmed',
-    sourceHost: 'Hostinger Singapore',
-    backupSizeMB: 1450,
-    currentStep: 2, // Pulling
-    notes: 'Large WooCommerce database with ~25,000 products. Requires Redis Object Cache configured on SG1.',
-    targetNode: 'Singapore SG1 Master Node',
-    createdAt: '2026-11-05 08:30 AM',
-  },
-  {
-    id: 'mig_2',
-    domain: 'fintech-dhaka.io',
-    customerName: 'Sabbir Rahman',
-    sourceHost: 'Bluehost USA',
-    backupSizeMB: 680,
-    currentStep: 3, // Restoring
-    notes: 'Next.js 14 app + custom MySQL. Ensure Passenger worker restart script is in place.',
-    targetNode: 'Singapore SG1 Master Node',
-    createdAt: '2026-11-04 04:15 PM',
-  },
-  {
-    id: 'mig_3',
-    domain: 'dailybanglapost.net',
-    customerName: 'Nazmul Huda',
-    sourceHost: 'Namecheap Shared',
-    backupSizeMB: 2800,
-    currentStep: 4, // Completed
-    notes: 'WordPress high traffic news portal. Fully migrated and DNS flipped to ns1.devhost.cloud.',
-    targetNode: 'Singapore SG1 Master Node',
-    createdAt: '2026-11-02 10:00 AM',
-  },
-  {
-    id: 'mig_4',
-    domain: 'creativestudio.xyz',
-    customerName: 'Sadia Jahan',
-    sourceHost: 'GoDaddy cPanel',
-    backupSizeMB: 420,
-    currentStep: 1, // Queued
-    notes: 'Static Astro build + PHP contact form. Waiting for cPanel backup link.',
-    targetNode: 'USA East Node',
-    createdAt: '2026-11-05 11:20 AM',
-  },
-];
+const INITIAL_LEDGER: LedgerOrder[] = [];
+const INITIAL_MIGRATIONS: MigrationRequest[] = [];
 
 const INITIAL_PROMOS: PromoCode[] = [
   { code: 'DEVPRO20', discountPercent: 20, usesCount: 38, maxUses: 100, expiryDate: '2026-12-31', status: 'Active' },
@@ -1147,12 +865,7 @@ const INITIAL_DYNAMIC_TLDS: DynamicTldPricing[] = [
   { tld: '.info', category: 'Information', registerBDT: 650, renewalBDT: 2450, transferBDT: 2200, registrarCostBDT: 500, ownerNetProfitRegBDT: 150, affiliateEligible: false },
 ];
 
-const INITIAL_NOTIFICATIONS: SystemNotification[] = [
-  { id: 'notif_1', title: 'Invoice Paid Successfully', desc: 'INV-2026-8941 (৳450) via bKash. Service renewed to Dec 05.', time: '2 hours ago', type: 'billing', read: false },
-  { id: 'notif_2', title: 'Git Auto-Deploy Succeeded', desc: 'Commit e89a12c (feat: add bkash webhook) deployed on SG1 node in 2.8s.', time: '5 hours ago', type: 'git', read: false },
-  { id: 'notif_3', title: 'Domain Renewal Reminder', desc: 'bangla-portfolio.dev expires in 15 days. Auto-renew is currently OFF.', time: '1 day ago', type: 'domain', read: false },
-  { id: 'notif_4', title: 'Senior Engineer Replied to Ticket', desc: 'Siam replied to Ticket #TKT-9941 regarding Wildcard SSL on staging.', time: '2 days ago', type: 'support', read: true },
-];
+const INITIAL_NOTIFICATIONS: SystemNotification[] = [];
 
 // ---------------------------------------------------------------------------
 // PROVIDER COMPONENT
@@ -1162,18 +875,14 @@ const STORAGE_KEY = 'devhost-portal-state-v9';
 
 export function PortalProvider({ children }: { children: React.ReactNode }) {
   const [isClientLoaded, setIsClientLoaded] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
 
   const [activeRole, setActiveRole] = useState<UserRole>('client');
-  const [currentUser, setCurrentUser] = useState({
-    name: 'Hanif Khan',
-    email: 'hanif@ecommerce-live.com',
-    avatar: 'HK',
-    company: 'Khan Commerce Ltd',
-  });
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
 
   // Services & State
   const [services, setServices] = useState<CloudService[]>(INITIAL_SERVICES);
-  const [activeServiceId, setActiveServiceId] = useState<string>('srv_1');
+  const [activeServiceId, setActiveServiceId] = useState<string>('');
   const [databases, setDatabases] = useState<DatabaseItem[]>(INITIAL_DATABASES);
   const [subdomains, setSubdomains] = useState<SubdomainItem[]>(INITIAL_SUBDOMAINS);
   const [backups, setBackups] = useState<BackupSnapshot[]>(INITIAL_BACKUPS);
@@ -1187,7 +896,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   const [domainTransfers, setDomainTransfers] = useState<DomainTransferRequest[]>([]);
 
   // Billing
-  const [walletBalanceBDT, setWalletBalanceBDT] = useState<number>(2500);
+  const [walletBalanceBDT, setWalletBalanceBDT] = useState<number>(0);
   const [walletTransactions, setWalletTransactions] = useState<WalletTransaction[]>(INITIAL_TRANSACTIONS);
   const [invoices, setInvoices] = useState<Invoice[]>(INITIAL_INVOICES);
 
@@ -1209,131 +918,31 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     commissions: AffiliateCommissionItem[];
     subIdStats: CampaignSubIdStat[];
   }>({
-    refLink: 'https://devhost.cloud/?ref=hanif2026',
-    referralCode: 'hanif2026',
-    clicks: 412,
-    signups: 14,
-    activeConversions: 11,
-    commissionTier: 'Tier 2 (25% Commission)',
-    commissionRate: 25,
-    tierLevel: 'pro_25',
-    pendingClearanceBDT: 1575,
-    availableBalanceBDT: 2450,
-    totalEarnedBDT: 9800,
-    payouts: [
-      { id: 'PAY-101', date: '2026-10-15', amount: 3500, method: 'bKash Merchant', accountNumber: '01712345678', status: 'Completed', trxId: 'BK_PAY_981' },
-      { id: 'PAY-102', date: '2026-09-01', amount: 2500, method: 'Nagad Personal', accountNumber: '01819876543', status: 'Completed', trxId: 'NG_PAY_442' },
-    ],
-    commissions: [
-      {
-        id: 'COMM-109',
-        date: '2026-11-04',
-        invoiceId: 'INV-2026-8941',
-        customerMasked: 'r***m@gmail.com',
-        domain: 'dhakabazaar.com.bd',
-        orderAmountBDT: 1800,
-        commissionBDT: 450,
-        ratePercent: 25,
-        subId: 'youtube_bio',
-        status: 'pending_35d_hold',
-        daysLeftToMature: 33,
-        clearanceDate: '2026-12-09',
-      },
-      {
-        id: 'COMM-108',
-        date: '2026-10-28',
-        invoiceId: 'INV-2026-8812',
-        customerMasked: 's***n@techbd.org',
-        domain: 'nextpos.cloud',
-        orderAmountBDT: 4500,
-        commissionBDT: 1125,
-        ratePercent: 25,
-        subId: 'fb_group',
-        status: 'pending_35d_hold',
-        daysLeftToMature: 26,
-        clearanceDate: '2026-12-02',
-      },
-      {
-        id: 'COMM-107',
-        date: '2026-09-22',
-        invoiceId: 'INV-2026-7241',
-        customerMasked: 'k***r@banglamail.net',
-        domain: 'ecombd.shop',
-        orderAmountBDT: 1400,
-        commissionBDT: 280,
-        ratePercent: 20,
-        subId: 'blog_review',
-        status: 'cleared_available',
-        daysLeftToMature: 0,
-        clearanceDate: '2026-10-27 (Cleared)',
-      },
-    ],
-    subIdStats: [
-      { subId: 'youtube_bio', channelName: 'YouTube Description', clicks: 184, signups: 7, conversionRate: 3.8, totalEarningsBDT: 3450 },
-      { subId: 'fb_group', channelName: 'Facebook Developers BD', clicks: 142, signups: 5, conversionRate: 3.5, totalEarningsBDT: 4200 },
-      { subId: 'blog_review', channelName: 'Personal Tech Blog', clicks: 86, signups: 2, conversionRate: 2.3, totalEarningsBDT: 2150 },
-    ],
+    refLink: '',
+    referralCode: '',
+    clicks: 0,
+    signups: 0,
+    activeConversions: 0,
+    commissionTier: 'Starter (20%)',
+    commissionRate: 20,
+    tierLevel: 'starter_20',
+    pendingClearanceBDT: 0,
+    availableBalanceBDT: 0,
+    totalEarnedBDT: 0,
+    payouts: [],
+    commissions: [],
+    subIdStats: [],
   });
 
   // Security, Fraud Radar & Audit
-  const [fraudAlerts, setFraudAlerts] = useState<FraudAlertItem[]>([
-    {
-      id: 'FRAUD-101',
-      type: 'self_referral_attempt',
-      severity: 'critical',
-      title: 'Self-Referral Blocked (Account & IP Match)',
-      target: 'Referral: tanvir99 -> Buyer: tanvir99@gmail.com',
-      details: 'Buyer email and checkout IP 103.112.44.18 matched affiliate registration credentials. Commission zeroed.',
-      status: 'blocked',
-      timestamp: '2 hours ago',
-      ipAddress: '103.112.44.18',
-    },
-    {
-      id: 'FRAUD-102',
-      type: 'brute_force_ip',
-      severity: 'warning',
-      title: 'Brute-Force Lockout (5 Failed Admin PIN Attempts)',
-      target: 'IP: 185.220.101.4 (Tor Exit Node)',
-      details: 'Submitting rapid login attempts on /admin. Temporarily locked out for 15 minutes by Edge Rate Limiter.',
-      status: 'blocked',
-      timestamp: 'Yesterday at 11:20 PM',
-      ipAddress: '185.220.101.4',
-    },
-    {
-      id: 'FRAUD-103',
-      type: 'duplicate_trxid',
-      severity: 'critical',
-      title: 'Duplicate bKash trxID Replay Attempt',
-      target: 'trxID: BKASH_9A8F12X (Already Claimed in INV-2026-8941)',
-      details: 'User tried submitting an already confirmed transaction ID. Payment flagged for review.',
-      status: 'open',
-      timestamp: 'Today at 09:14 AM',
-      ipAddress: '103.151.102.8',
-    },
-  ]);
-
-  const [auditLogs, setAuditLogs] = useState<SecurityAuditItem[]>([
-    { id: 'LOG-891', actor: 'Admin (Founder)', role: 'admin', action: 'Dunning Rules Updated', target: 'Grace Period -> 3 Days', ip: '103.145.22.40', riskLevel: 'low', timestamp: 'Today at 10:15 AM' },
-    { id: 'LOG-890', actor: 'System Auto-Engine', role: 'system', action: 'Self-Referral Detected', target: 'tanvir99 (COMM-104 Flagged)', ip: '103.112.44.18', riskLevel: 'critical', timestamp: '2 hours ago' },
-    { id: 'LOG-889', actor: 'System Auto-Engine', role: 'system', action: 'Brute-Force IP Auto-Blocked', target: '185.220.101.4 -> 15 min lock', ip: '185.220.101.4', riskLevel: 'high', timestamp: 'Yesterday at 11:20 PM' },
-    { id: 'LOG-888', actor: 'Admin (Founder)', role: 'admin', action: 'cPanel Manual Suspend', target: 'User: dev_test2', ip: '103.145.22.40', riskLevel: 'medium', timestamp: '2 days ago' },
-  ]);
-
+  const [fraudAlerts, setFraudAlerts] = useState<FraudAlertItem[]>([]);
+  const [auditLogs, setAuditLogs] = useState<SecurityAuditItem[]>([]);
   const [emergencyLockdown, setEmergencyLockdown] = useState<boolean>(false);
 
   // Security & Team
-  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([
-    { id: 'tm_1', name: 'Tanvir Ahmed', email: 'tanvir@nextdev.bd', role: 'Developer: Git & cPanel Only', addedDate: '2026-09-12', status: 'Active' },
-    { id: 'tm_2', name: 'Rahim Ullah', email: 'billing@khancommerce.com', role: 'Billing Manager: Invoices Only', addedDate: '2026-10-01', status: 'Active' },
-  ]);
-  const [apiTokens, setApiTokens] = useState<ApiToken[]>([
-    { id: 'tok_1', name: 'GitHub Actions Auto-Deploy Runner', prefix: 'dhc_live_9f82d...', created: '2026-08-10', lastUsed: '10 mins ago', permissions: 'Deploy & Restart Only' },
-    { id: 'tok_2', name: 'Staging CI Sync', prefix: 'dhc_live_34a11...', created: '2026-10-02', lastUsed: '3 days ago', permissions: 'Read & Deploy' },
-  ]);
-  const [loginSessions, setLoginSessions] = useState<LoginSession[]>([
-    { id: 'ses_1', device: 'Chrome on macOS (M3 Pro)', location: 'Dhaka, Bangladesh', ip: '103.145.22.18', current: true, time: 'Active now' },
-    { id: 'ses_2', device: 'Firefox on Windows 11', location: 'Chittagong, Bangladesh', ip: '119.30.34.88', current: false, time: 'Yesterday at 04:30 PM' },
-  ]);
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
+  const [apiTokens, setApiTokens] = useState<ApiToken[]>([]);
+  const [loginSessions, setLoginSessions] = useState<LoginSession[]>([]);
 
   // Founder / Admin Systems
   const [customers, setCustomers] = useState<AdminCustomer[]>(INITIAL_CUSTOMERS);
@@ -1345,8 +954,8 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   const [dynamicTlds, setDynamicTlds] = useState<DynamicTldPricing[]>(INITIAL_DYNAMIC_TLDS);
   const [notifications, setNotifications] = useState<SystemNotification[]>(INITIAL_NOTIFICATIONS);
   const [systemBroadcast, setSystemBroadcast] = useState<SystemBroadcast>({
-    active: true,
-    message: 'Scheduled LiteSpeed Kernel Upgrade on SG1 Node — Zero Downtime Expected',
+    active: false,
+    message: '',
     type: 'info',
     dismissible: true,
   });
@@ -1356,64 +965,218 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     autoTerminateDaysAfter: 14,
   });
 
-  // LocalStorage Hydration
-  useEffect(() => {
+  // Fetch user specific dynamic data from Supabase
+  const fetchUserData = useCallback(async (userId: string) => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.services) setServices(parsed.services);
-        if (parsed.activeServiceId) setActiveServiceId(parsed.activeServiceId);
-        if (parsed.databases) setDatabases(parsed.databases);
-        if (parsed.subdomains) setSubdomains(parsed.subdomains);
-        if (parsed.backups) setBackups(parsed.backups);
-        if (parsed.cronJobs) setCronJobs(parsed.cronJobs);
-        if (parsed.domains) setDomains(parsed.domains);
-        if (parsed.childNameservers) setChildNameservers(parsed.childNameservers);
-        if (parsed.domainRedirects) setDomainRedirects(parsed.domainRedirects);
-        if (parsed.domainTransfers) setDomainTransfers(parsed.domainTransfers);
-        if (parsed.walletBalanceBDT !== undefined) setWalletBalanceBDT(parsed.walletBalanceBDT);
-        if (parsed.invoices) setInvoices(parsed.invoices);
-        if (parsed.tickets) setTickets(parsed.tickets);
-        if (parsed.customers) setCustomers(parsed.customers);
-        if (parsed.serverNodes) setServerNodes(parsed.serverNodes);
-        if (parsed.ordersLedger) setOrdersLedger(parsed.ordersLedger);
-        if (parsed.migrationQueue) setMigrationQueue(parsed.migrationQueue);
-        if (parsed.promoCodes) setPromoCodes(parsed.promoCodes);
-        if (parsed.dynamicPlans) {
-          const mergedPlans = parsed.dynamicPlans.map((p: DynamicHostingPlan) => {
-            const defP = INITIAL_DYNAMIC_PLANS.find((dp) => dp.id === p.id || dp.slug === p.slug);
-            return {
-              ...defP,
-              ...p,
-              unitServerCostBDT: p.unitServerCostBDT ?? defP?.unitServerCostBDT ?? 0,
-              minOwnerProfitBDT: p.minOwnerProfitBDT ?? defP?.minOwnerProfitBDT ?? 0,
-              maxAffiliatePoolBDT: p.maxAffiliatePoolBDT ?? defP?.maxAffiliatePoolBDT ?? 0,
-            };
-          });
-          setDynamicPlans(mergedPlans);
-        }
-        if (parsed.dynamicTlds) {
-          const mergedTlds = parsed.dynamicTlds.map((t: DynamicTldPricing) => {
-            const defT = INITIAL_DYNAMIC_TLDS.find((dt) => dt.tld === t.tld);
-            return {
-              ...defT,
-              ...t,
-              registrarCostBDT: t.registrarCostBDT ?? defT?.registrarCostBDT ?? 0,
-              ownerNetProfitRegBDT: t.ownerNetProfitRegBDT ?? defT?.ownerNetProfitRegBDT ?? 0,
-            };
-          });
-          setDynamicTlds(mergedTlds);
-        }
-        if (parsed.notifications) setNotifications(parsed.notifications);
-        if (parsed.systemBroadcast) setSystemBroadcast(parsed.systemBroadcast);
-        if (parsed.dunningRules) setDunningRules(parsed.dunningRules);
+      if (!isSupabaseConfigured()) return;
+
+      // 1. Fetch hosting services
+      const { data: srvRows } = await supabase
+        .from('hosting_services')
+        .select('*')
+        .eq('user_id', userId);
+
+      if (srvRows && srvRows.length > 0) {
+        const mappedServices: CloudService[] = srvRows.map((s: any) => ({
+          id: s.id,
+          domain: s.domain,
+          planName: s.package_name || 'Cloud Service',
+          status: s.status === 'active' ? 'Active' : s.status === 'suspended' ? 'Suspended' : 'Pending',
+          datacenter: s.datacenter || 'Singapore SG1',
+          ipAddress: s.server_ip || '103.145.22.40',
+          cpanelUser: s.cpanel_username || 'user',
+          diskUsedGB: Number(s.disk_used_gb || 0),
+          diskLimitGB: Number(s.disk_limit_gb || 5),
+          inodesUsed: Number(s.inodes_used || 0),
+          inodeLimit: Number(s.inodes_limit || 250000),
+          ramUsedMB: Number(s.ram_used_mb || 0),
+          ramLimitMB: Number(s.ram_limit_mb || 2048),
+          cpuCores: Number(s.cpu_cores || 2),
+          ioLimitMB: Number(s.io_limit_mb || 50),
+          nodeVersion: s.node_version || 'Node.js 22 LTS',
+          gitRepoUrl: s.git_repo_url || '',
+          gitBranch: s.git_branch || 'main',
+          webhookUrl: s.webhook_url || '',
+          autoRenew: !!s.auto_renew,
+          nextDueDate: s.next_due_date ? String(s.next_due_date).split('T')[0] : '',
+          monthlyPriceBDT: Number(s.monthly_price_bdt || 0),
+          envVars: s.env_vars || [],
+          releases: s.releases || [],
+          sshPublicKey: s.ssh_public_key || '',
+        }));
+        setServices(mappedServices);
+        setActiveServiceId(mappedServices[0].id);
+      } else {
+        setServices([]);
+        setActiveServiceId('');
       }
-    } catch {
-      // Fallback to seeds
+
+      // 2. Fetch invoices
+      const { data: invRows } = await supabase
+        .from('invoices')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false });
+
+      if (invRows && invRows.length > 0) {
+        setInvoices(
+          invRows.map((i: any) => ({
+            id: i.invoice_number || i.id,
+            date: String(i.created_at).split('T')[0],
+            dueDate: String(i.due_date || i.created_at).split('T')[0],
+            amount: Number(i.total_bdt || i.amount_bdt || 0),
+            status: i.status === 'paid' ? 'Paid' : 'Unpaid',
+            paymentMethod: i.payment_gateway || i.payment_method || 'Manual',
+            trxID: i.trx_id || '',
+            plan: i.plan_name || 'Hosting Service',
+            items: i.items || [{ desc: i.description || 'Service Invoice', amount: Number(i.total_bdt || 0) }],
+          }))
+        );
+      } else {
+        setInvoices([]);
+      }
+
+      // 3. Fetch domains
+      const { data: domRows } = await supabase
+        .from('domains')
+        .select('*')
+        .eq('user_id', userId);
+
+      if (domRows && domRows.length > 0) {
+        setDomains(
+          domRows.map((d: any) => ({
+            id: d.id,
+            domain: d.domain_name || d.domain,
+            expiryDate: String(d.expiry_date || '').split('T')[0],
+            daysRemaining: Math.max(
+              0,
+              Math.ceil((new Date(d.expiry_date).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+            ),
+            status: d.status === 'active' ? 'Active' : 'Expiring Soon',
+            registrarLock: !!d.registrar_lock,
+            whoisPrivacy: !!d.whois_privacy,
+            autoRenew: !!d.auto_renew,
+            nameservers: d.nameservers || ['ns1.devhost.cloud', 'ns2.devhost.cloud'],
+            eppCode: d.epp_code || '',
+            dnsRecords: d.dns_records || [],
+          }))
+        );
+      } else {
+        setDomains([]);
+      }
+
+      // 4. Fetch transactions
+      const { data: wtxRows } = await supabase
+        .from('wallet_transactions')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false });
+
+      if (wtxRows && wtxRows.length > 0) {
+        setWalletTransactions(
+          wtxRows.map((t: any) => ({
+            id: t.id,
+            date: String(t.created_at).split('T')[0],
+            type: t.type === 'credit' ? 'Top-Up' : t.type === 'refund' ? 'Refund' : 'Debit',
+            amount: Number(t.amount_bdt || t.amount),
+            method: t.description || t.method || 'Wallet Tx',
+            balanceAfter: Number(t.balance_after_bdt || 0),
+          }))
+        );
+      } else {
+        setWalletTransactions([]);
+      }
+    } catch (err) {
+      console.error('[PortalContext] User data fetch error:', err);
     }
-    setIsClientLoaded(true);
   }, []);
+
+  // Hydrate session & listen to Supabase Auth
+  const refreshUserData = useCallback(async () => {
+    if (!isSupabaseConfigured()) {
+      setAuthLoading(false);
+      return;
+    }
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.user) {
+        setCurrentUser(null);
+        setActiveRole('client');
+        setServices([]);
+        setDomains([]);
+        setInvoices([]);
+        setWalletBalanceBDT(0);
+        setAuthLoading(false);
+        return;
+      }
+
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', session.user.id)
+        .maybeSingle();
+
+      const role: UserRole = profile?.role === 'admin' ? 'admin' : 'client';
+      const u: CurrentUser = {
+        id: session.user.id,
+        name: profile?.full_name || session.user.user_metadata?.full_name || session.user.email?.split('@')[0] || 'User',
+        email: session.user.email || '',
+        avatar: (profile?.full_name || session.user.email || 'U').slice(0, 2).toUpperCase(),
+        company: profile?.company || '',
+        role,
+        phone: profile?.phone || '',
+      };
+
+      setCurrentUser(u);
+      setActiveRole(role);
+      setWalletBalanceBDT(Number(profile?.wallet_balance_bdt || 0));
+
+      const refCode = profile?.referral_code || session.user.email?.split('@')[0] || 'ref';
+      setAffiliate((prev) => ({
+        ...prev,
+        refLink: `https://devhost.cloud/?ref=${refCode}`,
+        referralCode: refCode,
+      }));
+
+      await fetchUserData(session.user.id);
+    } catch (err) {
+      console.error('[PortalContext] refreshUserData error:', err);
+    } finally {
+      setAuthLoading(false);
+    }
+  }, [fetchUserData]);
+
+  useEffect(() => {
+    // Purge any stale demo state from localStorage
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem('devhost-portal-state-v9');
+    } catch {}
+
+    refreshUserData();
+    setIsClientLoaded(true);
+
+    if (isSupabaseConfigured()) {
+      const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
+        if (event === 'SIGNED_OUT' || !session) {
+          setCurrentUser(null);
+          setActiveRole('client');
+          setServices([]);
+          setDomains([]);
+          setInvoices([]);
+          setWalletTransactions([]);
+          setWalletBalanceBDT(0);
+          setAuthLoading(false);
+        } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+          refreshUserData();
+        }
+      });
+
+      return () => {
+        authListener?.subscription.unsubscribe();
+      };
+    }
+  }, [refreshUserData]);
 
   // Fetch dynamic catalog from /api/catalog (Supabase Postgres)
   useEffect(() => {
@@ -1469,67 +1232,29 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     syncDynamicCatalog();
   }, []);
 
-  // Save to LocalStorage on state updates
-  useEffect(() => {
-    if (!isClientLoaded) return;
+  const logout = async () => {
     try {
-      const stateToPersist = {
-        services,
-        activeServiceId,
-        databases,
-        subdomains,
-        backups,
-        cronJobs,
-        domains,
-        childNameservers,
-        domainRedirects,
-        domainTransfers,
-        walletBalanceBDT,
-        invoices,
-        tickets,
-        customers,
-        serverNodes,
-        ordersLedger,
-        migrationQueue,
-        promoCodes,
-        dynamicPlans,
-        dynamicTlds,
-        notifications,
-        systemBroadcast,
-        dunningRules,
-      };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToPersist));
-    } catch {
-      // Ignore quota storage errors
+      if (isSupabaseConfigured()) {
+        await supabase.auth.signOut();
+      }
+    } catch (err) {
+      console.error('[PortalContext] SignOut error:', err);
     }
-  }, [
-    isClientLoaded,
-    services,
-    activeServiceId,
-    databases,
-    subdomains,
-    backups,
-    cronJobs,
-    domains,
-    childNameservers,
-    domainRedirects,
-    domainTransfers,
-    walletBalanceBDT,
-    invoices,
-    tickets,
-    customers,
-    serverNodes,
-    ordersLedger,
-    migrationQueue,
-    promoCodes,
-    dynamicPlans,
-    dynamicTlds,
-    notifications,
-    systemBroadcast,
-    dunningRules,
-  ]);
+    setCurrentUser(null);
+    setActiveRole('client');
+    setServices([]);
+    setDomains([]);
+    setInvoices([]);
+    setWalletBalanceBDT(0);
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem(STORAGE_KEY);
+      } catch {}
+      window.location.href = '/login';
+    }
+  };
 
-  const activeService = services.find((s) => s.id === activeServiceId) || services[0];
+  const activeService = services.find((s) => s.id === activeServiceId) || services[0] || FALLBACK_EMPTY_SERVICE;
   const unreadNotificationCount = notifications.filter((n) => !n.read).length;
 
   // ---------------------------------------------------------------------------
@@ -1537,17 +1262,22 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   // ---------------------------------------------------------------------------
 
   const switchRole = (role: UserRole) => {
-    setActiveRole(role);
+    if (currentUser?.role === 'admin') {
+      setActiveRole(role);
+    }
   };
 
   const impersonateCustomer = (customerId: string) => {
     const cust = customers.find((c) => c.id === customerId);
     if (cust) {
       setCurrentUser({
+        id: cust.id,
         name: cust.name,
         email: cust.email,
         avatar: cust.name.slice(0, 2).toUpperCase(),
         company: cust.company,
+        role: 'client',
+        phone: cust.phone,
       });
       if (cust.primaryServiceId && services.some((s) => s.id === cust.primaryServiceId)) {
         setActiveServiceId(cust.primaryServiceId);
@@ -2117,7 +1847,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         {
           id: `msg_${Date.now()}`,
           sender: 'client',
-          senderName: currentUser.name,
+          senderName: currentUser?.name || 'Client',
           timestamp: 'Just now',
           message: ticket.message,
         },
@@ -2142,7 +1872,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     const newMsg: TicketMessage = {
       id: `msg_${Date.now()}`,
       sender,
-      senderName: sender === 'client' ? currentUser.name : 'Siam (Senior Cloud Engineer)',
+      senderName: sender === 'client' ? (currentUser?.name || 'Client') : 'Siam (Senior Cloud Engineer)',
       timestamp: 'Just now',
       message,
     };
@@ -2742,7 +2472,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       {
         id: `LED-${Math.floor(1000 + Math.random() * 9000)}`,
         invoiceId: invId,
-        customerName: currentUser.name,
+        customerName: currentUser?.name || 'Customer',
         gateway: order.paymentMethod,
         trxID: order.trxId,
         amountBDT: order.priceBDT,
@@ -2772,6 +2502,9 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     <PortalContext.Provider
       value={{
         currentUser,
+        authLoading,
+        logout,
+        refreshUserData,
         activeRole,
         switchRole,
         impersonateCustomer,

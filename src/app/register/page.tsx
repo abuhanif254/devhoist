@@ -13,17 +13,14 @@ import {
   Eye,
   EyeOff,
   ArrowRight,
-  Server,
   Sparkles,
-  CheckCircle2,
-  Zap,
-  Globe,
+  AlertTriangle,
+  Loader2,
 } from 'lucide-react';
-import { usePortal } from '@/context/PortalContext';
+import { supabase } from '@/lib/supabase';
 
 export default function RegisterPage() {
   const router = useRouter();
-  const { switchRole } = usePortal();
 
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
@@ -32,19 +29,76 @@ export default function RegisterPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [agreeTerms, setAgreeTerms] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const handleRegisterSubmit = (e: React.FormEvent) => {
+  const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setErrorMsg(null);
+
+    if (!fullName.trim() || !email.trim() || !password) {
+      setErrorMsg('Please fill in all required fields.');
+      return;
+    }
+
+    if (password.length < 6) {
+      setErrorMsg('Password must be at least 6 characters.');
+      return;
+    }
+
+    if (!agreeTerms) {
+      setErrorMsg('You must agree to the Terms of Service & Privacy Policy.');
+      return;
+    }
+
     setIsSubmitting(true);
-    setTimeout(() => {
-      switchRole('client');
-      router.push('/dashboard');
-    }, 600);
+    try {
+      // 1. Register user via dedicated Edge API route
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fullName: fullName.trim(),
+          email: email.trim().toLowerCase(),
+          password,
+          company: company.trim(),
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Registration failed.');
+      }
+
+      // 2. Sign in with the registered credentials to establish Supabase session
+      const { error: signInErr } = await supabase.auth.signInWithPassword({
+        email: email.trim().toLowerCase(),
+        password,
+      });
+
+      if (signInErr) {
+        // Redirect to login if confirmation email is required
+        router.push('/login?registered=1');
+      } else {
+        router.push('/dashboard');
+      }
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Registration failed. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleDemoClientLogin = () => {
-    switchRole('client');
-    router.push('/dashboard');
+  const handleOAuthSignUp = async (provider: 'github' | 'google') => {
+    try {
+      await supabase.auth.signInWithOAuth({
+        provider,
+        options: {
+          redirectTo: `${window.location.origin}/dashboard`,
+        },
+      });
+    } catch (err: any) {
+      setErrorMsg(err.message || `Failed to sign up with ${provider}`);
+    }
   };
 
   return (
@@ -62,7 +116,7 @@ export default function RegisterPage() {
                 DevHost
               </span>
               <span className="px-1.5 py-0.5 text-[10px] font-mono font-bold tracking-wider rounded bg-blue-50 dark:bg-zinc-900 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-white/10 uppercase">
-                Portal
+                Cloud
               </span>
             </div>
           </Link>
@@ -80,7 +134,7 @@ export default function RegisterPage() {
           <div>
             <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-xs font-mono text-emerald-700 dark:text-emerald-400 font-semibold mb-3">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              <span>Instant Cloud Account Setup</span>
+              <span>Real-Time Cloud Account</span>
             </div>
             <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white">
               Create Your Cloud Account
@@ -90,11 +144,18 @@ export default function RegisterPage() {
             </p>
           </div>
 
+          {errorMsg && (
+            <div className="p-3.5 rounded-xl border border-rose-200 dark:border-rose-900/50 bg-rose-50 dark:bg-rose-950/20 text-rose-800 dark:text-rose-200 text-xs flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+              <span>{errorMsg}</span>
+            </div>
+          )}
+
           {/* Quick OAuth */}
           <div className="grid grid-cols-2 gap-3">
             <button
               type="button"
-              onClick={handleDemoClientLogin}
+              onClick={() => handleOAuthSignUp('github')}
               className="flex items-center justify-center gap-2 h-10 px-4 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-zinc-900/60 hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-800 dark:text-zinc-200 text-xs font-semibold shadow-xs transition-colors cursor-pointer"
             >
               <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
@@ -105,7 +166,7 @@ export default function RegisterPage() {
 
             <button
               type="button"
-              onClick={handleDemoClientLogin}
+              onClick={() => handleOAuthSignUp('google')}
               className="flex items-center justify-center gap-2 h-10 px-4 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-zinc-900/60 hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-800 dark:text-zinc-200 text-xs font-semibold shadow-xs transition-colors cursor-pointer"
             >
               <svg className="w-4 h-4" viewBox="0 0 24 24">
@@ -138,91 +199,91 @@ export default function RegisterPage() {
           </div>
 
           {/* Form */}
-          <form onSubmit={handleRegisterSubmit} className="space-y-3.5">
+          <form onSubmit={handleRegisterSubmit} className="space-y-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">
+              <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1.5">
                 Full Name
               </label>
               <div className="relative">
-                <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <User className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
                   type="text"
                   required
+                  placeholder="e.g. Tanvir Ahmed"
                   value={fullName}
                   onChange={(e) => setFullName(e.target.value)}
-                  placeholder="Hanif Hossain"
-                  className="w-full pl-10 pr-4 h-10 rounded-xl bg-slate-50 dark:bg-zinc-900/60 border border-slate-200 dark:border-white/10 text-xs font-sans text-slate-900 dark:text-zinc-100 placeholder-slate-400 focus:outline-hidden focus:border-blue-500"
+                  className="w-full h-10 pl-10 pr-4 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-zinc-900 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-blue-500 transition-colors"
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">
+              <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1.5">
                 Email Address
               </label>
               <div className="relative">
-                <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <Mail className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
                   type="email"
                   required
+                  placeholder="name@company.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="name@company.com"
-                  className="w-full pl-10 pr-4 h-10 rounded-xl bg-slate-50 dark:bg-zinc-900/60 border border-slate-200 dark:border-white/10 text-xs font-sans text-slate-900 dark:text-zinc-100 placeholder-slate-400 focus:outline-hidden focus:border-blue-500"
+                  className="w-full h-10 pl-10 pr-4 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-zinc-900 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-blue-500 transition-colors"
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">
-                Company / Agency (Optional)
+              <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1.5">
+                Company / Organization <span className="text-slate-400 font-normal">(Optional)</span>
               </label>
               <div className="relative">
-                <Building className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <Building className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
                   type="text"
+                  placeholder="e.g. Acme Tech Ltd"
                   value={company}
                   onChange={(e) => setCompany(e.target.value)}
-                  placeholder="DevHost Tech BD"
-                  className="w-full pl-10 pr-4 h-10 rounded-xl bg-slate-50 dark:bg-zinc-900/60 border border-slate-200 dark:border-white/10 text-xs font-sans text-slate-900 dark:text-zinc-100 placeholder-slate-400 focus:outline-hidden focus:border-blue-500"
+                  className="w-full h-10 pl-10 pr-4 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-zinc-900 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-blue-500 transition-colors"
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">
-                Create Strong Password
+              <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1.5">
+                Password
               </label>
               <div className="relative">
-                <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <Lock className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
                   type={showPassword ? 'text' : 'password'}
                   required
+                  placeholder="Min. 6 characters"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Minimum 8 characters"
-                  className="w-full pl-10 pr-10 h-10 rounded-xl bg-slate-50 dark:bg-zinc-900/60 border border-slate-200 dark:border-white/10 text-xs font-sans text-slate-900 dark:text-zinc-100 placeholder-slate-400 focus:outline-hidden focus:border-blue-500"
+                  className="w-full h-10 pl-10 pr-10 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-zinc-900 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-blue-500 transition-colors"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200 absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-zinc-300"
                 >
                   {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
             </div>
 
-            <label className="flex items-start gap-2 cursor-pointer select-none text-xs text-slate-600 dark:text-zinc-400 pt-1">
+            <div className="flex items-start gap-2 pt-1">
               <input
                 type="checkbox"
-                required
+                id="terms"
                 checked={agreeTerms}
                 onChange={(e) => setAgreeTerms(e.target.checked)}
-                className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-4 w-4 mt-0.5"
+                className="mt-0.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
               />
-              <span>
-                I accept the{' '}
+              <label htmlFor="terms" className="text-xs text-slate-600 dark:text-zinc-400 leading-snug cursor-pointer">
+                I agree to the{' '}
                 <Link href="/terms" className="text-blue-600 dark:text-blue-400 hover:underline">
                   Terms of Service
                 </Link>{' '}
@@ -231,85 +292,99 @@ export default function RegisterPage() {
                   Privacy Policy
                 </Link>
                 .
-              </span>
-            </label>
+              </label>
+            </div>
 
             <button
               type="submit"
               disabled={isSubmitting}
-              className="w-full h-11 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs shadow-md shadow-blue-600/25 flex items-center justify-center gap-2 transition-all cursor-pointer"
+              className="w-full h-11 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-md shadow-blue-500/20 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
             >
               {isSubmitting ? (
-                <span>Creating account...</span>
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Creating Account...</span>
+                </>
               ) : (
                 <>
-                  <span>Create Account &amp; Launch Console</span>
+                  <span>Create Account</span>
                   <ArrowRight className="w-4 h-4" />
                 </>
               )}
             </button>
           </form>
 
-          <div className="text-center text-xs text-slate-500 dark:text-zinc-400">
-            Already have an account?{' '}
-            <Link href="/login" className="text-blue-600 dark:text-blue-400 font-semibold hover:underline">
-              Sign in to Console
+          {/* Bottom Login link */}
+          <div className="text-center pt-2">
+            <p className="text-xs text-slate-600 dark:text-zinc-400">
+              Already have an account?{' '}
+              <Link href="/login" className="font-semibold text-blue-600 dark:text-blue-400 hover:underline">
+                Sign in here
+              </Link>
+            </p>
+          </div>
+        </div>
+
+        {/* Footer info */}
+        <div className="flex items-center justify-between text-[11px] text-slate-400 dark:text-zinc-600 pt-6 border-t border-slate-100 dark:border-white/5">
+          <span>© {new Date().getFullYear()} DevHost Cloud</span>
+          <div className="flex items-center gap-3">
+            <Link href="/privacy" className="hover:text-slate-600 dark:hover:text-zinc-400">
+              Privacy
+            </Link>
+            <Link href="/terms" className="hover:text-slate-600 dark:hover:text-zinc-400">
+              Terms
+            </Link>
+            <Link href="/security" className="hover:text-slate-600 dark:hover:text-zinc-400">
+              Security
             </Link>
           </div>
         </div>
-
-        {/* Footer */}
-        <div className="text-[11px] text-slate-400 dark:text-zinc-500 pt-6 border-t border-slate-100 dark:border-white/5">
-          &copy; {new Date().getFullYear()} DevHost Cloud Inc. All rights reserved.
-        </div>
       </div>
 
-      {/* Right Column: Infrastructure Perks */}
-      <div className="hidden lg:flex w-1/2 bg-slate-50/70 dark:bg-zinc-900/30 p-12 lg:p-16 flex-col justify-between relative overflow-hidden">
-        <div className="absolute inset-0 architectural-grid opacity-50 pointer-events-none" />
+      {/* Right Column: Architectural Highlights */}
+      <div className="hidden lg:flex w-1/2 bg-slate-900 dark:bg-black p-12 lg:p-16 flex-col justify-between relative overflow-hidden text-white">
+        <div className="absolute inset-0 architectural-grid opacity-20 pointer-events-none" />
 
         <div className="relative z-10 flex items-center justify-between">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono text-slate-700 dark:text-zinc-300 shadow-xs">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            <span>Singapore &amp; USA NVMe High-Availability</span>
+          <span className="text-xs font-mono tracking-widest text-blue-400 uppercase font-semibold">
+            Enterprise Cloud Infrastructure
+          </span>
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-[11px] font-mono text-blue-300">
+            <Sparkles className="w-3 h-3 text-blue-400" />
+            <span>Singapore SG1 &amp; US-East</span>
           </div>
         </div>
 
-        {/* 3 Perks Cards */}
-        <div className="relative z-10 space-y-4 max-w-lg my-auto">
-          <div className="p-5 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 shadow-lg space-y-2">
-            <div className="flex items-center gap-2 text-blue-600 dark:text-blue-400 font-bold text-sm">
-              <Zap className="w-4 h-4" />
-              <span>Zero-Downtime GitHub Webhook Deployments</span>
-            </div>
-            <p className="text-xs text-slate-600 dark:text-zinc-400 leading-relaxed">
-              Push to main and let our smart runner handle standalone Next.js &amp; Passenger reloads in under 3 seconds.
-            </p>
-          </div>
+        <div className="relative z-10 max-w-lg space-y-6">
+          <h2 className="text-3xl lg:text-4xl font-extrabold tracking-tight leading-tight">
+            Developer Experience of Vercel. Accessibility of cPanel.
+          </h2>
+          <p className="text-sm text-slate-300 leading-relaxed font-normal">
+            Automate Git deployments with sub-second commit hooks, LiteSpeed enterprise caching, and zero node_modules bloat.
+          </p>
 
-          <div className="p-5 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 shadow-lg space-y-2">
-            <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400 font-bold text-sm">
-              <ShieldCheck className="w-4 h-4" />
-              <span>Isolated LVE CPU &amp; 150k+ Inode Guarantees</span>
+          <div className="space-y-3 pt-2">
+            <div className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/10">
+              <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0" />
+              <div className="text-xs">
+                <div className="font-semibold text-white">Strict Row Level Security (RLS)</div>
+                <div className="text-slate-400">Every project and database is isolated at the PostgreSQL kernel level.</div>
+              </div>
             </div>
-            <p className="text-xs text-slate-600 dark:text-zinc-400 leading-relaxed">
-              CloudLinux CageFS keeps your apps hermetically sealed with guaranteed dedicated memory and unmetered BDIX traffic.
-            </p>
-          </div>
-
-          <div className="p-5 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 shadow-lg space-y-2">
-            <div className="flex items-center gap-2 text-purple-600 dark:text-purple-400 font-bold text-sm">
-              <Globe className="w-4 h-4" />
-              <span>Instant bKash, Nagad &amp; Card Wallet Activation</span>
+            <div className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/10">
+              <Lock className="w-5 h-5 text-blue-400 shrink-0" />
+              <div className="text-xs">
+                <div className="font-semibold text-white">RFC 6238 TOTP 2-Step Verification</div>
+                <div className="text-slate-400">Hardware-grade Authenticator app login with Sudo elevation gates.</div>
+              </div>
             </div>
-            <p className="text-xs text-slate-600 dark:text-zinc-400 leading-relaxed">
-              Auto-provisioning in under 30 seconds with 15% card VAT savings and automated renewal balance protection.
-            </p>
           </div>
         </div>
 
-        <div className="relative z-10 flex items-center justify-between text-xs text-slate-500 dark:text-zinc-400">
-          <span>Trusted by 5,000+ Bangladeshi developers and fast-growing tech brands</span>
+        <div className="relative z-10 flex items-center justify-between text-xs font-mono text-slate-400 pt-6 border-t border-white/10">
+          <span>SLA: 99.99% Global Uptime</span>
+          <span>BDIX: Sub-5ms Latency</span>
         </div>
       </div>
     </div>

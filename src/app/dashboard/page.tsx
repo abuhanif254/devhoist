@@ -122,6 +122,8 @@ export default function CustomerDashboardPage() {
   const { requireSudo } = useSudoGate();
   const {
     currentUser,
+    authLoading,
+    logout,
     activeRole,
     switchRole,
     notifications,
@@ -228,6 +230,12 @@ export default function CustomerDashboardPage() {
       if (imp) setImpersonatedUser(JSON.parse(imp));
     } catch {}
   }, []);
+
+  useEffect(() => {
+    if (!authLoading && !currentUser) {
+      router.replace('/login?redirect=/dashboard');
+    }
+  }, [authLoading, currentUser, router]);
 
   // Copy Feedback State
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -438,6 +446,15 @@ export default function CustomerDashboardPage() {
     if (logFilter === 'error') return log.statusCode >= 500 || log.type === 'error';
     return true;
   });
+
+  if (authLoading || !currentUser) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-white">
+        <Loader2 className="w-8 h-8 animate-spin text-emerald-500 mb-4" />
+        <p className="text-sm text-slate-400">Authenticating secure cloud session...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-zinc-950 text-slate-900 dark:text-zinc-100 flex flex-col font-sans transition-colors duration-200">
@@ -813,108 +830,133 @@ export default function CustomerDashboardPage() {
                 </div>
               </div>
 
-              {/* Quick Service Telemetry Card (UI FIX APPLIED: flex-col gap-1.5, zero wrapping) */}
-              <div className="p-6 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs space-y-5">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100 dark:border-white/5">
-                  <div>
-                    <div className="flex items-center gap-2.5">
-                      <h2 className="text-lg font-bold text-slate-900 dark:text-white">
-                        {activeService.domain}
-                      </h2>
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800">
-                        {activeService.status}
-                      </span>
-                    </div>
-                    <p className="text-xs text-slate-500 dark:text-zinc-400 font-mono mt-1">
-                      {activeService.planName} • Node IP: {activeService.ipAddress} • {activeService.datacenter}
+              {/* Quick Service Telemetry Card or Empty State */}
+              {services.length === 0 ? (
+                <div className="p-8 sm:p-12 rounded-3xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] text-center space-y-4">
+                  <div className="w-16 h-16 rounded-2xl bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 flex items-center justify-center mx-auto">
+                    <Server className="w-8 h-8" />
+                  </div>
+                  <div className="space-y-1">
+                    <h3 className="text-xl font-bold text-slate-900 dark:text-white">
+                      No Active Cloud Services Yet
+                    </h3>
+                    <p className="text-sm text-slate-500 dark:text-zinc-400 max-w-md mx-auto">
+                      Your portfolio is clean and ready. Pick an ultra-fast NVMe cloud container to deploy your Next.js apps, WordPress sites, or databases.
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('services')}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 text-xs font-semibold hover:bg-blue-100 transition-colors cursor-pointer"
-                  >
-                    <span>Manage Service &amp; Git Pipelines</span>
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-
-                {/* 4 Telemetry Boxes with strict vertical layout & zero wrapping */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                  {/* Disk Quota */}
-                  <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/60 border border-slate-200 dark:border-white/5 flex flex-col gap-1.5">
-                    <span className="text-xs font-mono text-slate-500 dark:text-zinc-400">
-                      NVMe Disk Quota:
-                    </span>
-                    <strong className="text-slate-900 dark:text-white whitespace-nowrap font-mono tabular-nums text-base font-bold">
-                      {activeService.diskUsedGB} GB / {activeService.diskLimitGB} GB
-                    </strong>
-                    <div className="w-full h-1.5 rounded-full bg-slate-200 dark:bg-zinc-800 overflow-hidden mt-1">
-                      <div
-                        className="h-full bg-blue-600 rounded-full"
-                        style={{ width: `${(activeService.diskUsedGB / activeService.diskLimitGB) * 100}%` }}
-                      />
-                    </div>
-                    <span className="text-[10px] font-mono text-slate-400 text-right">
-                      {Math.round((activeService.diskUsedGB / activeService.diskLimitGB) * 100)}% Used
-                    </span>
-                  </div>
-
-                  {/* Inodes Count */}
-                  <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/60 border border-slate-200 dark:border-white/5 flex flex-col gap-1.5">
-                    <span className="text-xs font-mono text-slate-500 dark:text-zinc-400">
-                      Inodes Count:
-                    </span>
-                    <strong className="text-slate-900 dark:text-white whitespace-nowrap font-mono tabular-nums text-base font-bold">
-                      {activeService.inodesUsed.toLocaleString()} / {activeService.inodeLimit.toLocaleString()}
-                    </strong>
-                    <div className="w-full h-1.5 rounded-full bg-slate-200 dark:bg-zinc-800 overflow-hidden mt-1">
-                      <div
-                        className="h-full bg-emerald-500 rounded-full"
-                        style={{ width: `${(activeService.inodesUsed / activeService.inodeLimit) * 100}%` }}
-                      />
-                    </div>
-                    <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 text-right">
-                      {Math.round((activeService.inodesUsed / activeService.inodeLimit) * 100)}% (87% Spared)
-                    </span>
-                  </div>
-
-                  {/* RAM Allocation */}
-                  <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/60 border border-slate-200 dark:border-white/5 flex flex-col gap-1.5">
-                    <span className="text-xs font-mono text-slate-500 dark:text-zinc-400">
-                      Isolated LVE RAM:
-                    </span>
-                    <strong className="text-slate-900 dark:text-white whitespace-nowrap font-mono tabular-nums text-base font-bold">
-                      {activeService.ramUsedMB} MB / {activeService.ramLimitMB} MB
-                    </strong>
-                    <div className="w-full h-1.5 rounded-full bg-slate-200 dark:bg-zinc-800 overflow-hidden mt-1">
-                      <div
-                        className="h-full bg-indigo-500 rounded-full"
-                        style={{ width: `${(activeService.ramUsedMB / activeService.ramLimitMB) * 100}%` }}
-                      />
-                    </div>
-                    <span className="text-[10px] font-mono text-slate-400 text-right">
-                      {Math.round((activeService.ramUsedMB / activeService.ramLimitMB) * 100)}% Dedicated
-                    </span>
-                  </div>
-
-                  {/* Runtime Engine */}
-                  <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/60 border border-slate-200 dark:border-white/5 flex flex-col gap-1.5">
-                    <span className="text-xs font-mono text-slate-500 dark:text-zinc-400">
-                      Runtime Engine:
-                    </span>
-                    <strong className="text-blue-600 dark:text-blue-400 whitespace-nowrap font-mono text-base font-bold">
-                      {activeService.nodeVersion}
-                    </strong>
-                    <div className="text-[11px] font-mono text-slate-500 dark:text-zinc-400 mt-1">
-                      Passenger Rolling Reload
-                    </div>
-                    <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400">
-                      Active: 2.8s reload time
-                    </span>
+                  <div className="pt-2">
+                    <Link
+                      href="/#pricing"
+                      className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-sm transition-colors shadow-lg shadow-blue-600/25 cursor-pointer"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>Deploy New Cloud Service</span>
+                    </Link>
                   </div>
                 </div>
-              </div>
+              ) : (
+                <div className="p-6 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs space-y-5">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100 dark:border-white/5">
+                    <div>
+                      <div className="flex items-center gap-2.5">
+                        <h2 className="text-lg font-bold text-slate-900 dark:text-white">
+                          {activeService.domain}
+                        </h2>
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800">
+                          {activeService.status}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-500 dark:text-zinc-400 font-mono mt-1">
+                        {activeService.planName} • Node IP: {activeService.ipAddress} • {activeService.datacenter}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('services')}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 text-xs font-semibold hover:bg-blue-100 transition-colors cursor-pointer"
+                    >
+                      <span>Manage Service &amp; Git Pipelines</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  {/* 4 Telemetry Boxes with strict vertical layout & zero wrapping */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    {/* Disk Quota */}
+                    <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/60 border border-slate-200 dark:border-white/5 flex flex-col gap-1.5">
+                      <span className="text-xs font-mono text-slate-500 dark:text-zinc-400">
+                        NVMe Disk Quota:
+                      </span>
+                      <strong className="text-slate-900 dark:text-white whitespace-nowrap font-mono tabular-nums text-base font-bold">
+                        {activeService.diskUsedGB} GB / {activeService.diskLimitGB} GB
+                      </strong>
+                      <div className="w-full h-1.5 rounded-full bg-slate-200 dark:bg-zinc-800 overflow-hidden mt-1">
+                        <div
+                          className="h-full bg-blue-600 rounded-full"
+                          style={{ width: `${(activeService.diskUsedGB / Math.max(1, activeService.diskLimitGB)) * 100}%` }}
+                        />
+                      </div>
+                      <span className="text-[10px] font-mono text-slate-400 text-right">
+                        {Math.round((activeService.diskUsedGB / Math.max(1, activeService.diskLimitGB)) * 100)}% Used
+                      </span>
+                    </div>
+
+                    {/* Inodes Count */}
+                    <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/60 border border-slate-200 dark:border-white/5 flex flex-col gap-1.5">
+                      <span className="text-xs font-mono text-slate-500 dark:text-zinc-400">
+                        Inodes Count:
+                      </span>
+                      <strong className="text-slate-900 dark:text-white whitespace-nowrap font-mono tabular-nums text-base font-bold">
+                        {activeService.inodesUsed.toLocaleString()} / {activeService.inodeLimit.toLocaleString()}
+                      </strong>
+                      <div className="w-full h-1.5 rounded-full bg-slate-200 dark:bg-zinc-800 overflow-hidden mt-1">
+                        <div
+                          className="h-full bg-emerald-500 rounded-full"
+                          style={{ width: `${(activeService.inodesUsed / Math.max(1, activeService.inodeLimit)) * 100}%` }}
+                        />
+                      </div>
+                      <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 text-right">
+                        {Math.round((activeService.inodesUsed / Math.max(1, activeService.inodeLimit)) * 100)}% Used
+                      </span>
+                    </div>
+
+                    {/* RAM Allocation */}
+                    <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/60 border border-slate-200 dark:border-white/5 flex flex-col gap-1.5">
+                      <span className="text-xs font-mono text-slate-500 dark:text-zinc-400">
+                        Isolated LVE RAM:
+                      </span>
+                      <strong className="text-slate-900 dark:text-white whitespace-nowrap font-mono tabular-nums text-base font-bold">
+                        {activeService.ramUsedMB} MB / {activeService.ramLimitMB} MB
+                      </strong>
+                      <div className="w-full h-1.5 rounded-full bg-slate-200 dark:bg-zinc-800 overflow-hidden mt-1">
+                        <div
+                          className="h-full bg-indigo-500 rounded-full"
+                          style={{ width: `${(activeService.ramUsedMB / Math.max(1, activeService.ramLimitMB)) * 100}%` }}
+                        />
+                      </div>
+                      <span className="text-[10px] font-mono text-slate-400 text-right">
+                        {Math.round((activeService.ramUsedMB / Math.max(1, activeService.ramLimitMB)) * 100)}% Dedicated
+                      </span>
+                    </div>
+
+                    {/* Runtime Engine */}
+                    <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/60 border border-slate-200 dark:border-white/5 flex flex-col gap-1.5">
+                      <span className="text-xs font-mono text-slate-500 dark:text-zinc-400">
+                        Runtime Engine:
+                      </span>
+                      <strong className="text-blue-600 dark:text-blue-400 whitespace-nowrap font-mono text-base font-bold">
+                        {activeService.nodeVersion}
+                      </strong>
+                      <div className="text-[11px] font-mono text-slate-500 dark:text-zinc-400 mt-1">
+                        Passenger Rolling Reload
+                      </div>
+                      <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400">
+                        Active: 2.8s reload time
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Quick Summary Grid */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -998,7 +1040,32 @@ export default function CustomerDashboardPage() {
              ========================================================================= */}
           {activeTab === 'services' && (
             <div className="space-y-6 animate-in fade-in duration-150">
-              {/* Service Selector Tabs */}
+              {services.length === 0 ? (
+                <div className="p-12 rounded-3xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] text-center space-y-4">
+                  <div className="w-16 h-16 rounded-2xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center mx-auto">
+                    <Layers className="w-8 h-8" />
+                  </div>
+                  <div className="space-y-1">
+                    <h3 className="text-xl font-bold text-slate-900 dark:text-white">
+                      No Hosting Services Active
+                    </h3>
+                    <p className="text-sm text-slate-500 dark:text-zinc-400 max-w-md mx-auto">
+                      You do not have any provisioned instances right now. Deploy your first developer container with 1-click Git auto-deploy.
+                    </p>
+                  </div>
+                  <div className="pt-2">
+                    <Link
+                      href="/#pricing"
+                      className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-sm transition-colors shadow-lg shadow-blue-600/25"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>Explore Cloud Hosting Plans</span>
+                    </Link>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {/* Service Selector Tabs */}
               <div className="flex items-center gap-2 overflow-x-auto pb-1">
                 {services.map((srv) => (
                   <button
@@ -1445,6 +1512,8 @@ export default function CustomerDashboardPage() {
                   )}
                 </div>
               </div>
+                </>
+              )}
             </div>
           )}
 
@@ -1472,6 +1541,40 @@ export default function CustomerDashboardPage() {
                   <span>Transfer In Existing Domain</span>
                 </button>
               </div>
+
+              {domains.length === 0 ? (
+                <div className="p-12 rounded-3xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] text-center space-y-4">
+                  <div className="w-16 h-16 rounded-2xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto">
+                    <Globe className="w-8 h-8" />
+                  </div>
+                  <div className="space-y-1">
+                    <h3 className="text-xl font-bold text-slate-900 dark:text-white">
+                      No Domains Registered
+                    </h3>
+                    <p className="text-sm text-slate-500 dark:text-zinc-400 max-w-md mx-auto">
+                      Search and register your ideal domain with instant DNS activation, free WHOIS privacy, and DNSSEC protection.
+                    </p>
+                  </div>
+                  <div className="pt-2 flex flex-wrap items-center justify-center gap-3">
+                    <Link
+                      href="/domains"
+                      className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-sm transition-colors shadow-lg shadow-emerald-600/25"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>Register New Domain</span>
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => setIsTransferInModalOpen(true)}
+                      className="inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-slate-100 dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 hover:bg-slate-200 font-semibold text-sm transition-colors cursor-pointer"
+                    >
+                      <ArrowRight className="w-3.5 h-3.5" />
+                      <span>Transfer In Domain</span>
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
 
               {/* Floating Bulk Action Bar (when domains selected) */}
               {selectedDomainIds.length > 0 && (
@@ -1563,6 +1666,8 @@ export default function CustomerDashboardPage() {
                   );
                 })}
               </div>
+                </>
+              )}
             </div>
           )}
 
@@ -1595,7 +1700,12 @@ export default function CustomerDashboardPage() {
               <div className="space-y-3">
                 <h3 className="text-sm font-bold text-slate-900 dark:text-white">Itemized Invoice History</h3>
                 <div className="rounded-xl border border-slate-200 dark:border-white/10 overflow-hidden divide-y divide-slate-100 dark:divide-white/5">
-                  {invoices.map((inv) => (
+                  {invoices.length === 0 ? (
+                    <div className="p-8 text-center text-xs text-slate-400 font-mono bg-white dark:bg-zinc-950/40">
+                      No invoices found. When you purchase hosting or domains, your itemized tax invoices will be listed here.
+                    </div>
+                  ) : (
+                    invoices.map((inv) => (
                     <div
                       key={inv.id}
                       className="p-4 bg-white dark:bg-zinc-950/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-mono"
@@ -1637,7 +1747,7 @@ export default function CustomerDashboardPage() {
                         </button>
                       </div>
                     </div>
-                  ))}
+                  )))}
                 </div>
               </div>
             </div>

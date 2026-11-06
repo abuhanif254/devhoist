@@ -16,16 +16,16 @@ import {
   Zap,
   Sparkles,
   Tag,
-  Clock,
-  MessageSquare,
-  HelpCircle,
   CreditCard,
   Wallet,
   Phone,
   Key,
   Lock,
   Loader2,
-  ExternalLink,
+  Copy,
+  Check,
+  AlertTriangle,
+  Info,
 } from 'lucide-react';
 import { useBilling } from '@/context/BillingContext';
 import { usePortal } from '@/context/PortalContext';
@@ -95,14 +95,8 @@ const PLAN_SPECS: Record<
 
 export default function StackBuilderDrawer() {
   const router = useRouter();
-  const {
-    isStackBuilderOpen,
-    closeStackBuilder,
-    stackBuilderConfig,
-    currency,
-  } = useBilling();
-
-  const { walletBalanceBDT, provisionNewOrder } = usePortal();
+  const { isStackBuilderOpen, closeStackBuilder, stackBuilderConfig, currency } = useBilling();
+  const { walletBalanceBDT, currentUser } = usePortal();
 
   const [region, setRegion] = useState<Region>('sg');
   const [appStack, setAppStack] = useState<AppStack>('nextjs_git');
@@ -111,16 +105,19 @@ export default function StackBuilderDrawer() {
   const [promoApplied, setPromoApplied] = useState(false);
   const [promoError, setPromoError] = useState<string | null>(null);
 
-  // In-App Checkout Modal State
+  // Real Payment Flow State
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('bKash');
-  const [customerPhone, setCustomerPhone] = useState('01712345678');
   const [customDomainInput, setCustomDomainInput] = useState('');
+  const [paymentStep, setPaymentStep] = useState<'select' | 'manual_verification' | 'submitted'>('select');
 
-  // Live 4-Step Provisioning Simulation State
-  const [isProvisioning, setIsProvisioning] = useState(false);
-  const [provisionStep, setProvisionStep] = useState(0);
-  const [provisionLogs, setProvisionLogs] = useState<string[]>([]);
+  // Manual Verification Inputs
+  const [createdInvoiceNumber, setCreatedInvoiceNumber] = useState<string>('');
+  const [senderNumber, setSenderNumber] = useState<string>('');
+  const [trxId, setTrxId] = useState<string>('');
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [verificationError, setVerificationError] = useState<string | null>(null);
+  const [copiedInvoice, setCopiedInvoice] = useState(false);
 
   if (!isStackBuilderOpen) return null;
 
@@ -149,6 +146,8 @@ export default function StackBuilderDrawer() {
       : Number((subtotal * 0.8).toFixed(2))
     : subtotal;
 
+  const finalAmountBDT = isBDT ? Number(finalTotal) : Math.round(Number(finalTotal) * 120);
+
   const handleApplyPromo = () => {
     setPromoError(null);
     const clean = promoInput.trim().toUpperCase();
@@ -161,674 +160,670 @@ export default function StackBuilderDrawer() {
     }
   };
 
-  const externalWhmcsCartUrl = `${WHMCS_CONFIG.baseUrl}/cart.php?a=add&pid=${pid}&billingcycle=${cycle}&currency=${currency === 'BDT' ? 1 : 2}`;
+  const copyInvoiceNumber = () => {
+    if (createdInvoiceNumber) {
+      navigator.clipboard.writeText(createdInvoiceNumber);
+      setCopiedInvoice(true);
+      setTimeout(() => setCopiedInvoice(false), 2000);
+    }
+  };
 
-  // Execute In-App Payment & 4-Step Live Provisioning
-  const handleExecutePayment = async () => {
-    setIsProvisioning(true);
-    setProvisionStep(1);
-    setProvisionLogs([
-      `[PROV 00:00:01] Initiating secure gateway handshake with ${paymentMethod}...`,
-    ]);
+  // Step A: Initiate Payment Session
+  const handleProceedToPayment = async () => {
+    setIsSubmitting(true);
+    setVerificationError(null);
 
-    // Step 1: Verify trxID (1.2s)
-    await new Promise((res) => setTimeout(res, 1000));
-    const randomTrx = `${paymentMethod.toUpperCase()}_${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
-    setProvisionStep(2);
-    setProvisionLogs((prev) => [
-      ...prev,
-      `[PROV 00:00:02] Transaction verified: ${randomTrx} (Status: CAPTURED)`,
-      `[PROV 00:00:02] Contacting WHM Master node at ${region === 'sg' ? '103.145.22.40 (Singapore SG1)' : '198.51.100.22 (USA East)'}...`,
-      `[PROV 00:00:03] Allocating CloudLinux LVE Container: ${specs.ram} RAM, ${specs.cpu} CPU, ${specs.inodes} Inodes.`,
-    ]);
+    // If User chooses Wallet Checkout
+    if (paymentMethod === 'Wallet') {
+      if (walletBalanceBDT < finalAmountBDT) {
+        setVerificationError(
+          `Insufficient Wallet Balance. Current: ৳${walletBalanceBDT}, Required: ৳${finalAmountBDT}. Please top up your wallet first.`
+        );
+        setIsSubmitting(false);
+        return;
+      }
 
-    // Step 2: Container allocation (1.2s)
-    await new Promise((res) => setTimeout(res, 1200));
-    setProvisionStep(3);
-    setProvisionLogs((prev) => [
-      ...prev,
-      `[PROV 00:00:04] LVE Container successfully provisioned. User vhost created: /home/usr_${Math.random().toString(36).substring(2, 8)}`,
-      `[PROV 00:00:04] Requesting Sectigo / Let's Encrypt Wildcard TLS 1.3 AutoSSL Certificate...`,
-      `[PROV 00:00:05] Generating 4096-bit ED25519 Jailed SSH keypairs...`,
-    ]);
+      try {
+        const invRes = await fetch('/api/payments/create-session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            amount: finalAmountBDT,
+            currency: 'BDT',
+            method: 'wallet',
+            domain: effectiveDomain,
+            planId: String(pid),
+            userId: currentUser?.id,
+            customerEmail: currentUser?.email,
+            customerName: currentUser?.name,
+          }),
+        });
+        const invData = await invRes.json();
+        const invoiceNum = invData.invoiceNumber;
 
-    // Step 3: SSL & Keys (1.2s)
-    await new Promise((res) => setTimeout(res, 1200));
-    setProvisionStep(4);
-    setProvisionLogs((prev) => [
-      ...prev,
-      `[PROV 00:00:06] Wildcard SSL certificate issued & deployed to edge SNI.`,
-      `[PROV 00:00:06] Runtime stack initialized: ${appStack.replace('_', ' ').toUpperCase()}`,
-      `[PROV 00:00:07] Provisioning Complete! Container ready. Syncing with Dashboard...`,
-    ]);
+        const payRes = await fetch('/api/payments/wallet-pay', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: currentUser?.id,
+            invoiceNumber: invoiceNum,
+            amount: finalAmountBDT,
+            domain: effectiveDomain,
+            planName: planName,
+          }),
+        });
 
-    // Step 4: Inject into Portal Context & Navigate
-    await new Promise((res) => setTimeout(res, 1000));
+        const payData = await payRes.json();
+        if (payData.success) {
+          setIsPaymentModalOpen(false);
+          closeStackBuilder();
+          router.push('/dashboard?tab=services&paid=1');
+        } else {
+          setVerificationError(payData.error || 'Wallet payment failed');
+        }
+      } catch (err: any) {
+        setVerificationError(err.message || 'Payment failed');
+      } finally {
+        setIsSubmitting(false);
+      }
+      return;
+    }
 
-    // Call live backend webhook to provision real WHM cPanel & sync Supabase
-    const finalAmountBDT = typeof finalTotal === 'number' ? (isBDT ? finalTotal : Math.round(finalTotal * 120)) : 450;
-    fetch('/api/payments/webhook', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        invoice_number: `INV-${new Date().getFullYear()}-${Math.floor(100000 + Math.random() * 900000)}`,
-        trx_id: randomTrx,
-        amount_bdt: finalAmountBDT,
-        domain: effectiveDomain,
-        plan_name: `${planName}`,
-        gateway: paymentMethod.toLowerCase(),
-      }),
-    }).catch((err) => console.warn('[Backend Webhook Sync Notice]', err));
+    // If User chooses bKash / Nagad / Stripe
+    try {
+      const res = await fetch('/api/payments/create-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amount: finalAmountBDT,
+          currency: 'BDT',
+          method: paymentMethod.toLowerCase(),
+          domain: effectiveDomain,
+          planId: String(pid),
+          userId: currentUser?.id,
+          customerEmail: currentUser?.email,
+          customerName: currentUser?.name,
+        }),
+      });
 
-    const newServiceId = await provisionNewOrder({
-      planId: pid === 1 ? 'starter' : pid === 2 ? 'developer-pro' : 'business-max',
-      planName: `${planName}`,
-      domain: effectiveDomain,
-      region,
-      appStack,
-      paymentMethod,
-      trxId: randomTrx,
-      billingCycle: cycle,
-      priceBDT: finalAmountBDT,
-    });
+      const data = await res.json();
+      if (!data.success) {
+        throw new Error(data.error || 'Failed to initialize payment session');
+      }
 
-    setIsProvisioning(false);
-    setIsPaymentModalOpen(false);
-    closeStackBuilder();
+      // If official gateway redirect URL exists (e.g. live UddoktaPay or Stripe checkout)
+      if (data.paymentUrl && (data.mode === 'live_uddoktapay' || data.mode === 'live_stripe' || data.mode === 'live_bkash')) {
+        window.location.href = data.paymentUrl;
+        return;
+      }
 
-    // Redirect to customer dashboard
-    router.push('/dashboard?tab=services');
+      // Real Merchant bKash/Nagad verification queue
+      setCreatedInvoiceNumber(data.invoiceNumber);
+      setPaymentStep('manual_verification');
+    } catch (err: any) {
+      setVerificationError(err.message || 'Failed to start payment');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Step B: Submit Real trxID for Admin Verification
+  const handleSubmitTrxId = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setVerificationError(null);
+
+    const BD_PHONE_REGEX = /^01[3-9]\d{8}$/;
+    const TRX_REGEX = /^[A-Z0-9]{8,12}$/i;
+
+    if (!BD_PHONE_REGEX.test(senderNumber.trim())) {
+      setVerificationError('Please enter a valid 11-digit Bangladesh mobile number (e.g. 01712345678).');
+      return;
+    }
+
+    if (!TRX_REGEX.test(trxId.trim())) {
+      setVerificationError('Transaction ID (trxID) must be 8 to 12 alphanumeric characters (e.g. 9K72LM89QP).');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const res = await fetch('/api/payments/submit-trxid', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          invoiceNumber: createdInvoiceNumber,
+          senderNumber: senderNumber.trim(),
+          trxId: trxId.trim().toUpperCase(),
+          gateway: paymentMethod,
+          amount: finalAmountBDT,
+          customerName: currentUser?.name || 'Customer',
+          userId: currentUser?.id,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to submit transaction ID');
+      }
+
+      setPaymentStep('submitted');
+    } catch (err: any) {
+      setVerificationError(err.message || 'Failed to submit transaction ID');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
     <div className="fixed inset-0 z-50 overflow-hidden">
       {/* Backdrop */}
       <div
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity"
+        className="fixed inset-0 bg-black/60 backdrop-blur-xs transition-opacity duration-300"
         onClick={closeStackBuilder}
       />
 
-      {/* Main Drawer Container */}
+      {/* Drawer Panel */}
       <div className="fixed inset-y-0 right-0 max-w-full flex pl-10">
-        <div className="w-screen max-w-xl bg-white dark:bg-zinc-950 border-l border-slate-200 dark:border-white/[0.08] shadow-2xl flex flex-col justify-between">
-          {/* Drawer Header */}
-          <div className="p-6 border-b border-slate-200 dark:border-white/[0.08] flex items-center justify-between">
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                <h2 className="text-lg font-bold text-slate-900 dark:text-zinc-50">Custom Stack Builder</h2>
+        <div className="w-screen max-w-2xl bg-white dark:bg-zinc-950 border-l border-slate-200 dark:border-white/10 shadow-2xl flex flex-col justify-between">
+          {/* Header */}
+          <div className="p-6 border-b border-slate-200 dark:border-white/10 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-blue-600/10 border border-blue-500/20 text-blue-600 dark:text-blue-400 flex items-center justify-center font-bold">
+                <Server className="w-5 h-5" />
               </div>
-              <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
-                Configure your isolated compute environment before checkout
-              </p>
+              <div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                  Configure Your Cloud Server
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-zinc-400">
+                  Select your datacenter node, runtime stack, and billing cycle.
+                </p>
+              </div>
             </div>
             <button
               onClick={closeStackBuilder}
-              className="p-2 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-900 transition-colors cursor-pointer"
+              className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200 cursor-pointer"
             >
               <X className="w-5 h-5" />
             </button>
           </div>
 
-          {/* Drawer Body (Scrollable) */}
-          <div className="flex-1 overflow-y-auto p-6 space-y-6">
-            {/* Target Domain Input */}
-            <div className="space-y-2">
-              <label className="text-xs font-mono uppercase tracking-wider text-slate-500 dark:text-zinc-400 flex items-center justify-between">
-                <span>Target Domain Name</span>
-                <span className="text-[10px] text-blue-600 dark:text-blue-400 lowercase">can change later</span>
+          {/* Body */}
+          <div className="p-6 overflow-y-auto space-y-6 flex-1 text-xs">
+            {/* Primary Domain Input */}
+            <div className="space-y-1.5">
+              <label className="font-semibold text-slate-800 dark:text-zinc-200">
+                Primary Domain or Subdomain
               </label>
               <div className="relative">
-                <Globe className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <Globe className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
+                  placeholder="e.g. myapp.com or staging.myapp.com"
                   value={customDomainInput}
                   onChange={(e) => setCustomDomainInput(e.target.value)}
-                  placeholder={stackBuilderConfig?.domainName || 'e.g. ecommerce-live.com'}
-                  className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-50 dark:bg-zinc-900/60 border border-slate-200 dark:border-white/10 text-sm font-mono text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-blue-500"
+                  className="w-full h-10 pl-9 pr-3 rounded-xl border border-slate-300 dark:border-white/10 bg-slate-50 dark:bg-zinc-900 font-mono text-slate-900 dark:text-white"
                 />
               </div>
             </div>
 
-            {/* Selected Base Plan Summary */}
-            <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-900/50 border border-slate-200 dark:border-white/[0.08] flex items-center justify-between">
-              <div>
-                <span className="text-[10px] font-mono uppercase tracking-wider text-blue-600 dark:text-blue-400 font-semibold">
-                  Selected Base Tier
-                </span>
-                <div className="text-base font-bold text-slate-900 dark:text-zinc-100">{planName}</div>
-                <div className="text-xs text-slate-500 dark:text-zinc-400 font-mono mt-0.5">
-                  {specs.ram} Dedicated RAM • {specs.cpu} CPU • {specs.storage} NVMe
-                </div>
-              </div>
-              <div className="text-right">
-                <div className="text-lg font-bold font-mono text-slate-900 dark:text-zinc-50">
-                  {symbol}{baseMonthly}
-                  <span className="text-xs font-normal text-slate-500 dark:text-zinc-400">/mo</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Region Selector */}
-            <div className="space-y-3">
-              <label className="text-xs font-mono uppercase tracking-wider text-slate-500 dark:text-zinc-400 flex items-center gap-1.5">
-                <Globe className="w-3.5 h-3.5" />
-                <span>1. Datacenter Region (Direct BDIX vs Global)</span>
+            {/* Region Selection */}
+            <div className="space-y-2">
+              <label className="font-semibold text-slate-800 dark:text-zinc-200">
+                Datacenter Location
               </label>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {REGION_OPTIONS.map((reg) => {
-                  const isSelected = region === reg.id;
-                  return (
-                    <button
-                      key={reg.id}
-                      type="button"
-                      onClick={() => setRegion(reg.id)}
-                      className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer relative ${
-                        isSelected
-                          ? 'bg-blue-50/50 dark:bg-blue-950/20 border-blue-500 ring-1 ring-blue-500'
-                          : 'bg-slate-50 dark:bg-zinc-900/30 border-slate-200 dark:border-white/[0.06] hover:border-slate-300 dark:hover:border-white/10'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-xs font-bold text-slate-900 dark:text-zinc-100">{reg.name}</span>
-                        <span className="text-[10px] px-1.5 py-0.5 rounded font-mono bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300">
-                          {reg.latency}
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-slate-500 dark:text-zinc-400 leading-snug">{reg.desc}</p>
-                    </button>
-                  );
-                })}
+                {REGION_OPTIONS.map((reg) => (
+                  <button
+                    key={reg.id}
+                    type="button"
+                    onClick={() => setRegion(reg.id)}
+                    className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer ${
+                      region === reg.id
+                        ? 'border-blue-600 bg-blue-50/50 dark:bg-blue-950/20 ring-1 ring-blue-600'
+                        : 'border-slate-200 dark:border-white/10 bg-white dark:bg-zinc-900'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between font-bold text-slate-900 dark:text-white">
+                      <span>{reg.name}</span>
+                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
+                        {reg.latency}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-1">{reg.desc}</p>
+                  </button>
+                ))}
               </div>
             </div>
 
-            {/* App Stack Selector */}
-            <div className="space-y-3">
-              <label className="text-xs font-mono uppercase tracking-wider text-slate-500 dark:text-zinc-400 flex items-center gap-1.5">
-                <Terminal className="w-3.5 h-3.5" />
-                <span>2. Application Pre-Install Stack</span>
+            {/* App Stack Selection */}
+            <div className="space-y-2">
+              <label className="font-semibold text-slate-800 dark:text-zinc-200">
+                Runtime Stack &amp; Framework
               </label>
-              <div className="grid grid-cols-1 gap-2.5">
-                {STACK_OPTIONS.map((opt) => {
-                  const isSelected = appStack === opt.id;
-                  const Icon = opt.icon;
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {STACK_OPTIONS.map((stk) => {
+                  const Icon = stk.icon;
                   return (
                     <button
-                      key={opt.id}
+                      key={stk.id}
                       type="button"
-                      onClick={() => setAppStack(opt.id)}
-                      className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex items-start gap-3 ${
-                        isSelected
-                          ? 'bg-blue-50/50 dark:bg-blue-950/20 border-blue-500 ring-1 ring-blue-500'
-                          : 'bg-slate-50 dark:bg-zinc-900/30 border-slate-200 dark:border-white/[0.06] hover:border-slate-300 dark:hover:border-white/10'
+                      onClick={() => setAppStack(stk.id)}
+                      className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer ${
+                        appStack === stk.id
+                          ? 'border-blue-600 bg-blue-50/50 dark:bg-blue-950/20 ring-1 ring-blue-600'
+                          : 'border-slate-200 dark:border-white/10 bg-white dark:bg-zinc-900'
                       }`}
                     >
-                      <div className={`p-2 rounded-lg mt-0.5 ${isSelected ? 'bg-blue-600 text-white' : 'bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400'}`}>
-                        <Icon className="w-4 h-4" />
+                      <div className="flex items-center gap-2 font-bold text-slate-900 dark:text-white">
+                        <Icon className="w-4 h-4 text-blue-600" />
+                        <span>{stk.name}</span>
                       </div>
-                      <div className="flex-1">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-bold text-slate-900 dark:text-zinc-100">{opt.name}</span>
-                          <span className="text-[10px] text-slate-500 dark:text-zinc-400 font-mono">{opt.subtitle}</span>
-                        </div>
-                        <p className="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5">{opt.desc}</p>
-                      </div>
+                      <p className="text-[11px] text-slate-500 mt-1">{stk.desc}</p>
                     </button>
                   );
                 })}
               </div>
             </div>
 
-            {/* Billing Cycle Selector (Monthly vs Annually) */}
-            <div className="space-y-3">
-              <label className="text-xs font-mono uppercase tracking-wider text-slate-500 dark:text-zinc-400 flex items-center justify-between">
-                <span>3. Billing Cycle</span>
-                <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 font-semibold">
-                  20% Off Annual Plans
-                </span>
+            {/* Billing Cycle */}
+            <div className="space-y-2">
+              <label className="font-semibold text-slate-800 dark:text-zinc-200">
+                Billing Cycle
               </label>
               <div className="grid grid-cols-2 gap-3">
                 <button
                   type="button"
                   onClick={() => setCycle('monthly')}
-                  className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                  className={`p-3 rounded-xl border text-center transition-all cursor-pointer ${
                     cycle === 'monthly'
-                      ? 'bg-blue-50/50 dark:bg-blue-950/20 border-blue-500 ring-1 ring-blue-500'
-                      : 'bg-slate-50 dark:bg-zinc-900/30 border-slate-200 dark:border-white/[0.06]'
+                      ? 'border-blue-600 bg-blue-50/50 dark:bg-blue-950/20 font-bold text-blue-600'
+                      : 'border-slate-200 dark:border-white/10'
                   }`}
                 >
-                  <div className="text-xs font-bold text-slate-900 dark:text-zinc-100">Monthly Billing</div>
-                  <div className="text-xs font-mono text-slate-500 dark:text-zinc-400 mt-1">
-                    {symbol}{baseMonthly}/mo
-                  </div>
+                  Monthly ({symbol}{baseMonthly}/mo)
                 </button>
-
                 <button
                   type="button"
                   onClick={() => setCycle('annually')}
-                  className={`p-3 rounded-xl border text-left transition-all cursor-pointer relative ${
+                  className={`p-3 rounded-xl border text-center transition-all cursor-pointer ${
                     cycle === 'annually'
-                      ? 'bg-blue-50/50 dark:bg-blue-950/20 border-blue-500 ring-1 ring-blue-500'
-                      : 'bg-slate-50 dark:bg-zinc-900/30 border-slate-200 dark:border-white/[0.06]'
+                      ? 'border-blue-600 bg-blue-50/50 dark:bg-blue-950/20 font-bold text-blue-600'
+                      : 'border-slate-200 dark:border-white/10'
                   }`}
                 >
-                  <span className="absolute -top-2 right-2 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-emerald-500 text-white font-mono">
-                    SAVE 20%
-                  </span>
-                  <div className="text-xs font-bold text-slate-900 dark:text-zinc-100">Annual (12 Months)</div>
-                  <div className="text-xs font-mono text-emerald-600 dark:text-emerald-400 font-semibold mt-1">
-                    {symbol}{effectiveMonthly}/mo
-                    <span className="text-slate-400 font-normal ml-1">({symbol}{effectiveMonthly * 12}/yr)</span>
-                  </div>
+                  Annually (Save 20% — {symbol}{effectiveMonthly}/mo)
                 </button>
               </div>
             </div>
 
             {/* Promo Code Input */}
-            <div className="space-y-2">
-              <label className="text-xs font-mono uppercase tracking-wider text-slate-500 dark:text-zinc-400 flex items-center gap-1.5">
-                <Tag className="w-3.5 h-3.5" />
-                <span>Promo / Coupon Code</span>
-              </label>
+            <div className="space-y-1.5">
               <div className="flex gap-2">
                 <input
                   type="text"
+                  placeholder="Voucher code (e.g. DEVPRO20)"
                   value={promoInput}
                   onChange={(e) => setPromoInput(e.target.value)}
-                  placeholder="e.g. DEVPRO20"
-                  className="flex-1 px-3 py-2 rounded-lg bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono text-slate-900 dark:text-zinc-100 uppercase placeholder:normal-case"
+                  className="flex-1 h-9 px-3 rounded-lg border border-slate-300 dark:border-white/10 bg-slate-50 dark:bg-zinc-900 font-mono uppercase"
                 />
                 <button
                   type="button"
                   onClick={handleApplyPromo}
-                  className="px-4 py-2 rounded-lg bg-slate-200 hover:bg-slate-300 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-xs font-semibold text-slate-800 dark:text-zinc-200 transition-colors cursor-pointer"
+                  className="px-3 h-9 rounded-lg bg-slate-900 text-white font-semibold cursor-pointer"
                 >
                   Apply
                 </button>
               </div>
+              {promoError && <p className="text-[11px] text-rose-500">{promoError}</p>}
               {promoApplied && (
-                <p className="text-xs text-emerald-600 dark:text-emerald-400 font-mono flex items-center gap-1">
-                  <CheckCircle2 className="w-3.5 h-3.5" /> Promo DEVPRO20 applied! 20% extra discount included.
+                <p className="text-[11px] text-emerald-600 font-semibold">
+                  ✓ Coupon applied: 20% discount activated!
                 </p>
-              )}
-              {promoError && (
-                <p className="text-xs text-rose-500 font-mono">{promoError}</p>
               )}
             </div>
           </div>
 
-          {/* Drawer Footer / Dual Option Checkout */}
-          <div className="p-6 border-t border-slate-200 dark:border-white/[0.08] bg-slate-50 dark:bg-zinc-950/95 space-y-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-xs text-slate-500 dark:text-zinc-400 font-mono">Total Billed Today</div>
-                <div className="text-2xl font-bold font-mono text-slate-900 dark:text-zinc-50">
-                  {symbol}{finalTotal}
-                  <span className="text-xs font-normal text-slate-500 dark:text-zinc-400 ml-1">
-                    {isAnnual ? '/year' : '/month'}
-                  </span>
-                </div>
-              </div>
-              <div className="text-right">
-                <span className="inline-flex items-center gap-1 text-[11px] font-mono text-emerald-600 dark:text-emerald-400 font-semibold">
-                  <ShieldCheck className="w-3.5 h-3.5" /> 30-Day Money-Back
-                </span>
-                <div className="text-[11px] text-slate-500 dark:text-zinc-500">Instant Provision in 2.8s</div>
-              </div>
+          {/* Footer Checkout Bar */}
+          <div className="p-6 border-t border-slate-200 dark:border-white/10 bg-slate-50/50 dark:bg-zinc-900/50 flex items-center justify-between">
+            <div>
+              <span className="text-[11px] text-slate-500 block uppercase font-mono">
+                Total Payable:
+              </span>
+              <span className="text-xl font-extrabold text-slate-900 dark:text-white font-mono">
+                {symbol}{finalTotal}
+              </span>
             </div>
 
-            {/* Primary Option A: In-App Checkout & Live Provisioning */}
             <button
               type="button"
-              onClick={() => setIsPaymentModalOpen(true)}
-              className="w-full inline-flex items-center justify-center gap-2 h-11 px-5 rounded-lg text-sm font-semibold bg-blue-600 hover:bg-blue-700 text-white transition-all shadow-md shadow-blue-600/20 group cursor-pointer"
+              onClick={() => {
+                setPaymentStep('select');
+                setIsPaymentModalOpen(true);
+              }}
+              className="px-6 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-md shadow-blue-500/20 transition-all flex items-center gap-2 cursor-pointer"
             >
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span>Instant In-App Checkout &amp; Auto-Provision</span>
-              <ArrowRight className="w-4 h-4 stroke-[2.5] group-hover:translate-x-0.5 transition-transform" />
+              <span>Proceed to Real Checkout</span>
+              <ArrowRight className="w-4 h-4" />
             </button>
-
-            {/* Secondary Option B: External WHMCS Cart Redirect */}
-            <div className="text-center">
-              <a
-                href={externalWhmcsCartUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-slate-800 dark:text-zinc-400 dark:hover:text-zinc-200 underline decoration-slate-300 dark:decoration-zinc-700 transition-colors"
-              >
-                <span>Or checkout via External WHMCS Cart</span>
-                <ExternalLink className="w-3 h-3" />
-              </a>
-            </div>
-
-            {/* Trust Footer */}
-            <div className="flex items-center justify-between pt-1 text-[11px] text-slate-500 dark:text-zinc-400 border-t border-slate-200 dark:border-white/[0.04]">
-              <a
-                href="https://wa.me/8801700000000"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 font-medium hover:underline transition-colors"
-              >
-                <MessageSquare className="w-3 h-3" />
-                <span>WhatsApp Live Provisioning Support</span>
-              </a>
-              <span className="text-slate-300 dark:text-zinc-600">•</span>
-              <span>Zero gateway surcharges</span>
-            </div>
           </div>
         </div>
       </div>
 
       {/* =====================================================================
-          IN-APP PAYMENT MODAL & 4-STEP LIVE PROVISIONING SIMULATOR
+          GENUINE PAYMENT MODAL (ZERO MOCK TIMERS!)
          ===================================================================== */}
       {isPaymentModalOpen && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md animate-in fade-in duration-200">
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md">
           <div className="w-full max-w-lg bg-white dark:bg-zinc-950 border border-slate-200 dark:border-white/10 rounded-2xl shadow-2xl overflow-hidden flex flex-col">
             {/* Modal Header */}
             <div className="p-5 border-b border-slate-200 dark:border-white/10 flex items-center justify-between bg-slate-50/50 dark:bg-zinc-900/50">
-              <div>
-                <div className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                  <CreditCard className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-                  <span>Instant Payment &amp; Auto-Provisioning Gateway</span>
-                </div>
-                <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
-                  Deploying {planName} for <span className="font-mono text-slate-900 dark:text-white">{effectiveDomain}</span>
-                </p>
+              <div className="flex items-center gap-2">
+                <CreditCard className="w-5 h-5 text-blue-600" />
+                <h4 className="text-base font-bold text-slate-900 dark:text-white">
+                  {paymentStep === 'submitted'
+                    ? 'Payment Submitted for Verification'
+                    : 'Real-Time Payment & Activation'}
+                </h4>
               </div>
-              {!isProvisioning && (
-                <button
-                  type="button"
-                  onClick={() => setIsPaymentModalOpen(false)}
-                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200 cursor-pointer"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => setIsPaymentModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200"
+              >
+                <X className="w-5 h-5" />
+              </button>
             </div>
 
-            {/* Modal Content */}
-            <div className="p-6 space-y-5">
-              {!isProvisioning ? (
+            {/* Modal Body */}
+            <div className="p-6 space-y-4 text-xs">
+              {verificationError && (
+                <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/20 border border-rose-200 text-rose-800 dark:text-rose-200 flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{verificationError}</span>
+                </div>
+              )}
+
+              {/* STEP 1: SELECT METHOD */}
+              {paymentStep === 'select' && (
                 <>
-                  {/* Order Spec Snapshot */}
-                  <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-900/70 border border-slate-200 dark:border-white/5 space-y-1.5 text-xs font-mono">
-                    <div className="flex justify-between text-slate-600 dark:text-zinc-400">
-                      <span>Server Node:</span>
-                      <strong className="text-slate-900 dark:text-white">
-                        {region === 'sg' ? 'Singapore SG1 (Equinix)' : 'USA East (Ashburn VA)'}
-                      </strong>
+                  <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 space-y-1 font-mono">
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Service:</span>
+                      <strong className="text-slate-900 dark:text-white">{planName}</strong>
                     </div>
-                    <div className="flex justify-between text-slate-600 dark:text-zinc-400">
-                      <span>Pre-installed Stack:</span>
-                      <strong className="text-slate-900 dark:text-white">
-                        {appStack.replace('_', ' ').toUpperCase()}
-                      </strong>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Domain:</span>
+                      <strong className="text-slate-900 dark:text-white">{effectiveDomain}</strong>
                     </div>
-                    <div className="flex justify-between text-slate-600 dark:text-zinc-400">
-                      <span>Billing Amount:</span>
-                      <strong className="text-emerald-600 dark:text-emerald-400 font-bold text-sm">
-                        {symbol}{finalTotal} ({cycle})
+                    <div className="flex justify-between text-sm pt-1 border-t border-slate-200 dark:border-white/10">
+                      <span className="text-slate-500">Amount:</span>
+                      <strong className="text-emerald-600 dark:text-emerald-400 font-bold">
+                        ৳{finalAmountBDT} BDT
                       </strong>
                     </div>
                   </div>
 
-                  {/* Payment Gateway Tabs */}
                   <div className="space-y-2">
-                    <label className="text-xs font-mono text-slate-500 dark:text-zinc-400 uppercase tracking-wider">
-                      Select Payment Method
+                    <label className="font-semibold text-slate-700 dark:text-zinc-300">
+                      Choose Payment Method
                     </label>
                     <div className="grid grid-cols-2 gap-2.5">
-                      {/* bKash */}
                       <button
                         type="button"
                         onClick={() => setPaymentMethod('bKash')}
-                        className={`p-3 rounded-xl border text-left flex items-center gap-3 transition-all cursor-pointer ${
+                        className={`p-3 rounded-xl border text-left flex items-center gap-3 cursor-pointer ${
                           paymentMethod === 'bKash'
-                            ? 'bg-pink-500/10 border-pink-500 ring-1 ring-pink-500 text-pink-600 dark:text-pink-400'
-                            : 'bg-slate-50 dark:bg-zinc-900/40 border-slate-200 dark:border-white/5 text-slate-700 dark:text-zinc-300'
+                            ? 'bg-pink-500/10 border-pink-500 text-pink-600 font-bold ring-1 ring-pink-500'
+                            : 'border-slate-200 dark:border-white/10'
                         }`}
                       >
-                        <div className="w-8 h-8 rounded-lg bg-pink-600 text-white flex items-center justify-center font-bold text-xs shrink-0">
+                        <div className="w-7 h-7 rounded bg-pink-600 text-white flex items-center justify-center font-bold text-xs shrink-0">
                           bK
                         </div>
                         <div>
-                          <div className="text-xs font-bold">bKash Instant</div>
-                          <div className="text-[10px] opacity-75">PGW Tokenized API</div>
+                          <div className="text-xs font-bold">bKash</div>
+                          <div className="text-[10px] opacity-75">Merchant Verification</div>
                         </div>
                       </button>
 
-                      {/* Nagad */}
                       <button
                         type="button"
                         onClick={() => setPaymentMethod('Nagad')}
-                        className={`p-3 rounded-xl border text-left flex items-center gap-3 transition-all cursor-pointer ${
+                        className={`p-3 rounded-xl border text-left flex items-center gap-3 cursor-pointer ${
                           paymentMethod === 'Nagad'
-                            ? 'bg-orange-500/10 border-orange-500 ring-1 ring-orange-500 text-orange-600 dark:text-orange-400'
-                            : 'bg-slate-50 dark:bg-zinc-900/40 border-slate-200 dark:border-white/5 text-slate-700 dark:text-zinc-300'
+                            ? 'bg-orange-500/10 border-orange-500 text-orange-600 font-bold ring-1 ring-orange-500'
+                            : 'border-slate-200 dark:border-white/10'
                         }`}
                       >
-                        <div className="w-8 h-8 rounded-lg bg-orange-600 text-white flex items-center justify-center font-bold text-xs shrink-0">
+                        <div className="w-7 h-7 rounded bg-orange-600 text-white flex items-center justify-center font-bold text-xs shrink-0">
                           NG
                         </div>
                         <div>
-                          <div className="text-xs font-bold">Nagad Merchant</div>
-                          <div className="text-[10px] opacity-75">Direct Gateway</div>
+                          <div className="text-xs font-bold">Nagad</div>
+                          <div className="text-[10px] opacity-75">Merchant Verification</div>
                         </div>
                       </button>
 
-                      {/* Cloud Wallet */}
                       <button
                         type="button"
                         onClick={() => setPaymentMethod('Wallet')}
-                        className={`p-3 rounded-xl border text-left flex items-center gap-3 transition-all cursor-pointer ${
+                        className={`p-3 rounded-xl border text-left flex items-center gap-3 cursor-pointer ${
                           paymentMethod === 'Wallet'
-                            ? 'bg-emerald-500/10 border-emerald-500 ring-1 ring-emerald-500 text-emerald-600 dark:text-emerald-400'
-                            : 'bg-slate-50 dark:bg-zinc-900/40 border-slate-200 dark:border-white/5 text-slate-700 dark:text-zinc-300'
+                            ? 'bg-emerald-500/10 border-emerald-500 text-emerald-600 font-bold ring-1 ring-emerald-500'
+                            : 'border-slate-200 dark:border-white/10'
                         }`}
                       >
-                        <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                        <div className="w-7 h-7 rounded bg-emerald-600 text-white flex items-center justify-center shrink-0">
                           <Wallet className="w-4 h-4" />
                         </div>
                         <div>
                           <div className="text-xs font-bold">Prepaid Wallet</div>
-                          <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-mono font-bold">
+                          <div className="text-[10px] font-mono text-emerald-600 font-bold">
                             Balance: ৳{walletBalanceBDT}
                           </div>
                         </div>
                       </button>
 
-                      {/* Stripe Card */}
                       <button
                         type="button"
                         onClick={() => setPaymentMethod('Stripe')}
-                        className={`p-3 rounded-xl border text-left flex items-center gap-3 transition-all cursor-pointer ${
+                        className={`p-3 rounded-xl border text-left flex items-center gap-3 cursor-pointer ${
                           paymentMethod === 'Stripe'
-                            ? 'bg-indigo-500/10 border-indigo-500 ring-1 ring-indigo-500 text-indigo-600 dark:text-indigo-400'
-                            : 'bg-slate-50 dark:bg-zinc-900/40 border-slate-200 dark:border-white/5 text-slate-700 dark:text-zinc-300'
+                            ? 'bg-indigo-500/10 border-indigo-500 text-indigo-600 font-bold ring-1 ring-indigo-500'
+                            : 'border-slate-200 dark:border-white/10'
                         }`}
                       >
-                        <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center shrink-0">
+                        <div className="w-7 h-7 rounded bg-indigo-600 text-white flex items-center justify-center shrink-0">
                           <CreditCard className="w-4 h-4" />
                         </div>
                         <div>
-                          <div className="text-xs font-bold">Visa / Master</div>
+                          <div className="text-xs font-bold">Credit/Debit Card</div>
                           <div className="text-[10px] opacity-75">Stripe 256-Bit SSL</div>
                         </div>
                       </button>
                     </div>
                   </div>
 
-                  {/* Input Fields based on method */}
-                  {(paymentMethod === 'bKash' || paymentMethod === 'Nagad') && (
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-mono text-slate-600 dark:text-zinc-400">
-                        Enter {paymentMethod} Mobile Number
-                      </label>
-                      <div className="relative">
-                        <Phone className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                        <input
-                          type="text"
-                          value={customerPhone}
-                          onChange={(e) => setCustomerPhone(e.target.value)}
-                          placeholder="01XXXXXXXXX"
-                          className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono text-slate-900 dark:text-white focus:outline-none focus:border-blue-500"
-                        />
-                      </div>
-                      <p className="text-[11px] text-slate-400 font-mono">
-                        Instant PIN checkout simulation. No real money deducted in test sandbox.
-                      </p>
-                    </div>
-                  )}
-
                   {paymentMethod === 'Wallet' && (
-                    <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 text-xs text-emerald-800 dark:text-emerald-300">
-                      Your prepaid cloud wallet will be automatically debited by ৳{finalTotal}. Remaining balance after order: ৳{Math.max(0, walletBalanceBDT - (Number(finalTotal) || 0))}.
+                    <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 text-emerald-800 dark:text-emerald-300">
+                      Prepaid balance will be automatically debited by ৳{finalAmountBDT}.
+                      {walletBalanceBDT < finalAmountBDT && (
+                        <p className="mt-1 font-bold text-rose-600">
+                          ⚠️ Insufficient balance! Please top up your wallet first.
+                        </p>
+                      )}
                     </div>
                   )}
 
-                  {paymentMethod === 'Stripe' && (
-                    <div className="space-y-2">
-                      <input
-                        type="text"
-                        readOnly
-                        value="4242 •••• •••• 4242"
-                        className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono text-slate-900 dark:text-white"
-                      />
-                      <div className="grid grid-cols-2 gap-2">
-                        <input
-                          type="text"
-                          readOnly
-                          value="12/28"
-                          className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono text-slate-900 dark:text-white"
-                        />
-                        <input
-                          type="text"
-                          readOnly
-                          value="CVC: 888"
-                          className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono text-slate-900 dark:text-white"
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Submit Button */}
                   <button
                     type="button"
-                    onClick={handleExecutePayment}
-                    className="w-full h-11 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold flex items-center justify-center gap-2 shadow-lg shadow-blue-600/20 transition-all cursor-pointer"
+                    onClick={handleProceedToPayment}
+                    disabled={isSubmitting}
+                    className="w-full h-11 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-md shadow-blue-500/20 disabled:opacity-50"
                   >
-                    <span>Complete Payment &amp; Auto-Provision</span>
-                    <ArrowRight className="w-4 h-4 stroke-[2.5]" />
+                    {isSubmitting ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Initializing Payment...</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>
+                          {paymentMethod === 'Wallet'
+                            ? `Pay ৳${finalAmountBDT} with Wallet`
+                            : 'Proceed to Payment Verification'}
+                        </span>
+                        <ArrowRight className="w-4 h-4" />
+                      </>
+                    )}
                   </button>
                 </>
-              ) : (
-                /* LIVE 4-STEP PROVISIONING TRACKER */
-                <div className="space-y-6 py-2">
-                  <div className="text-center space-y-1">
-                    <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 text-xs font-mono font-semibold">
-                      <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
-                      <span>Live Provisioning Engine Active</span>
+              )}
+
+              {/* STEP 2: MANUAL MERCHANT VERIFICATION (bKash/Nagad) */}
+              {paymentStep === 'manual_verification' && (
+                <form onSubmit={handleSubmitTrxId} className="space-y-4">
+                  <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-500 font-mono">Invoice Number:</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-mono font-bold text-blue-600">{createdInvoiceNumber}</span>
+                        <button
+                          type="button"
+                          onClick={copyInvoiceNumber}
+                          className="p-1 text-slate-400 hover:text-slate-600"
+                          title="Copy Invoice"
+                        >
+                          {copiedInvoice ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
                     </div>
-                    <h3 className="text-lg font-bold text-slate-900 dark:text-white">
-                      Spinning Up Your Container
-                    </h3>
-                    <p className="text-xs text-slate-500 dark:text-zinc-400">
-                      Allocating isolated NVMe resources on {region === 'sg' ? 'Equinix SG1' : 'Ashburn VA'}
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-500 font-mono">Payable Amount:</span>
+                      <strong className="text-base text-emerald-600 font-mono font-bold">
+                        ৳{finalAmountBDT} BDT
+                      </strong>
+                    </div>
+                  </div>
+
+                  {/* Payment Instructions Box */}
+                  <div className="p-3.5 rounded-xl bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900/50 text-blue-950 dark:text-blue-200 space-y-1.5">
+                    <div className="flex items-center gap-1.5 font-bold">
+                      <Info className="w-4 h-4 text-blue-600 shrink-0" />
+                      <span>{paymentMethod} Payment Instructions</span>
+                    </div>
+                    <ol className="list-decimal pl-4 space-y-1 text-[11px] leading-relaxed">
+                      <li>Open your <strong>{paymentMethod} app</strong> on your mobile phone.</li>
+                      <li>
+                        Choose <strong>Send Money</strong> or <strong>Payment</strong> to official number:{' '}
+                        <strong className="font-mono font-bold underline">
+                          {paymentMethod === 'bKash' ? '01789-234567' : '01889-234567'}
+                        </strong>
+                      </li>
+                      <li>Enter exact amount: <strong>৳{finalAmountBDT}</strong></li>
+                      <li>Use reference: <strong>{createdInvoiceNumber}</strong></li>
+                      <li>Complete payment and copy the <strong>Transaction ID (trxID)</strong>.</li>
+                    </ol>
+                  </div>
+
+                  {/* Mandatory Verification Inputs */}
+                  <div className="space-y-3 pt-1">
+                    <div>
+                      <label className="block font-semibold mb-1">
+                        1. Sender {paymentMethod} Mobile Number
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="e.g. 01712345678"
+                        value={senderNumber}
+                        onChange={(e) => setSenderNumber(e.target.value)}
+                        className="w-full h-10 px-3 rounded-lg border border-slate-300 dark:border-white/10 bg-white dark:bg-zinc-900 font-mono text-xs text-slate-900 dark:text-white"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold mb-1">
+                        2. Transaction ID (trxID from {paymentMethod} SMS)
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="e.g. 9K72LM89QP"
+                        value={trxId}
+                        onChange={(e) => setTrxId(e.target.value.toUpperCase())}
+                        className="w-full h-10 px-3 rounded-lg border border-slate-300 dark:border-white/10 bg-white dark:bg-zinc-900 font-mono text-xs uppercase text-slate-900 dark:text-white"
+                      />
+                    </div>
+                  </div>
+
+                  <p className="text-[10px] text-slate-500 font-mono">
+                    Zero-Mock Security Policy: Orders are verified against real bank ledger records. Fake transaction IDs are automatically blocked and logged.
+                  </p>
+
+                  <div className="flex gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setPaymentStep('select')}
+                      className="px-4 py-2 rounded-lg border border-slate-300 text-xs font-semibold text-slate-600"
+                    >
+                      Back
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSubmitting || !senderNumber.trim() || !trxId.trim()}
+                      className="flex-1 h-10 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-md shadow-blue-500/20"
+                    >
+                      {isSubmitting ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          <span>Submitting for Verification...</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>Submit Payment for Verification</span>
+                          <ArrowRight className="w-4 h-4" />
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {/* STEP 3: SUBMISSION COMPLETE */}
+              {paymentStep === 'submitted' && (
+                <div className="py-4 space-y-4 text-center">
+                  <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto">
+                    <CheckCircle2 className="w-7 h-7" />
+                  </div>
+                  <div>
+                    <h4 className="text-base font-bold text-slate-900 dark:text-white">
+                      Payment Submitted to Verification Queue!
+                    </h4>
+                    <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto leading-relaxed">
+                      Invoice <strong className="font-mono text-slate-900 dark:text-white">{createdInvoiceNumber}</strong> with trxID{' '}
+                      <strong className="font-mono text-slate-900 dark:text-white">{trxId}</strong> has been routed to our financial control desk.
                     </p>
                   </div>
 
-                  {/* 4 Steps Tracker */}
-                  <div className="space-y-3">
-                    {/* Step 1 */}
-                    <div className="flex items-center gap-3">
-                      <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
-                        provisionStep > 1
-                          ? 'bg-emerald-600 text-white'
-                          : provisionStep === 1
-                          ? 'bg-blue-600 text-white ring-4 ring-blue-600/20'
-                          : 'bg-slate-200 dark:bg-zinc-800 text-slate-400'
-                      }`}>
-                        {provisionStep > 1 ? <CheckCircle2 className="w-4 h-4" /> : '1'}
-                      </div>
-                      <div className="flex-1">
-                        <div className="text-xs font-semibold text-slate-900 dark:text-zinc-200">
-                          1. Verifying Transaction &amp; Gateway Capturing
-                        </div>
-                        <div className="text-[11px] text-slate-500 dark:text-zinc-400 font-mono">
-                          {paymentMethod} Tokenized Merchant API
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Step 2 */}
-                    <div className="flex items-center gap-3">
-                      <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
-                        provisionStep > 2
-                          ? 'bg-emerald-600 text-white'
-                          : provisionStep === 2
-                          ? 'bg-blue-600 text-white ring-4 ring-blue-600/20'
-                          : 'bg-slate-200 dark:bg-zinc-800 text-slate-400'
-                      }`}>
-                        {provisionStep > 2 ? <CheckCircle2 className="w-4 h-4" /> : '2'}
-                      </div>
-                      <div className="flex-1">
-                        <div className="text-xs font-semibold text-slate-900 dark:text-zinc-200">
-                          2. Allocating CloudLinux LVE Container on {region === 'sg' ? 'SG1' : 'USA'} Node
-                        </div>
-                        <div className="text-[11px] text-slate-500 dark:text-zinc-400 font-mono">
-                          {specs.ram} RAM, {specs.cpu} CPU, {specs.inodes} Inodes
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Step 3 */}
-                    <div className="flex items-center gap-3">
-                      <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
-                        provisionStep > 3
-                          ? 'bg-emerald-600 text-white'
-                          : provisionStep === 3
-                          ? 'bg-blue-600 text-white ring-4 ring-blue-600/20'
-                          : 'bg-slate-200 dark:bg-zinc-800 text-slate-400'
-                      }`}>
-                        {provisionStep > 3 ? <CheckCircle2 className="w-4 h-4" /> : '3'}
-                      </div>
-                      <div className="flex-1">
-                        <div className="text-xs font-semibold text-slate-900 dark:text-zinc-200">
-                          3. Generating Wildcard AutoSSL &amp; Jailed SSH Keypairs
-                        </div>
-                        <div className="text-[11px] text-slate-500 dark:text-zinc-400 font-mono">
-                          Sectigo TLS 1.3 + ED25519 Keys
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Step 4 */}
-                    <div className="flex items-center gap-3">
-                      <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
-                        provisionStep >= 4
-                          ? 'bg-emerald-600 text-white animate-pulse'
-                          : 'bg-slate-200 dark:bg-zinc-800 text-slate-400'
-                      }`}>
-                        {provisionStep >= 4 ? <CheckCircle2 className="w-4 h-4" /> : '4'}
-                      </div>
-                      <div className="flex-1">
-                        <div className="text-xs font-semibold text-slate-900 dark:text-zinc-200">
-                          4. Provisioning Complete &amp; Syncing with Dashboard
-                        </div>
-                        <div className="text-[11px] text-emerald-600 dark:text-emerald-400 font-mono">
-                          Redirecting to /dashboard...
-                        </div>
-                      </div>
-                    </div>
+                  <div className="p-3 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-[11px] font-mono text-slate-600 dark:text-zinc-400">
+                    Status: <span className="text-amber-600 font-bold">Pending Admin Verification</span>
+                    <br />
+                    Server deployment activates automatically once verified.
                   </div>
 
-                  {/* Terminal Log Console */}
-                  <div className="p-3.5 rounded-xl bg-slate-950 text-emerald-400 font-mono text-[11px] space-y-1 max-h-36 overflow-y-auto border border-white/10">
-                    {provisionLogs.map((log, i) => (
-                      <div key={i} className="leading-tight">{log}</div>
-                    ))}
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsPaymentModalOpen(false);
+                      closeStackBuilder();
+                      router.push('/dashboard?tab=billing');
+                    }}
+                    className="w-full h-10 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-md shadow-blue-500/20 transition-all cursor-pointer"
+                  >
+                    View Invoices in Dashboard
+                  </button>
                 </div>
               )}
             </div>

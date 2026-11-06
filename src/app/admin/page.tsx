@@ -61,6 +61,7 @@ import {
   Settings,
   ChevronRight,
   Database,
+  Loader2,
 } from 'lucide-react';
 import {
   usePortal,
@@ -127,6 +128,8 @@ export default function AdminCommandCenterPage() {
   const router = useRouter();
   const { requireSudo } = useSudoGate();
   const {
+    currentUser,
+    authLoading,
     activeRole,
     switchRole,
     impersonateCustomer,
@@ -641,6 +644,25 @@ export default function AdminCommandCenterPage() {
       o.gateway.toLowerCase().includes(q)
     );
   });
+
+  useEffect(() => {
+    if (!authLoading) {
+      if (!currentUser) {
+        router.replace('/login?redirect=/admin');
+      } else if (currentUser.role !== 'admin') {
+        router.replace('/dashboard');
+      }
+    }
+  }, [authLoading, currentUser, router]);
+
+  if (authLoading || !currentUser || currentUser.role !== 'admin') {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-white">
+        <Loader2 className="w-8 h-8 animate-spin text-emerald-500 mb-4" />
+        <p className="text-sm text-slate-400">Verifying Founder God-Mode Authorization...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-zinc-950 text-slate-900 dark:text-zinc-100 flex flex-col font-sans transition-colors duration-200">

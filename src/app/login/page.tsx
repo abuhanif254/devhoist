@@ -1,37 +1,34 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Terminal,
   ShieldCheck,
   Lock,
   Mail,
+  Key,
   Eye,
   EyeOff,
   ArrowRight,
   Sparkles,
-  Server,
-  Activity,
+  Smartphone,
   CheckCircle2,
-  KeyRound,
-  Loader2,
-  ShieldAlert,
-  Zap,
-  Globe,
-  AlertCircle,
-  HelpCircle,
+  AlertTriangle,
+  RotateCcw,
   X,
+  Loader2,
 } from 'lucide-react';
-import { usePortal } from '@/context/PortalContext';
+import { supabase } from '@/lib/supabase';
 
 export default function LoginPage() {
   const router = useRouter();
-  const { switchRole } = usePortal();
+  const searchParams = useSearchParams();
+  const redirectParam = searchParams.get('redirect') || searchParams.get('from');
 
-  const [email, setEmail] = useState('hanif@devhost.cloud');
-  const [password, setPassword] = useState('••••••••••••');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberDevice, setRememberDevice] = useState(true);
   const [require2FA, setRequire2FA] = useState(false);
@@ -40,34 +37,103 @@ export default function LoginPage() {
   const [useBackupCode, setUseBackupCode] = useState(false);
   const [backupCodeInput, setBackupCodeInput] = useState('');
   const [totpError, setTotpError] = useState<string | null>(null);
+  const [loginError, setLoginError] = useState<string | null>(null);
   const [isVerifyingTotp, setIsVerifyingTotp] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showForgotModal, setShowForgotModal] = useState(false);
   const [forgotEmail, setForgotEmail] = useState('');
   const [forgotSuccess, setForgotSuccess] = useState(false);
 
-  const handleLoginSubmit = (e: React.FormEvent) => {
+  // If redirected with registered flag
+  useEffect(() => {
+    if (searchParams.get('registered') === '1') {
+      setLoginError(null);
+    }
+  }, [searchParams]);
+
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (require2FA && !show2FAScreen) {
-      setShow2FAScreen(true);
+    setLoginError(null);
+
+    if (!email.trim() || !password) {
+      setLoginError('Please enter your email and password.');
       return;
     }
 
     setIsSubmitting(true);
-    setTimeout(() => {
-      switchRole('client');
-      router.push('/dashboard');
-    }, 600);
+    try {
+      // 1. Authenticate with Supabase Auth
+      const { data: authData, error: authErr } = await supabase.auth.signInWithPassword({
+        email: email.trim().toLowerCase(),
+        password,
+      });
+
+      if (authErr) {
+        throw new Error(authErr.message || 'Invalid email or password.');
+      }
+
+      if (!authData?.user) {
+        throw new Error('Authentication failed. No user session returned.');
+      }
+
+      const userId = authData.user.id;
+
+      // 2. Check if 2FA TOTP is required for this user
+      try {
+        const check2faRes = await fetch(`/api/auth/2fa?userId=${userId}&email=${encodeURIComponent(email.trim().toLowerCase())}`);
+        if (check2faRes.ok) {
+          const check2faData = await check2faRes.json();
+          if (check2faData.enabled) {
+            setRequire2FA(true);
+            setShow2FAScreen(true);
+            setIsSubmitting(false);
+            return;
+          }
+        }
+      } catch (twoFaErr) {
+        console.warn('2FA verification check warning:', twoFaErr);
+      }
+
+      // 3. Query User Role from public.profiles
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', userId)
+        .maybeSingle();
+
+      const userRole = profile?.role || 'client';
+
+      // 4. Strict Role-Based Routing
+      if (redirectParam && redirectParam.startsWith('/')) {
+        // If regular client tries to redirect to /admin, force /dashboard
+        if (redirectParam.startsWith('/admin') && userRole !== 'admin') {
+          router.push('/dashboard');
+        } else {
+          router.push(redirectParam);
+        }
+      } else if (userRole === 'admin') {
+        router.push('/admin');
+      } else {
+        router.push('/dashboard');
+      }
+    } catch (err: any) {
+      setLoginError(err.message || 'Failed to sign in. Please check your credentials.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleDemoClientLogin = () => {
-    switchRole('client');
-    router.push('/dashboard');
-  };
-
-  const handleDemoAdminLogin = () => {
-    switchRole('admin');
-    router.push('/admin');
+  const handleOAuthLogin = async (provider: 'github' | 'google') => {
+    try {
+      await supabase.auth.signInWithOAuth({
+        provider,
+        options: {
+          redirectTo: `${window.location.origin}/dashboard`,
+        },
+      });
+    } catch (err: any) {
+      setLoginError(err.message || `Failed to sign in with ${provider}`);
+    }
   };
 
   const handleTotpChange = (index: number, val: string) => {
@@ -115,37 +181,59 @@ export default function LoginPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'verify',
-          email: email.trim(),
+          email: email.trim().toLowerCase(),
           code: enteredCode,
         }),
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        switchRole('client');
-        router.push('/dashboard');
-      } else {
-        // If no 2FA secret is saved in db for demo email, allow smooth demo pass-through
-        if (data.error && data.error.includes('No TOTP secret configured')) {
-          switchRole('client');
-          router.push('/dashboard');
-        } else {
-          setTotpError(data.error || 'Invalid 2FA verification code. Please check your clock.');
+        // Query user role to route properly
+        const { data: sessionData } = await supabase.auth.getSession();
+        const userId = sessionData?.session?.user?.id;
+        let userRole = 'client';
+        if (userId) {
+          const { data: profile } = await supabase.from('profiles').select('role').eq('id', userId).maybeSingle();
+          if (profile?.role) userRole = profile.role;
         }
+
+        if (redirectParam && redirectParam.startsWith('/')) {
+          if (redirectParam.startsWith('/admin') && userRole !== 'admin') {
+            router.push('/dashboard');
+          } else {
+            router.push(redirectParam);
+          }
+        } else if (userRole === 'admin') {
+          router.push('/admin');
+        } else {
+          router.push('/dashboard');
+        }
+      } else {
+        setTotpError(data.error || 'Invalid 2FA verification code. Please check your clock.');
       }
     } catch {
-      // Offline fallback
-      switchRole('client');
-      router.push('/dashboard');
+      setTotpError('Network error during 2FA verification. Please try again.');
     } finally {
       setIsVerifyingTotp(false);
     }
   };
 
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!forgotEmail.trim()) return;
+
+    try {
+      await supabase.auth.resetPasswordForEmail(forgotEmail.trim().toLowerCase(), {
+        redirectTo: `${window.location.origin}/login?reset=1`,
+      });
+      setForgotSuccess(true);
+    } catch {
+      setForgotSuccess(true);
+    }
+  };
+
   return (
     <div className="min-h-screen w-full flex flex-col lg:flex-row bg-white dark:bg-zinc-950 text-slate-900 dark:text-zinc-100 transition-colors duration-200">
-      {/* =========================================================================
-          LEFT COLUMN: AUTHENTICATION FORM & DEVELOPER OAUTH
-         ========================================================================= */}
+      {/* LEFT COLUMN: AUTHENTICATION FORM */}
       <div className="w-full lg:w-1/2 flex flex-col justify-between p-6 sm:p-12 lg:p-16 border-r border-slate-200 dark:border-white/[0.08]">
         {/* Brand Top Header */}
         <div className="flex items-center justify-between">
@@ -158,7 +246,7 @@ export default function LoginPage() {
                 DevHost
               </span>
               <span className="px-1.5 py-0.5 text-[10px] font-mono font-bold tracking-wider rounded bg-blue-50 dark:bg-zinc-900 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-white/10 uppercase">
-                Portal
+                Cloud
               </span>
             </div>
           </Link>
@@ -188,22 +276,36 @@ export default function LoginPage() {
                 </p>
               </div>
 
-              {/* 1-Click Developer OAuth */}
+              {loginError && (
+                <div className="p-3.5 rounded-xl border border-rose-200 dark:border-rose-900/50 bg-rose-50 dark:bg-rose-950/20 text-rose-800 dark:text-rose-200 text-xs flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{loginError}</span>
+                </div>
+              )}
+
+              {searchParams.get('registered') === '1' && (
+                <div className="p-3.5 rounded-xl border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50 dark:bg-emerald-950/20 text-emerald-800 dark:text-emerald-300 text-xs flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>Registration successful! Please sign in with your email and password.</span>
+                </div>
+              )}
+
+              {/* Developer OAuth */}
               <div className="grid grid-cols-2 gap-3">
                 <button
                   type="button"
-                  onClick={handleDemoClientLogin}
+                  onClick={() => handleOAuthLogin('github')}
                   className="flex items-center justify-center gap-2 h-10 px-4 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-zinc-900/60 hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-800 dark:text-zinc-200 text-xs font-semibold shadow-xs transition-colors cursor-pointer"
                 >
                   <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
                     <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
                   </svg>
-                  <span>GitHub OAuth</span>
+                  <span>GitHub Sign In</span>
                 </button>
 
                 <button
                   type="button"
-                  onClick={handleDemoClientLogin}
+                  onClick={() => handleOAuthLogin('google')}
                   className="flex items-center justify-center gap-2 h-10 px-4 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-zinc-900/60 hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-800 dark:text-zinc-200 text-xs font-semibold shadow-xs transition-colors cursor-pointer"
                 >
                   <svg className="w-4 h-4" viewBox="0 0 24 24">
@@ -224,11 +326,10 @@ export default function LoginPage() {
                       d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
                     />
                   </svg>
-                  <span>Google Account</span>
+                  <span>Google Sign In</span>
                 </button>
               </div>
 
-              {/* Divider */}
               <div className="relative flex items-center justify-center">
                 <div className="border-t border-slate-200 dark:border-white/10 w-full" />
                 <span className="bg-white dark:bg-zinc-950 px-3 text-[11px] font-mono uppercase text-slate-400 dark:text-zinc-500">
@@ -236,90 +337,80 @@ export default function LoginPage() {
                 </span>
               </div>
 
-              {/* Form */}
+              {/* Login Form */}
               <form onSubmit={handleLoginSubmit} className="space-y-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1.5">
-                    Account Email Address
+                    Account Email
                   </label>
                   <div className="relative">
-                    <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <Mail className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
                     <input
                       type="email"
                       required
+                      placeholder="name@company.com"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      placeholder="name@company.com"
-                      className="w-full pl-10 pr-4 h-10 rounded-xl bg-slate-50 dark:bg-zinc-900/60 border border-slate-200 dark:border-white/10 text-xs font-sans text-slate-900 dark:text-zinc-100 placeholder-slate-400 focus:outline-hidden focus:border-blue-500 transition-colors"
+                      className="w-full h-10 pl-10 pr-4 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-zinc-900 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-blue-500 transition-colors"
                     />
                   </div>
                 </div>
 
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300">
+                    <label className="text-xs font-semibold text-slate-700 dark:text-zinc-300">
                       Password
                     </label>
                     <button
                       type="button"
                       onClick={() => setShowForgotModal(true)}
-                      className="text-[11px] text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+                      className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
                     >
                       Forgot password?
                     </button>
                   </div>
                   <div className="relative">
-                    <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <Lock className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
                     <input
                       type={showPassword ? 'text' : 'password'}
                       required
+                      placeholder="Enter account password"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
-                      placeholder="••••••••••••"
-                      className="w-full pl-10 pr-10 h-10 rounded-xl bg-slate-50 dark:bg-zinc-900/60 border border-slate-200 dark:border-white/10 text-xs font-sans text-slate-900 dark:text-zinc-100 placeholder-slate-400 focus:outline-hidden focus:border-blue-500 transition-colors"
+                      className="w-full h-10 pl-10 pr-10 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-zinc-900 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-blue-500 transition-colors"
                     />
                     <button
                       type="button"
                       onClick={() => setShowPassword(!showPassword)}
-                      className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200 absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-zinc-300"
                     >
                       {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
                   </div>
                 </div>
 
-                {/* Remember & 2FA Toggles */}
                 <div className="flex items-center justify-between text-xs pt-1">
-                  <label className="flex items-center gap-2 cursor-pointer select-none text-slate-600 dark:text-zinc-400">
+                  <label className="flex items-center gap-2 cursor-pointer text-slate-600 dark:text-zinc-400">
                     <input
                       type="checkbox"
                       checked={rememberDevice}
                       onChange={(e) => setRememberDevice(e.target.checked)}
-                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-4 w-4"
+                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                     />
-                    <span>Remember 30 days</span>
-                  </label>
-
-                  <label className="flex items-center gap-1.5 cursor-pointer select-none text-slate-600 dark:text-zinc-400">
-                    <input
-                      type="checkbox"
-                      checked={require2FA}
-                      onChange={(e) => setRequire2FA(e.target.checked)}
-                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-4 w-4"
-                    />
-                    <KeyRound className="w-3.5 h-3.5 text-blue-600" />
-                    <span>Require 2FA Step</span>
+                    <span>Remember this workstation</span>
                   </label>
                 </div>
 
-                {/* Submit Button */}
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="w-full h-11 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs shadow-md shadow-blue-600/25 flex items-center justify-center gap-2 transition-all cursor-pointer mt-2"
+                  className="w-full h-11 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-md shadow-blue-500/20 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
                 >
                   {isSubmitting ? (
-                    <span className="inline-block animate-spin mr-2">⏳</span>
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Verifying Credentials...</span>
+                    </>
                   ) : (
                     <>
                       <span>Sign In to Console</span>
@@ -329,31 +420,7 @@ export default function LoginPage() {
                 </button>
               </form>
 
-              {/* Instant Sandbox Demo Access Bar */}
-              <div className="p-3.5 rounded-xl border border-blue-200 dark:border-blue-900/60 bg-blue-50/60 dark:bg-blue-950/40 space-y-2">
-                <div className="flex items-center gap-1.5 text-xs font-mono font-bold text-blue-900 dark:text-blue-300">
-                  <Sparkles className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
-                  <span>Instant Sandbox Demo Access:</span>
-                </div>
-                <div className="grid grid-cols-2 gap-2 pt-0.5">
-                  <button
-                    type="button"
-                    onClick={handleDemoClientLogin}
-                    className="w-full py-2 px-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold text-center shadow-xs transition-colors cursor-pointer"
-                  >
-                    Customer Portal (Demo)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleDemoAdminLogin}
-                    className="w-full py-2 px-3 rounded-lg bg-slate-900 hover:bg-black dark:bg-zinc-800 dark:hover:bg-zinc-700 text-white text-xs font-semibold text-center shadow-xs transition-colors cursor-pointer"
-                  >
-                    Founder Admin Center
-                  </button>
-                </div>
-              </div>
-
-              <div className="text-center text-xs text-slate-500 dark:text-zinc-400">
+              <div className="text-center text-xs text-slate-500 dark:text-zinc-400 pt-2">
                 Don&apos;t have an account?{' '}
                 <Link href="/register" className="text-blue-600 dark:text-blue-400 font-semibold hover:underline">
                   Create new account
@@ -361,259 +428,228 @@ export default function LoginPage() {
               </div>
             </div>
           ) : (
-            /* 2FA TOTP STEP */
+            /* 2FA TOTP VERIFICATION STEP */
             <div className="space-y-6 animate-in fade-in zoom-in-95 duration-200">
-              <div className="text-center">
-                <div className="w-12 h-12 rounded-2xl bg-blue-50 dark:bg-blue-950/60 border border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400 flex items-center justify-center mx-auto mb-3 shadow-xs">
-                  <KeyRound className="w-6 h-6" />
+              <div>
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-purple-50 dark:bg-purple-950/60 border border-purple-200 dark:border-purple-800 text-xs font-mono text-purple-700 dark:text-purple-400 font-semibold mb-3">
+                  <Smartphone className="w-3.5 h-3.5" />
+                  <span>RFC 6238 TOTP Two-Factor Authentication</span>
                 </div>
-                <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 dark:text-white">
-                  Two-Factor Authentication
-                </h2>
-                <p className="text-xs text-slate-600 dark:text-zinc-400 mt-1 max-w-xs mx-auto">
-                  {useBackupCode
-                    ? 'Enter one of your 10-set emergency backup recovery codes (format: XXXX-XXXX-XXXX).'
-                    : 'Enter the 6-digit TOTP security code generated by your Authenticator app (Google Authenticator, Authy, 1Password).'}
+                <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white">
+                  Enter 2-Step Code
+                </h1>
+                <p className="text-xs sm:text-sm text-slate-600 dark:text-zinc-400 mt-1 font-normal">
+                  Open Google Authenticator or your 2FA security key app on your phone and enter the code.
                 </p>
               </div>
 
               {totpError && (
-                <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/50 flex items-center gap-2 text-xs text-rose-700 dark:text-rose-300">
-                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                <div className="p-3.5 rounded-xl border border-rose-200 dark:border-rose-900/50 bg-rose-50 dark:bg-rose-950/20 text-rose-800 dark:text-rose-200 text-xs flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
                   <span>{totpError}</span>
                 </div>
               )}
 
-              {!useBackupCode ? (
-                /* 6 Digit Inputs */
-                <div className="flex items-center justify-center gap-2 sm:gap-3">
-                  {totpCode.map((digit, idx) => (
+              <form onSubmit={handleVerify2FA} className="space-y-6">
+                {!useBackupCode ? (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-2">
+                      6-Digit Security Code
+                    </label>
+                    <div className="flex items-center justify-between gap-2 sm:gap-3">
+                      {totpCode.map((digit, idx) => (
+                        <input
+                          key={idx}
+                          id={`totp-${idx}`}
+                          type="text"
+                          maxLength={1}
+                          inputMode="numeric"
+                          value={digit}
+                          onChange={(e) => handleTotpChange(idx, e.target.value)}
+                          onKeyDown={(e) => handleTotpKeyDown(idx, e)}
+                          className="w-12 h-14 text-center font-mono text-xl font-extrabold rounded-xl border border-slate-300 dark:border-white/10 bg-white dark:bg-zinc-900 text-slate-900 dark:text-white focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all shadow-xs"
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1.5">
+                      12-Character Backup Recovery Code
+                    </label>
                     <input
-                      key={idx}
-                      id={`totp-${idx}`}
                       type="text"
-                      inputMode="numeric"
-                      maxLength={1}
-                      value={digit}
-                      onChange={(e) => handleTotpChange(idx, e.target.value)}
-                      onKeyDown={(e) => handleTotpKeyDown(idx, e)}
-                      className="w-11 h-12 text-center text-lg font-mono font-bold rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white focus:outline-hidden focus:border-blue-600 focus:ring-2 focus:ring-blue-500/20"
+                      placeholder="e.g. A9B2-C8D4-E7F1"
+                      value={backupCodeInput}
+                      onChange={(e) => setBackupCodeInput(e.target.value.toUpperCase())}
+                      className="w-full h-11 px-4 rounded-xl border border-slate-300 dark:border-white/10 bg-white dark:bg-zinc-900 text-sm font-mono text-slate-900 dark:text-white uppercase focus:outline-none focus:border-blue-500"
                     />
-                  ))}
-                </div>
-              ) : (
-                /* 12-char Backup code input */
-                <div>
-                  <input
-                    type="text"
-                    value={backupCodeInput}
-                    onChange={(e) => setBackupCodeInput(e.target.value.toUpperCase())}
-                    placeholder="e.g. A1B2-C3D4-E5F6"
-                    className="w-full text-center tracking-widest text-base font-mono font-bold px-4 py-3 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white focus:outline-hidden focus:border-blue-600 focus:ring-2 focus:ring-blue-500/20"
-                  />
-                </div>
-              )}
+                  </div>
+                )}
 
-              <div className="space-y-2">
-                <button
-                  type="button"
-                  disabled={isVerifyingTotp}
-                  onClick={() => handleVerify2FA()}
-                  className="w-full h-11 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-semibold text-xs shadow-md shadow-blue-600/25 flex items-center justify-center gap-2 transition-all cursor-pointer"
-                >
-                  {isVerifyingTotp ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>Verifying Cryptographic Hash...</span>
-                    </>
-                  ) : (
-                    <>
-                      <span>Verify Code &amp; Launch Dashboard</span>
-                      <ArrowRight className="w-4 h-4" />
-                    </>
-                  )}
-                </button>
-
-                <div className="flex items-center justify-between pt-2">
+                <div className="flex items-center justify-between text-xs">
                   <button
                     type="button"
                     onClick={() => {
                       setUseBackupCode(!useBackupCode);
                       setTotpError(null);
                     }}
-                    className="text-xs text-blue-600 dark:text-blue-400 hover:underline cursor-pointer font-medium"
+                    className="text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
                   >
-                    {useBackupCode ? 'Use 6-digit Authenticator app' : 'Lost phone? Use Emergency Backup Code'}
+                    {useBackupCode ? 'Use Authenticator Code instead' : 'Lost your phone? Use Backup Code'}
                   </button>
-
                   <button
                     type="button"
-                    onClick={() => setShow2FAScreen(false)}
-                    className="text-xs text-slate-500 dark:text-zinc-400 hover:text-slate-800 dark:hover:text-zinc-200 cursor-pointer"
+                    onClick={() => {
+                      setShow2FAScreen(false);
+                      setTotpCode(['', '', '', '', '', '']);
+                    }}
+                    className="text-slate-500 hover:text-slate-800 dark:hover:text-zinc-300 cursor-pointer"
                   >
-                    ← Password sign-in
+                    Cancel
                   </button>
                 </div>
-              </div>
 
-              <div className="p-3 rounded-lg bg-slate-50 dark:bg-zinc-900/60 border border-slate-200 dark:border-white/10 text-[11px] font-mono text-slate-600 dark:text-zinc-400 text-center">
-                RFC 6238 Web Crypto HMAC-SHA1 Protected • 30-sec Time Drift Tolerance
-              </div>
+                <button
+                  type="submit"
+                  disabled={isVerifyingTotp}
+                  className="w-full h-11 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-md shadow-blue-500/20 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
+                >
+                  {isVerifyingTotp ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Verifying Security Token...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Verify &amp; Enter Console</span>
+                      <ArrowRight className="w-4 h-4" />
+                    </>
+                  )}
+                </button>
+              </form>
             </div>
           )}
         </div>
 
-        {/* Footer Legal Strip */}
-        <div className="flex flex-col sm:flex-row items-center justify-between text-[11px] text-slate-400 dark:text-zinc-500 gap-2 pt-6 border-t border-slate-100 dark:border-white/5">
-          <span>&copy; {new Date().getFullYear()} DevHost Cloud Inc. All rights reserved.</span>
+        {/* Brand Bottom Footer */}
+        <div className="flex items-center justify-between text-[11px] text-slate-400 dark:text-zinc-600 pt-6 border-t border-slate-100 dark:border-white/5">
+          <span>© {new Date().getFullYear()} DevHost Cloud</span>
           <div className="flex items-center gap-3">
-            <Link href="/privacy" className="hover:underline">Privacy</Link>
-            <span>•</span>
-            <Link href="/terms" className="hover:underline">Terms</Link>
-            <span>•</span>
-            <Link href="/security" className="hover:underline">Security</Link>
+            <Link href="/privacy" className="hover:text-slate-600 dark:hover:text-zinc-400">
+              Privacy
+            </Link>
+            <Link href="/terms" className="hover:text-slate-600 dark:hover:text-zinc-400">
+              Terms
+            </Link>
+            <Link href="/security" className="hover:text-slate-600 dark:hover:text-zinc-400">
+              Security
+            </Link>
           </div>
         </div>
       </div>
 
-      {/* =========================================================================
-          RIGHT COLUMN: ENTERPRISE TELEMETRY & TRUST SHOWCASE
-         ========================================================================= */}
-      <div className="hidden lg:flex w-1/2 bg-slate-50/70 dark:bg-zinc-900/30 p-12 lg:p-16 flex-col justify-between relative overflow-hidden">
-        {/* Architectural Grid pattern */}
-        <div className="absolute inset-0 architectural-grid opacity-50 pointer-events-none" />
+      {/* RIGHT COLUMN: ARCHITECTURAL HIGHLIGHTS */}
+      <div className="hidden lg:flex w-1/2 bg-slate-900 dark:bg-black p-12 lg:p-16 flex-col justify-between relative overflow-hidden text-white">
+        <div className="absolute inset-0 architectural-grid opacity-20 pointer-events-none" />
 
-        {/* Top Badges */}
         <div className="relative z-10 flex items-center justify-between">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono text-slate-700 dark:text-zinc-300 shadow-xs">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            <span>Equinix SG1 Tier-IV Datacenter Active</span>
-          </div>
-
-          <span className="text-xs font-mono text-emerald-600 dark:text-emerald-400 font-bold">
-            99.99% Live SLA
+          <span className="text-xs font-mono tracking-widest text-blue-400 uppercase font-semibold">
+            Enterprise Cloud Infrastructure
           </span>
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-[11px] font-mono text-blue-300">
+            <Sparkles className="w-3 h-3 text-blue-400" />
+            <span>Singapore SG1 &amp; US-East</span>
+          </div>
         </div>
 
-        {/* Middle: Rich Glass Telemetry Blade */}
-        <div className="relative z-10 space-y-6 max-w-lg my-auto">
-          <div className="p-6 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 shadow-xl space-y-5">
-            <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-white/10">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-md shadow-blue-500/20">
-                  <Server className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                    CloudLinux LVE Isolated Shell
-                  </h3>
-                  <p className="text-[11px] font-mono text-slate-500 dark:text-zinc-400">
-                    Host Container: SG1-NVMe-Node-01
-                  </p>
-                </div>
-              </div>
-              <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400 font-bold">
-                CageFS Active
-              </span>
-            </div>
+        <div className="relative z-10 max-w-lg space-y-6">
+          <h2 className="text-3xl lg:text-4xl font-extrabold tracking-tight leading-tight">
+            Developer Experience of Vercel. Accessibility of cPanel.
+          </h2>
+          <p className="text-sm text-slate-300 leading-relaxed font-normal">
+            Automate Git deployments with sub-second commit hooks, LiteSpeed enterprise caching, and zero node_modules bloat.
+          </p>
 
-            {/* Metrics */}
-            <div className="grid grid-cols-2 gap-3 text-xs font-mono">
-              <div className="p-3 rounded-lg bg-slate-50 dark:bg-zinc-950/60 border border-slate-200 dark:border-white/5">
-                <span className="text-slate-400 dark:text-zinc-500 text-[10px]">Pure PCIe NVMe:</span>
-                <div className="text-sm font-bold text-slate-900 dark:text-white mt-0.5">7,400 MB/s</div>
-              </div>
-              <div className="p-3 rounded-lg bg-slate-50 dark:bg-zinc-950/60 border border-slate-200 dark:border-white/5">
-                <span className="text-slate-400 dark:text-zinc-500 text-[10px]">Passenger Reload:</span>
-                <div className="text-sm font-bold text-emerald-600 dark:text-emerald-400 mt-0.5">2.8 Seconds</div>
+          <div className="space-y-3 pt-2">
+            <div className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/10">
+              <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0" />
+              <div className="text-xs">
+                <div className="font-semibold text-white">Strict Row Level Security (RLS)</div>
+                <div className="text-slate-400">Every project and database is isolated at the PostgreSQL kernel level.</div>
               </div>
             </div>
-
-            {/* Quote */}
-            <p className="text-xs text-slate-600 dark:text-zinc-300 leading-relaxed italic">
-              &ldquo;Deploying Next.js standalone on cPanel with GitHub Actions cut our local latency to 38ms and saved our team 80% on cloud bills.&rdquo;
-            </p>
-            <div className="text-[11px] text-slate-500 dark:text-zinc-400 font-mono">
-              — Tanvir Hossain, Lead Full-Stack Architect
+            <div className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/10">
+              <Lock className="w-5 h-5 text-blue-400 shrink-0" />
+              <div className="text-xs">
+                <div className="font-semibold text-white">RFC 6238 TOTP 2-Step Verification</div>
+                <div className="text-slate-400">Hardware-grade Authenticator app login with Sudo elevation gates.</div>
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Bottom Feature Badges */}
-        <div className="relative z-10 flex items-center gap-6 text-xs text-slate-500 dark:text-zinc-400">
-          <div className="flex items-center gap-1.5">
-            <ShieldCheck className="w-4 h-4 text-emerald-500" />
-            <span>256-Bit Hardware Encrypted</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <Zap className="w-4 h-4 text-blue-500" />
-            <span>Sub-40ms BDIX Peering</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <Globe className="w-4 h-4 text-purple-500" />
-            <span>Cloudflare Edge DNS</span>
-          </div>
+        <div className="relative z-10 flex items-center justify-between text-xs font-mono text-slate-400 pt-6 border-t border-white/10">
+          <span>SLA: 99.99% Global Uptime</span>
+          <span>BDIX: Sub-5ms Latency</span>
         </div>
       </div>
 
       {/* Forgot Password Modal */}
       {showForgotModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 dark:bg-black/80 backdrop-blur-xs animate-in fade-in duration-150">
-          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 rounded-2xl p-6 max-w-sm w-full shadow-2xl relative">
-            <button
-              onClick={() => {
-                setShowForgotModal(false);
-                setForgotSuccess(false);
-              }}
-              className="absolute right-4 top-4 p-1 text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200"
-            >
-              <X className="w-4 h-4" />
-            </button>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+          <div className="w-full max-w-md bg-white dark:bg-zinc-950 rounded-2xl border border-slate-200 dark:border-white/10 p-6 space-y-4 shadow-xl">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-slate-900 dark:text-zinc-100">
+                Reset Account Password
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowForgotModal(false)}
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-zinc-300"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
 
-            {!forgotSuccess ? (
-              <div className="space-y-4">
-                <div className="w-10 h-10 rounded-xl bg-blue-50 dark:bg-blue-950 text-blue-600 flex items-center justify-center">
-                  <Mail className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-slate-900 dark:text-white">Reset Account Password</h3>
-                  <p className="text-xs text-slate-600 dark:text-zinc-400 mt-1">
-                    Enter your registered email address to receive an instant password recovery link.
-                  </p>
-                </div>
-                <input
-                  type="email"
-                  value={forgotEmail}
-                  onChange={(e) => setForgotEmail(e.target.value)}
-                  placeholder="name@company.com"
-                  className="w-full px-3.5 h-10 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-white/10 text-xs text-slate-900 dark:text-white"
-                />
-                <button
-                  type="button"
-                  onClick={() => setForgotSuccess(true)}
-                  className="w-full h-10 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs transition-colors"
-                >
-                  Send Recovery Link
-                </button>
+            {forgotSuccess ? (
+              <div className="p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800 text-xs text-emerald-800 dark:text-emerald-300 flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>If an account exists for {forgotEmail}, a password recovery link has been dispatched.</span>
               </div>
             ) : (
-              <div className="space-y-4 text-center py-2">
-                <CheckCircle2 className="w-12 h-12 text-emerald-500 mx-auto" />
-                <h3 className="text-base font-bold text-slate-900 dark:text-white">Check Your Inbox</h3>
+              <form onSubmit={handleForgotPassword} className="space-y-4">
                 <p className="text-xs text-slate-600 dark:text-zinc-400">
-                  We have dispatched a secure password reset link to your email address.
+                  Enter your registered account email to receive a password reset link.
                 </p>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowForgotModal(false);
-                    setForgotSuccess(false);
-                  }}
-                  className="w-full h-9 rounded-lg bg-slate-100 dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 font-semibold text-xs"
-                >
-                  Close Window
-                </button>
-              </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">
+                    Email Address
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    value={forgotEmail}
+                    onChange={(e) => setForgotEmail(e.target.value)}
+                    className="w-full h-10 px-3 rounded-lg border border-slate-300 dark:border-white/10 bg-white dark:bg-zinc-900 text-xs text-slate-900 dark:text-white"
+                  />
+                </div>
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowForgotModal(false)}
+                    className="px-3 py-1.5 rounded-lg border border-slate-300 text-xs text-slate-600 cursor-pointer"
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-semibold cursor-pointer"
+                  >
+                    Send Reset Link
+                  </button>
+                </div>
+              </form>
             )}
           </div>
         </div>

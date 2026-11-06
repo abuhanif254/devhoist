@@ -247,12 +247,12 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 2. Approve Manual bKash / Nagad Transaction
+    // 2. Approve Manual bKash / Nagad Transaction & Activate Service
     if (action === 'approve_trxid') {
-      const { invoiceId, trxId, grossAmountBdt, cogsBdt = 0, affiliateCutBdt = 0 } = body;
+      const { invoiceId, invoiceNumber, trxId, grossAmountBdt, cogsBdt = 0, affiliateCutBdt = 0, domain } = body;
 
-      if (!invoiceId || !trxId) {
-        return NextResponse.json({ success: false, error: 'invoiceId and trxId are required.' }, { status: 400 });
+      if (!invoiceId && !invoiceNumber) {
+        return NextResponse.json({ success: false, error: 'invoiceId or invoiceNumber is required.' }, { status: 400 });
       }
 
       const gross = Number(grossAmountBdt) || 0;
@@ -263,34 +263,63 @@ export async function POST(req: NextRequest) {
         const db = getServiceSupabase();
 
         // Mark invoice paid
-        await db
-          .from('invoices')
-          .update({
-            status: 'paid',
-            paid_at: new Date().toISOString(),
-            payment_trx_id: trxId,
-          })
-          .eq('id', invoiceId);
+        if (invoiceId) {
+          await db
+            .from('invoices')
+            .update({
+              status: 'paid',
+              paid_at: new Date().toISOString(),
+              trx_id: trxId,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', invoiceId);
+        } else if (invoiceNumber) {
+          await db
+            .from('invoices')
+            .update({
+              status: 'paid',
+              paid_at: new Date().toISOString(),
+              trx_id: trxId,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('invoice_number', invoiceNumber);
+        }
+
+        // Update transaction status
+        if (trxId) {
+          await db
+            .from('transactions')
+            .update({ status: 'Completed', updated_at: new Date().toISOString() })
+            .eq('trx_id', trxId);
+        }
+
+        // Activate associated hosting service
+        if (domain) {
+          await db
+            .from('hosting_services')
+            .update({ status: 'active', updated_at: new Date().toISOString() })
+            .eq('domain', domain);
+        }
 
         // Record in Double-Entry Profit Ledger
         const entryCode = `LDG-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
         await db.from('financial_profit_ledger').insert({
           entry_code: entryCode,
           entry_type: 'hosting_sale',
-          invoice_id: invoiceId,
+          invoice_id: invoiceId || invoiceNumber,
           gateway: 'bkash',
           trx_id: trxId,
           gross_amount_bdt: gross,
           base_cogs_cost_bdt: cogs,
           affiliate_commission_bdt: aff,
           promo_discount_bdt: 0,
-          notes: `Manual TrxID approved by Admin for invoice ${invoiceId}`,
+          notes: `Manual TrxID approved by Admin for invoice ${invoiceNumber || invoiceId}`,
         });
       }
 
       await logLedgerAudit(
         'MANUAL_TRXID_APPROVED',
-        `invoice:${invoiceId}`,
+        `invoice:${invoiceNumber || invoiceId}`,
         { trxId, gross, cogs, aff },
         'high',
         ip
@@ -298,7 +327,42 @@ export async function POST(req: NextRequest) {
 
       return NextResponse.json({
         success: true,
-        message: `Transaction ${trxId} verified and approved. Double-entry ledger recorded.`,
+        message: `Transaction ${trxId} verified and approved. Service activated and ledger recorded.`,
+      });
+    }
+
+    // 2B. Reject Fake Transaction ID (Fraud Strike)
+    if (action === 'reject_trxid') {
+      const { invoiceId, invoiceNumber, trxId, reason } = body;
+
+      if (isSupabaseConfigured()) {
+        const db = getServiceSupabase();
+
+        if (invoiceId) {
+          await db.from('invoices').update({ status: 'cancelled', updated_at: new Date().toISOString() }).eq('id', invoiceId);
+        } else if (invoiceNumber) {
+          await db.from('invoices').update({ status: 'cancelled', updated_at: new Date().toISOString() }).eq('invoice_number', invoiceNumber);
+        }
+
+        if (trxId) {
+          await db
+            .from('transactions')
+            .update({ status: 'Rejected', updated_at: new Date().toISOString() })
+            .eq('trx_id', trxId);
+        }
+      }
+
+      await logLedgerAudit(
+        'FAKE_TRXID_REJECTED',
+        `invoice:${invoiceNumber || invoiceId}`,
+        { trxId, reason: reason || 'Fraudulent or non-existent transaction ID' },
+        'critical',
+        ip
+      );
+
+      return NextResponse.json({
+        success: true,
+        message: `Transaction ${trxId} marked as rejected. Fraud strike recorded.`,
       });
     }
 

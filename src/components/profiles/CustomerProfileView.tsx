@@ -47,9 +47,9 @@ export default function CustomerProfileView() {
   const [saveToast, setSaveToast] = useState(false);
 
   // Tab A: Identity & Corporate VAT State
-  const [fullName, setFullName] = useState(currentUser.name || 'Mohammad Abu Hanif');
+  const [fullName, setFullName] = useState(currentUser?.name || '');
   const [accountType, setAccountType] = useState<'individual' | 'business_corporate' | 'software_agency'>('business_corporate');
-  const [companyLegalName, setCompanyLegalName] = useState(currentUser.company || 'DevHost Cloud Ltd.');
+  const [companyLegalName, setCompanyLegalName] = useState(currentUser?.company || '');
   const [taxBinNumber, setTaxBinNumber] = useState('002941849-0101');
   const [billingAddress, setBillingAddress] = useState('Level 7, Software Technology Park, Kawran Bazar');
   const [billingCity, setBillingCity] = useState('Dhaka');
@@ -148,7 +148,7 @@ export default function CustomerProfileView() {
       const res = await fetch('/api/auth/2fa', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'setup', email: currentUser.email }),
+        body: JSON.stringify({ action: 'setup', email: currentUser?.email || '' }),
       });
       const data = await res.json();
       if (res.ok && data.success) {
@@ -194,7 +194,7 @@ export default function CustomerProfileView() {
   // Download Backup Codes Text File
   const handleDownloadBackupCodes = () => {
     const fileContent = `DEVHOST CLOUD - 2-STEP VERIFICATION RECOVERY CODES
-Account: ${currentUser.email}
+Account: ${currentUser?.email || 'user'}
 Generated: ${new Date().toUTCString()}
 
 IMPORTANT: Each code can only be used once. Keep these codes safe and offline.

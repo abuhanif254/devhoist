@@ -128,8 +128,7 @@ export async function POST(request: Request) {
       });
     }
 
-    // D. In-App Instant Sandbox Mode (Deterministic, zero setup required for demo & testing)
-    const mockTrxId = `${method.toUpperCase()}-${Math.floor(10000000 + Math.random() * 90000000)}`;
+    // D. Real-World Manual Merchant bKash/Nagad Mode (Strict trxID Verification Queue)
     return NextResponse.json({
       success: true,
       invoiceNumber,
@@ -137,11 +136,13 @@ export async function POST(request: Request) {
       amount: numericAmount,
       currency,
       method,
-      trxId: mockTrxId,
-      // Seamless direct sandbox URL that auto-redirects with payment verified
-      paymentUrl: `${origin}/dashboard?tab=services&payment=success&trx=${mockTrxId}&inv=${invoiceNumber}&auto_provision=1`,
-      mode: 'sandbox_simulation',
-      instructions: 'Sandbox mode active. Completes instantly without third-party redirects.',
+      mode: 'manual_verification',
+      instructions:
+        method === 'bkash'
+          ? 'Please Make Payment or Send Money to bKash Merchant: 01789-234567. Use Invoice Number as reference. Then enter your Sender Mobile Number and Transaction ID below.'
+          : 'Please Make Payment or Send Money to Nagad Merchant: 01889-234567. Use Invoice Number as reference. Then enter your Sender Mobile Number and Transaction ID below.',
+      bkashMerchantNumber: '01789-234567',
+      nagadMerchantNumber: '01889-234567',
     });
   } catch (err: any) {
     return NextResponse.json(

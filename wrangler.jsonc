@@ -19,5 +19,10 @@
 	],
 	"images": {
 		"binding": "IMAGES"
+	},
+	"vars": {
+		"NEXT_PUBLIC_SUPABASE_URL": "https://senlgfzhomodiyhnclfg.supabase.co",
+		"NEXT_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_6gzAgaJBxEW53W7hfUhA4Q_v1A3ZX_I",
+		"NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_6gzAgaJBxEW53W7hfUhA4Q_v1A3ZX_I"
 	}
 }

@@ -1,11 +1,14 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-// Environment variables for Supabase (supports both modern publishable/secret and legacy anon/service_role)
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+// Environment variables for Supabase (with live production project fallback)
+const LIVE_SUPABASE_URL = 'https://senlgfzhomodiyhnclfg.supabase.co';
+const LIVE_SUPABASE_ANON_KEY = 'sb_publishable_6gzAgaJBxEW53W7hfUhA4Q_v1A3ZX_I';
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || LIVE_SUPABASE_URL;
 const supabaseAnonKey =
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
-  '';
+  LIVE_SUPABASE_ANON_KEY;
 const supabaseServiceKey =
   process.env.SUPABASE_SERVICE_ROLE_KEY ||
   process.env.SUPABASE_SECRET_KEY ||
@@ -24,36 +27,23 @@ export const isSupabaseConfigured = (): boolean => {
 };
 
 // Client-side / Public Supabase Client (Anon Key with RLS enforcement)
-export const supabase: SupabaseClient = isSupabaseConfigured()
-  ? createClient(supabaseUrl, supabaseAnonKey, {
-      auth: {
-        persistSession: true,
-        autoRefreshToken: true,
-        detectSessionInUrl: true,
-      },
-    })
-  : createClient(
-      'https://placeholder-devhost.supabase.co',
-      'placeholder-anon-key-safe-fallback-for-offline-mode',
-      {
-        auth: {
-          persistSession: false,
-          autoRefreshToken: false,
-        },
-      }
-    );
+export const supabase: SupabaseClient = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
+  },
+});
 
 // Server-side Admin Supabase Client (Bypasses RLS for automated webhooks & WHM provisioning)
 export const getServiceSupabase = (): SupabaseClient => {
-  if (isSupabaseConfigured() && supabaseServiceKey && !supabaseServiceKey.includes('your-service-key')) {
-    return createClient(supabaseUrl, supabaseServiceKey, {
-      auth: {
-        persistSession: false,
-        autoRefreshToken: false,
-      },
-    });
-  }
-  return supabase;
+  const serviceKey = supabaseServiceKey || supabaseAnonKey;
+  return createClient(supabaseUrl, serviceKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
+  });
 };
 
 // Database Entity Types matching supabase/schema.sql

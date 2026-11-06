@@ -90,14 +90,21 @@ export default function RegisterPage() {
 
   const handleOAuthSignUp = async (provider: 'github' | 'google') => {
     try {
-      await supabase.auth.signInWithOAuth({
+      const { data, error } = await supabase.auth.signInWithOAuth({
         provider,
         options: {
           redirectTo: `${window.location.origin}/dashboard`,
         },
       });
+      if (error) {
+        setErrorMsg(
+          `${provider === 'google' ? 'Google' : 'GitHub'} OAuth is not enabled in Supabase yet. Please register below with your Name, Email & Password.`
+        );
+      }
     } catch (err: any) {
-      setErrorMsg(err.message || `Failed to sign up with ${provider}`);
+      setErrorMsg(
+        `${provider === 'google' ? 'Google' : 'GitHub'} OAuth is not enabled in Supabase yet. Please register below with your Name, Email & Password.`
+      );
     }
   };
 

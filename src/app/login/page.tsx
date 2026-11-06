@@ -125,14 +125,21 @@ export default function LoginPage() {
 
   const handleOAuthLogin = async (provider: 'github' | 'google') => {
     try {
-      await supabase.auth.signInWithOAuth({
+      const { data, error } = await supabase.auth.signInWithOAuth({
         provider,
         options: {
           redirectTo: `${window.location.origin}/dashboard`,
         },
       });
+      if (error) {
+        setLoginError(
+          `${provider === 'google' ? 'Google' : 'GitHub'} OAuth is not enabled in Supabase yet. Please sign in below with your Email & Password.`
+        );
+      }
     } catch (err: any) {
-      setLoginError(err.message || `Failed to sign in with ${provider}`);
+      setLoginError(
+        `${provider === 'google' ? 'Google' : 'GitHub'} OAuth is not enabled in Supabase yet. Please sign in below with your Email & Password.`
+      );
     }
   };
 

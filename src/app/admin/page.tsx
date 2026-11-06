@@ -102,6 +102,8 @@ import AdminCmsConfigView from '@/components/admin/AdminCmsConfigView';
 import AdminWafRulesManager from '@/components/admin/AdminWafRulesManager';
 import AdminFinancialLedgerView from '@/components/admin/AdminFinancialLedgerView';
 import AdminCustomerCrmView from '@/components/admin/AdminCustomerCrmView';
+import AdminDocsSeoStudio from '@/components/admin/AdminDocsSeoStudio';
+import AdminSystemHealthAuditor from '@/components/admin/AdminSystemHealthAuditor';
 import { useSudoGate } from '@/components/security/SudoGateModal';
 
 type AdminModule =
@@ -113,6 +115,8 @@ type AdminModule =
   | 'affiliates_promos'
   | 'pricing'
   | 'cms_config'
+  | 'docs_seo_studio'
+  | 'system_audit'
   | 'domain_operations'
   | 'migrations'
   | 'support_desk'
@@ -836,6 +840,24 @@ export default function AdminCommandCenterPage() {
 
               <button
                 type="button"
+                onClick={() => setActiveModule('docs_seo_studio')}
+                className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                  activeModule === 'docs_seo_studio'
+                    ? 'bg-rose-600 text-white shadow-md shadow-rose-600/20'
+                    : 'text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <Globe className="w-4 h-4 text-cyan-500" />
+                  <span>Docs, FAQs &amp; SEO Studio</span>
+                </div>
+                <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-cyan-100 text-cyan-800 dark:bg-cyan-950 dark:text-cyan-300 font-bold">
+                  LIVE
+                </span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setActiveModule('migrations')}
                 className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
                   activeModule === 'migrations'
@@ -892,6 +914,24 @@ export default function AdminCommandCenterPage() {
                 </div>
                 <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-400 font-bold">
                   ROOT
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveModule('system_audit')}
+                className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                  activeModule === 'system_audit'
+                    ? 'bg-rose-600 text-white shadow-md shadow-rose-600/20'
+                    : 'text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <Activity className="w-4 h-4 text-emerald-500" />
+                  <span>Zero-Mock System Auditor</span>
+                </div>
+                <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 font-bold">
+                  8 CHECKS
                 </span>
               </button>
 
@@ -2891,6 +2931,16 @@ export default function AdminCommandCenterPage() {
               MODULE: HEADLESS CMS, FX EXCHANGE RATE & GATEWAYS
              ========================================================================= */}
           {activeModule === 'cms_config' && <AdminCmsConfigView />}
+
+          {/* =========================================================================
+              MODULE: DOCUMENTATION, FAQ & DYNAMIC SEO STUDIO
+             ========================================================================= */}
+          {activeModule === 'docs_seo_studio' && <AdminDocsSeoStudio />}
+
+          {/* =========================================================================
+              MODULE: ZERO-MOCK SYSTEM & SECURITY PENETRATION AUDITOR
+             ========================================================================= */}
+          {activeModule === 'system_audit' && <AdminSystemHealthAuditor />}
 
           {/* =========================================================================
               MODULE 10: FOUNDER & ROOT ADMIN 2FA / SUDO SECURITY PROFILE

@@ -43,6 +43,9 @@ export async function POST(request: Request) {
             total_bdt: numericAmount,
             status: 'unpaid',
             payment_method: method,
+            billing_cycle: body.billingCycle || 'monthly',
+            free_domain_bundle_applied: Boolean(body.freeDomainBundleApplied),
+            bundled_domain_name: body.bundledDomainName || domain,
             due_date: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
           })
           .select('id')
@@ -82,6 +85,9 @@ export async function POST(request: Request) {
               invoice_id: invoiceId,
               domain,
               plan_id: planId,
+              billing_cycle: body.billingCycle || 'monthly',
+              free_domain_bundle: Boolean(body.freeDomainBundleApplied),
+              bundled_domain: body.bundledDomainName || domain,
             },
             redirect_url: `${origin}/dashboard?tab=services&payment=success&inv=${invoiceNumber}`,
             cancel_url: `${origin}/dashboard?payment=cancelled`,

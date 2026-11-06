@@ -20,6 +20,10 @@ export interface OrderProfitBreakdown {
   netCollectedRevenueBDT: number;
   customerPaidBDT: number;
   unitServerCostBDT: number;
+  freeDomainCostBDT?: number;
+  totalHardCostBDT?: number;
+  bundledDomainTLD?: string;
+  hasFreeDomainBundle?: boolean;
   distributableMarginBDT: number;
   grossMarginBDT: number;
   minOwnerProfitBDT: number;
@@ -65,6 +69,8 @@ export function calculateOrderProfitBreakdown({
   affiliateTierRate,
   affiliateRatePercent = 20,
   billingCycle = 'monthly',
+  freeDomainCostBDT = 0,
+  bundledDomainTLD,
 }: {
   sellingPriceBDT: number;
   unitServerCostBDT: number;
@@ -74,8 +80,12 @@ export function calculateOrderProfitBreakdown({
   affiliateTierRate?: number;
   affiliateRatePercent?: number;
   billingCycle?: 'monthly' | 'annually';
+  freeDomainCostBDT?: number;
+  bundledDomainTLD?: string;
 }): OrderProfitBreakdown {
   const effectiveAffiliateRate = affiliateTierRate ?? affiliateRatePercent ?? 20;
+  const safeFreeDomainCost = Math.max(0, freeDomainCostBDT || 0);
+  const totalHardCost = unitServerCostBDT + safeFreeDomainCost;
 
   // 1. Calculate promo discount
   let computedPromoBDT = promoDiscountBDT;
@@ -85,16 +95,16 @@ export function calculateOrderProfitBreakdown({
   const safePromo = Math.max(0, Math.min(computedPromoBDT, sellingPriceBDT));
   const netCollectedRevenue = Math.max(0, sellingPriceBDT - safePromo);
 
-  // 2. Distributable Margin above baseline server cost
-  const distributableMargin = Math.max(0, netCollectedRevenue - unitServerCostBDT);
+  // 2. Distributable Margin above baseline server and bundled domain cost
+  const distributableMargin = Math.max(0, netCollectedRevenue - totalHardCost);
 
   // 3. Raw Affiliate Commission based on partner tier (20%, 25%, 30%)
   const rawCommission = Math.round(netCollectedRevenue * (effectiveAffiliateRate / 100));
 
-  // 4. Safe Affiliate Pool: Margin remaining after locking owner's minimum net profit
+  // 4. Safe Affiliate Pool: Margin remaining after locking owner's minimum net profit and hard costs
   const maxAllowedCommission = Math.max(
     0,
-    netCollectedRevenue - unitServerCostBDT - minOwnerProfitBDT
+    netCollectedRevenue - totalHardCost - minOwnerProfitBDT
   );
 
   // 5. Final Affiliate Commission: Caps safely at maxAllowedCommission
@@ -103,20 +113,20 @@ export function calculateOrderProfitBreakdown({
   // 6. Final Locked Owner Net Profit: What the founder keeps in pocket
   const finalOwnerNetProfitBDT = Math.max(
     0,
-    netCollectedRevenue - unitServerCostBDT - finalAffiliateCommissionBDT
+    netCollectedRevenue - totalHardCost - finalAffiliateCommissionBDT
   );
 
   // Verification: Is owner profit protected?
   const isProfitProtected =
-    finalOwnerNetProfitBDT >= Math.min(minOwnerProfitBDT, netCollectedRevenue - unitServerCostBDT);
+    finalOwnerNetProfitBDT >= Math.min(minOwnerProfitBDT, netCollectedRevenue - totalHardCost);
 
-  const isLossMaking = netCollectedRevenue < unitServerCostBDT + minOwnerProfitBDT;
+  const isLossMaking = netCollectedRevenue < totalHardCost + minOwnerProfitBDT;
   const isAffiliateCapped = finalAffiliateCommissionBDT < rawCommission;
 
   const warnings: string[] = [];
   if (isLossMaking) {
     warnings.push(
-      `Selling price (${sellingPriceBDT} BDT) after discount (${safePromo} BDT) violates profit floor (Cost: ${unitServerCostBDT} + Min Profit: ${minOwnerProfitBDT}).`
+      `Selling price (${sellingPriceBDT} BDT) after discount (${safePromo} BDT) violates profit floor (Cost: ${totalHardCost} + Min Profit: ${minOwnerProfitBDT}).`
     );
   }
   if (isAffiliateCapped) {
@@ -124,10 +134,15 @@ export function calculateOrderProfitBreakdown({
       `Affiliate commission safely capped from ${rawCommission} BDT to ${finalAffiliateCommissionBDT} BDT to preserve guaranteed owner profit.`
     );
   }
+  if (safeFreeDomainCost > 0) {
+    warnings.push(
+      `1st-Year Free Domain Bundle (${bundledDomainTLD || '.com'}) wholesale buy cost ৳${safeFreeDomainCost} BDT protected. Owner profit guaranteed.`
+    );
+  }
 
   // Percentage shares of net collected revenue
   const totalRev = netCollectedRevenue || 1;
-  const costRecoveryPercent = Math.round((unitServerCostBDT / totalRev) * 100);
+  const costRecoveryPercent = Math.round((totalHardCost / totalRev) * 100);
   const affiliatePayoutPercent = Math.round((finalAffiliateCommissionBDT / totalRev) * 100);
   const ownerProfitPercent = Math.round((finalOwnerNetProfitBDT / totalRev) * 100);
 
@@ -138,6 +153,10 @@ export function calculateOrderProfitBreakdown({
     netCollectedRevenueBDT: netCollectedRevenue,
     customerPaidBDT: netCollectedRevenue,
     unitServerCostBDT,
+    freeDomainCostBDT: safeFreeDomainCost,
+    totalHardCostBDT: totalHardCost,
+    bundledDomainTLD,
+    hasFreeDomainBundle: safeFreeDomainCost > 0,
     distributableMarginBDT: distributableMargin,
     grossMarginBDT: distributableMargin,
     minOwnerProfitBDT,

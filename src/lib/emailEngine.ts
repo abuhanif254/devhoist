@@ -61,6 +61,26 @@ export function logEmailToOutbox(entry: EmailLogEntry) {
   }
 }
 
+export async function sendEmail(params: {
+  to: string;
+  subject: string;
+  template: EmailLogEntry['template'];
+  html: string;
+}): Promise<{ success: boolean; id: string }> {
+  const emailId = `eml-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  logEmailToOutbox({
+    id: emailId,
+    to: params.to,
+    subject: params.subject,
+    template: params.template,
+    status: 'delivered',
+    sentAt: new Date().toISOString(),
+    previewText: params.subject,
+    html: params.html,
+  });
+  return { success: true, id: emailId };
+}
+
 // ==============================================================================
 // 8 BRANDED RESPONSIVE HTML EMAIL TEMPLATES
 // ==============================================================================

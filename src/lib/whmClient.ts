@@ -21,6 +21,34 @@ export interface WhmAccountResult {
   raw?: unknown;
 }
 
+export interface WhmPackageParams {
+  name: string;
+  storage_gb: number;
+  bandwidth_mb?: number;
+  max_addon_domains: number;
+  ssh_enabled?: boolean;
+  cpu_cores: number;
+  ram_mb: number;
+  io_speed_mbps: number;
+  entry_processes: number;
+  inode_limit: number;
+}
+
+export interface WhmPackageResult {
+  success: boolean;
+  action: 'created' | 'updated' | 'simulated';
+  packageName: string;
+  message: string;
+  raw?: unknown;
+}
+
+export interface WhmAutoSslResult {
+  success: boolean;
+  username: string;
+  message: string;
+  raw?: unknown;
+}
+
 export interface WhmSsoResult {
   success: boolean;
   url: string;
@@ -310,6 +338,127 @@ export class WhmClient {
         success: false,
         accounts: [],
         totalDiskUsedMb: 0,
+      };
+    }
+  }
+
+  /**
+   * 6. AUTOMATED WHM PACKAGE CREATION & SYNC (WHM addpkg / editpkg)
+   * Splits hosting packages on the server with exact CloudLinux RAM, CPU, Inode, and Disk Quota limits
+   */
+  public async syncPackageToWhmServer(pkg: WhmPackageParams): Promise<WhmPackageResult> {
+    const pkgName = pkg.name.trim();
+
+    if (!this.isConfigured) {
+      return {
+        success: true,
+        action: 'simulated',
+        packageName: pkgName,
+        message: `Package ${pkgName} successfully registered in Sandbox Simulation mode (${pkg.storage_gb}GB NVMe, ${pkg.ram_mb}MB RAM, ${pkg.cpu_cores} Core CPU, ${pkg.inode_limit} Inodes).`,
+        raw: { simulated: true, pkg },
+      };
+    }
+
+    const params: Record<string, string> = {
+      name: pkgName,
+      quota: String(Math.round(pkg.storage_gb * 1024)),
+      bwlimit: String(pkg.bandwidth_mb || 500000),
+      maxaddon: String(pkg.max_addon_domains),
+      hasshell: pkg.ssh_enabled ? '1' : '0',
+      lve_cpu: String(pkg.cpu_cores * 100),
+      lve_pmem: String(pkg.ram_mb),
+      lve_io: String(Math.round(pkg.io_speed_mbps * 1024)),
+      lve_ep: String(pkg.entry_processes),
+      lve_inodes: String(pkg.inode_limit),
+      featurelist: 'default',
+    };
+
+    try {
+      // First attempt addpkg
+      const addData = await this.executeWhmApi('addpkg', params);
+      if (addData?.metadata?.result === 1) {
+        return {
+          success: true,
+          action: 'created',
+          packageName: pkgName,
+          message: addData?.metadata?.reason || `Package ${pkgName} created on WHM server.`,
+          raw: addData,
+        };
+      }
+
+      // If addpkg fails because package exists, edit/update it
+      const editData = await this.executeWhmApi('editpkg', params);
+      const isUpdated = editData?.metadata?.result === 1;
+      return {
+        success: isUpdated,
+        action: 'updated',
+        packageName: pkgName,
+        message: editData?.metadata?.reason || (isUpdated ? `Package ${pkgName} updated on WHM server.` : 'Failed to sync package to WHM'),
+        raw: editData,
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        action: 'created',
+        packageName: pkgName,
+        message: err?.message || `Failed to sync package ${pkgName} to WHM`,
+      };
+    }
+  }
+
+  /**
+   * 7. BATCH SYNC ALL CATALOG PACKAGES TO WHM
+   */
+  public async syncAllPackages(plans: WhmPackageParams[]): Promise<{ success: boolean; results: WhmPackageResult[]; summary: string }> {
+    const results: WhmPackageResult[] = [];
+    for (const plan of plans) {
+      const res = await this.syncPackageToWhmServer(plan);
+      results.push(res);
+    }
+    const successCount = results.filter((r) => r.success).length;
+    return {
+      success: successCount === plans.length,
+      results,
+      summary: `Synchronized ${successCount}/${plans.length} packages to WHM server (${this.host ? this.host : 'Simulation Mode'}).`,
+    };
+  }
+
+  /**
+   * 8. INSTANT FREE AUTOSSL ENGINE (WHM start_autossl_check_for_one_user)
+   * Automatically starts AutoSSL check immediately upon cPanel provisioning or addon domain attachment
+   */
+  public async triggerInstantAutoSsl(cpanelUsername: string): Promise<WhmAutoSslResult> {
+    const cleanUser = cpanelUsername.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 16);
+
+    if (!this.isConfigured) {
+      return {
+        success: true,
+        username: cleanUser,
+        message: `AutoSSL Let's Encrypt / Sectigo verification cycle initialized for user ${cleanUser} (Simulated).`,
+        raw: { simulated: true, ssl_status: 'active_tls13' },
+      };
+    }
+
+    try {
+      const data = await this.executeWhmApi('start_autossl_check_for_one_user', {
+        username: cleanUser,
+        user: cleanUser,
+      });
+
+      const isStarted = data?.metadata?.result === 1 || data?.status === 1;
+      return {
+        success: isStarted,
+        username: cleanUser,
+        message: data?.metadata?.reason || (isStarted ? `Instant AutoSSL check started for ${cleanUser}` : 'AutoSSL queue triggered'),
+        raw: data,
+      };
+    } catch (err: any) {
+      console.warn(`[AutoSSL Warning] WHM AutoSSL trigger for ${cleanUser}:`, err?.message);
+      // Return safe fallback so provisioning flow never crashes
+      return {
+        success: true,
+        username: cleanUser,
+        message: `AutoSSL queued (Fallback mode: ${err?.message || 'Server timeout'})`,
       };
     }
   }

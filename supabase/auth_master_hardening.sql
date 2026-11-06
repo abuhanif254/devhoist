@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS public.auth_login_attempts (
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
--- Backward compatibility: Add missing columns if table already existed from older migrations
+-- Backward compatibility: Safely add missing columns to existing table
 ALTER TABLE public.auth_login_attempts ADD COLUMN IF NOT EXISTS attempted_at TIMESTAMPTZ DEFAULT now();
 ALTER TABLE public.auth_login_attempts ADD COLUMN IF NOT EXISTS success BOOLEAN DEFAULT false;
 ALTER TABLE public.auth_login_attempts ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now();
@@ -132,7 +132,7 @@ BEGIN
             now(),
             now()
         )
-        ON CONFLICT (user_id) DO NOTHING;
+        ON CONFLICT DO NOTHING;
     END IF;
 
     -- 3. Insert into user_security_credentials
@@ -154,7 +154,7 @@ BEGIN
             now(),
             now()
         )
-        ON CONFLICT (user_id) DO NOTHING;
+        ON CONFLICT DO NOTHING;
     END IF;
 
     -- 4. Insert into affiliate_profiles
@@ -172,8 +172,7 @@ BEGIN
             'starter_20',
             20.00
         )
-        ON CONFLICT (user_id) DO NOTHING
-        ON CONFLICT (referral_code) DO NOTHING;
+        ON CONFLICT DO NOTHING;
     END IF;
 
     -- 5. Insert into affiliate_marketer_profiles (if exists)
@@ -191,8 +190,7 @@ BEGIN
             now(),
             now()
         )
-        ON CONFLICT (user_id) DO NOTHING
-        ON CONFLICT (custom_referral_slug) DO NOTHING;
+        ON CONFLICT DO NOTHING;
     END IF;
 
     -- 6. Record Initial Signup in Security Audit Logs (if exists)

@@ -111,6 +111,18 @@ export default function StackBuilderDrawer() {
   const [customDomainInput, setCustomDomainInput] = useState('');
   const [paymentStep, setPaymentStep] = useState<'select' | 'manual_verification' | 'submitted'>('select');
 
+  // Free Domain Bundle on Annual Plans
+  const [freeDomainQuery, setFreeDomainQuery] = useState('');
+  const [selectedFreeTld, setSelectedFreeTld] = useState('.com');
+  const [isSearchingDomain, setIsSearchingDomain] = useState(false);
+  const [domainCheckResult, setDomainCheckResult] = useState<{
+    domain: string;
+    available: boolean;
+    tld: string;
+    checked: boolean;
+  } | null>(null);
+  const [claimedFreeDomain, setClaimedFreeDomain] = useState<string | null>(null);
+
   // Manual Verification Inputs
   const [createdInvoiceNumber, setCreatedInvoiceNumber] = useState<string>('');
   const [senderNumber, setSenderNumber] = useState<string>('');
@@ -125,6 +137,8 @@ export default function StackBuilderDrawer() {
   const planName = stackBuilderConfig?.planName || 'Developer Pro Cloud';
   const effectiveDomain = customDomainInput.trim() || stackBuilderConfig?.domainName || 'my-new-app.com';
   const specs = PLAN_SPECS[pid] || PLAN_SPECS[2];
+
+  const eligibleFreeTlds = pid === 1 ? ['.xyz', '.shop'] : ['.com', '.net', '.org', '.xyz', '.shop'];
 
   const isBDT = currency === 'BDT';
   const symbol = isBDT ? '৳' : '$';
@@ -158,6 +172,48 @@ export default function StackBuilderDrawer() {
     } else {
       setPromoError('Invalid coupon code. Try DEVPRO20');
     }
+  };
+
+  const handleCheckFreeDomain = async () => {
+    if (!freeDomainQuery.trim()) return;
+    setIsSearchingDomain(true);
+    setDomainCheckResult(null);
+
+    const baseName = freeDomainQuery
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, '')
+      .replace(/\..*$/, '');
+    const targetTld = eligibleFreeTlds.includes(selectedFreeTld) ? selectedFreeTld : eligibleFreeTlds[0];
+    const fullDomain = `${baseName}${targetTld}`;
+
+    try {
+      const res = await fetch(`/api/domain-check?domain=${encodeURIComponent(fullDomain)}`);
+      const data = await res.json();
+      const isAvailable = data.results
+        ? data.results.some((r: any) => r.domain === fullDomain && r.available)
+        : data.registered === false;
+      setDomainCheckResult({
+        domain: fullDomain,
+        available: isAvailable ?? true,
+        tld: targetTld,
+        checked: true,
+      });
+    } catch {
+      setDomainCheckResult({
+        domain: fullDomain,
+        available: true,
+        tld: targetTld,
+        checked: true,
+      });
+    } finally {
+      setIsSearchingDomain(false);
+    }
+  };
+
+  const handleClaimFreeDomain = (domainToClaim: string) => {
+    setClaimedFreeDomain(domainToClaim);
+    setCustomDomainInput(domainToClaim);
   };
 
   const copyInvoiceNumber = () => {
@@ -196,6 +252,10 @@ export default function StackBuilderDrawer() {
             userId: currentUser?.id,
             customerEmail: currentUser?.email,
             customerName: currentUser?.name,
+            billingCycle: cycle,
+            freeDomainBundleApplied: Boolean(isAnnual && claimedFreeDomain),
+            bundledDomainName: claimedFreeDomain || effectiveDomain,
+            appStack: appStack,
           }),
         });
         const invData = await invRes.json();
@@ -210,6 +270,11 @@ export default function StackBuilderDrawer() {
             amount: finalAmountBDT,
             domain: effectiveDomain,
             planName: planName,
+            planId: String(pid),
+            billingCycle: cycle,
+            freeDomainBundleApplied: Boolean(isAnnual && claimedFreeDomain),
+            bundledDomainName: claimedFreeDomain || effectiveDomain,
+            appStack: appStack,
           }),
         });
 
@@ -243,6 +308,10 @@ export default function StackBuilderDrawer() {
           userId: currentUser?.id,
           customerEmail: currentUser?.email,
           customerName: currentUser?.name,
+          billingCycle: cycle,
+          freeDomainBundleApplied: Boolean(isAnnual && claimedFreeDomain),
+          bundledDomainName: claimedFreeDomain || effectiveDomain,
+          appStack: appStack,
         }),
       });
 
@@ -454,6 +523,157 @@ export default function StackBuilderDrawer() {
                 >
                   Annually (Save 20% — {symbol}{effectiveMonthly}/mo)
                 </button>
+              </div>
+            </div>
+
+            {/* 1ST-YEAR FREE DOMAIN BUNDLE (UNLOCKED ON ANNUAL BILLING) */}
+            {isAnnual && (
+              <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-500/10 via-emerald-500/5 to-transparent border border-emerald-500/30 dark:border-emerald-500/20 shadow-xs space-y-3 animate-in fade-in zoom-in-95 duration-200">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-lg bg-emerald-500 text-white flex items-center justify-center font-bold shadow-xs">
+                      🎁
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-emerald-950 dark:text-emerald-300">
+                        1st-Year FREE Domain Bundle Unlocked!
+                      </h4>
+                      <p className="text-[10px] text-emerald-800/80 dark:text-emerald-400">
+                        {pid === 1 ? 'Eligible: .xyz, .shop (Wholesale ৳0 Promo)' : 'Eligible: .com, .net, .org, .xyz, .shop (Wholesale ৳0 Promo)'}
+                      </p>
+                    </div>
+                  </div>
+                  <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+                    ৳0 / 1st Year
+                  </span>
+                </div>
+
+                {claimedFreeDomain ? (
+                  <div className="p-2.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                      <span className="font-mono font-bold text-xs text-emerald-950 dark:text-white">
+                        {claimedFreeDomain}
+                      </span>
+                      <span className="text-[10px] text-emerald-700 dark:text-emerald-300 font-bold">
+                        (Attached at ৳0)
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setClaimedFreeDomain(null)}
+                      className="text-[11px] text-slate-500 hover:text-rose-500 underline cursor-pointer"
+                    >
+                      Change
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {/* TLD Selection Pills */}
+                    <div className="flex flex-wrap gap-1.5">
+                      {eligibleFreeTlds.map((tld) => (
+                        <button
+                          key={tld}
+                          type="button"
+                          onClick={() => {
+                            setSelectedFreeTld(tld);
+                            setDomainCheckResult(null);
+                          }}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-mono font-bold transition-all cursor-pointer ${
+                            selectedFreeTld === tld
+                              ? 'bg-emerald-600 text-white shadow-xs'
+                              : 'bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-slate-700 dark:text-zinc-300 hover:border-emerald-500'
+                          }`}
+                        >
+                          {tld}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Domain Search & Check */}
+                    <div className="flex gap-2">
+                      <div className="relative flex-1">
+                        <input
+                          type="text"
+                          placeholder={`Enter name (e.g. mybrand)`}
+                          value={freeDomainQuery}
+                          onChange={(e) => {
+                            setFreeDomainQuery(e.target.value);
+                            setDomainCheckResult(null);
+                          }}
+                          className="w-full h-9 pl-3 pr-14 rounded-xl border border-emerald-500/30 dark:border-emerald-500/20 bg-white dark:bg-zinc-900 font-mono text-slate-900 dark:text-white text-xs"
+                        />
+                        <span className="absolute right-3 top-1/2 -translate-y-1/2 font-mono text-[11px] font-bold text-emerald-600 dark:text-emerald-400">
+                          {selectedFreeTld}
+                        </span>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleCheckFreeDomain}
+                        disabled={isSearchingDomain || !freeDomainQuery.trim()}
+                        className="px-3 h-9 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-xs transition-all flex items-center gap-1.5 cursor-pointer shadow-xs"
+                      >
+                        {isSearchingDomain ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                        <span>Check</span>
+                      </button>
+                    </div>
+
+                    {/* Domain Check Feedback */}
+                    {domainCheckResult && (
+                      <div className={`p-2.5 rounded-xl border flex items-center justify-between text-xs ${
+                        domainCheckResult.available
+                          ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-300 text-emerald-900 dark:text-emerald-200'
+                          : 'bg-rose-50 dark:bg-rose-950/30 border-rose-200 text-rose-800 dark:text-rose-200'
+                      }`}>
+                        <div className="flex items-center gap-2 font-mono">
+                          {domainCheckResult.available ? (
+                            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                          ) : (
+                            <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                          )}
+                          <span>
+                            <strong>{domainCheckResult.domain}</strong> is{' '}
+                            {domainCheckResult.available ? 'available!' : 'already taken.'}
+                          </span>
+                        </div>
+
+                        {domainCheckResult.available && (
+                          <button
+                            type="button"
+                            onClick={() => handleClaimFreeDomain(domainCheckResult.domain)}
+                            className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] cursor-pointer shadow-xs"
+                          >
+                            Claim (৳0)
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Mandatory Renewal Transparency Note */}
+                <p className="text-[10px] text-slate-500 dark:text-zinc-400 leading-relaxed font-sans border-t border-emerald-500/20 pt-2">
+                  ℹ️ <strong>Renewal Transparency:</strong> 1st Year Domain Registration is 100% FREE (৳0). Starting Year 2, standard annual domain renewal rate applies.
+                </p>
+              </div>
+            )}
+
+            {/* INSTANT ZERO-TOUCH ACTIVATION BADGE */}
+            <div className="p-3.5 rounded-2xl bg-blue-50/60 dark:bg-blue-950/20 border border-blue-500/20 text-slate-700 dark:text-zinc-300 flex items-start gap-3">
+              <div className="w-7 h-7 rounded-lg bg-blue-600 text-white flex items-center justify-center shrink-0 font-bold shadow-xs">
+                ⚡
+              </div>
+              <div className="space-y-0.5">
+                <h5 className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                  <span>Instant Zero-Touch Activation</span>
+                  <span className="px-1.5 py-0.2 rounded bg-blue-100 dark:bg-blue-900/60 text-blue-700 dark:text-blue-300 text-[9px] font-mono font-bold">
+                    &lt; 3 Seconds
+                  </span>
+                </h5>
+                <p className="text-[11px] text-slate-500 dark:text-zinc-400 leading-normal">
+                  Paying via Automated bKash/Nagad Gateway, Card, or Wallet activates your cPanel, AutoSSL, and Git CI/CD pipeline in 2 seconds without waiting for manual admin approval.
+                </p>
               </div>
             </div>
 

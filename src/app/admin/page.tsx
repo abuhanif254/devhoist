@@ -97,15 +97,22 @@ import {
 import { calculateOrderProfitBreakdown } from '@/lib/profitEngine';
 import AdminSecurityProfileView from '@/components/profiles/AdminSecurityProfileView';
 import AdminDomainOperationsView from '@/components/domains/AdminDomainOperationsView';
+import AdminServerNodesView from '@/components/admin/AdminServerNodesView';
+import AdminCmsConfigView from '@/components/admin/AdminCmsConfigView';
+import AdminWafRulesManager from '@/components/admin/AdminWafRulesManager';
+import AdminFinancialLedgerView from '@/components/admin/AdminFinancialLedgerView';
+import AdminCustomerCrmView from '@/components/admin/AdminCustomerCrmView';
 import { useSudoGate } from '@/components/security/SudoGateModal';
 
 type AdminModule =
   | 'overview'
+  | 'server_nodes'
   | 'automation_cron'
   | 'customers'
   | 'billing_ledger'
   | 'affiliates_promos'
   | 'pricing'
+  | 'cms_config'
   | 'domain_operations'
   | 'migrations'
   | 'support_desk'
@@ -701,6 +708,24 @@ export default function AdminCommandCenterPage() {
 
               <button
                 type="button"
+                onClick={() => setActiveModule('server_nodes')}
+                className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                  activeModule === 'server_nodes'
+                    ? 'bg-rose-600 text-white shadow-md shadow-rose-600/20'
+                    : 'text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <Server className="w-4 h-4" />
+                  <span>Server Nodes Cluster</span>
+                </div>
+                <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-cyan-100 text-cyan-800 dark:bg-cyan-950 dark:text-cyan-300 font-bold">
+                  LIVE
+                </span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setActiveModule('automation_cron')}
                 className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
                   activeModule === 'automation_cron'
@@ -789,6 +814,24 @@ export default function AdminCommandCenterPage() {
               >
                 <DollarSign className="w-4 h-4" />
                 <span>Dynamic Pricing Engine</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveModule('cms_config')}
+                className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                  activeModule === 'cms_config'
+                    ? 'bg-rose-600 text-white shadow-md shadow-rose-600/20'
+                    : 'text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <Sliders className="w-4 h-4" />
+                  <span>Headless CMS &amp; FX Config</span>
+                </div>
+                <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-300 font-bold">
+                  LIVE
+                </span>
               </button>
 
               <button
@@ -1090,109 +1133,7 @@ export default function AdminCommandCenterPage() {
           {/* =========================================================================
               MODULE 2: CUSTOMER 360° CRM & ACCOUNT PROVISIONING
              ========================================================================= */}
-          {activeModule === 'customers' && (
-            <div className="space-y-6 animate-in fade-in duration-150">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div>
-                  <h2 className="text-lg font-bold text-slate-900 dark:text-white">Customer 360° CRM &amp; Provisioning</h2>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Search client portfolios, impersonate sessions, modify container quotas and add wallet credits
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsCreateCustModalOpen(true)}
-                  className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs cursor-pointer"
-                >
-                  + Create New Customer &amp; Provision Account
-                </button>
-              </div>
-
-              {/* Search & Filter Bar */}
-              <div className="flex flex-col sm:flex-row gap-3">
-                <div className="relative flex-1">
-                  <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="text"
-                    value={customerSearch}
-                    onChange={(e) => setCustomerSearch(e.target.value)}
-                    placeholder="Search by customer name, email, or company..."
-                    className="w-full pl-10 pr-4 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono"
-                  />
-                </div>
-                <div className="flex gap-2">
-                  {(['All', 'Active', 'Suspended', 'High Resource'] as const).map((st) => (
-                    <button
-                      key={st}
-                      type="button"
-                      onClick={() => setCustomerFilter(st)}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-semibold cursor-pointer ${
-                        customerFilter === st
-                          ? 'bg-blue-600 text-white'
-                          : 'bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-slate-600 dark:text-zinc-400'
-                      }`}
-                    >
-                      {st}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Customers Master Table */}
-              <div className="rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs overflow-hidden divide-y divide-slate-100 dark:divide-white/5">
-                {filteredCustomers.map((c) => (
-                  <div
-                    key={c.id}
-                    className="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-xs font-mono"
-                  >
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <strong className="text-sm font-bold text-slate-900 dark:text-white">{c.name}</strong>
-                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                          c.status === 'Active'
-                            ? 'bg-emerald-50 dark:bg-emerald-950 text-emerald-600'
-                            : c.status === 'Suspended'
-                            ? 'bg-rose-50 dark:bg-rose-950 text-rose-500'
-                            : 'bg-amber-50 dark:bg-amber-950 text-amber-600'
-                        }`}>
-                          {c.status}
-                        </span>
-                      </div>
-                      <div className="text-[11px] text-slate-400 mt-1">
-                        {c.email} • {c.phone} • {c.company} • Joined: {c.joinedDate}
-                      </div>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-3">
-                      <div className="text-right">
-                        <div className="text-slate-900 dark:text-white font-bold">৳{c.totalSpendBDT.toLocaleString()} Spent</div>
-                        <div className="text-[11px] text-emerald-600 font-bold">Wallet: ৳{c.walletBalanceBDT.toLocaleString()}</div>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => handleOpenInspector(c)}
-                        className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-800 dark:text-zinc-200 font-semibold cursor-pointer"
-                      >
-                        Inspect 360°
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          impersonateCustomer(c.id);
-                          router.push('/dashboard');
-                        }}
-                        className="px-3 py-1.5 rounded-xl bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 font-semibold hover:bg-blue-100 cursor-pointer"
-                      >
-                        Login as Client
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          {activeModule === 'customers' && <AdminCustomerCrmView />}
 
           {/* =========================================================================
               MODULE 3: DYNAMIC PRODUCT, PACKAGE & TLD PRICING ENGINE
@@ -1775,98 +1716,7 @@ export default function AdminCommandCenterPage() {
           {/* =========================================================================
               MODULE 4: BKASH/NAGAD LEDGER, CUSTOM INVOICE CREATOR & CSV EXPORT
              ========================================================================= */}
-          {activeModule === 'billing_ledger' && (
-            <div className="space-y-6 animate-in fade-in duration-150">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div>
-                  <h2 className="text-lg font-bold text-slate-900 dark:text-white">bKash/Nagad Ledger &amp; Custom Invoicing</h2>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Filterable transaction logs, manual trxID reconciler &amp; tax accounting export
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setIsInvoiceModalOpen(true)}
-                    className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs cursor-pointer"
-                  >
-                    + Create Custom Invoice
-                  </button>
-                  <button
-                    type="button"
-                    onClick={exportAccountingCsv}
-                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-xs cursor-pointer"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Export Monthly CSV</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Search Bar */}
-              <div className="relative">
-                <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  value={ledgerSearch}
-                  onChange={(e) => setLedgerSearch(e.target.value)}
-                  placeholder="Filter by invoice ID, customer name, gateway, or trxID..."
-                  className="w-full pl-10 pr-4 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono"
-                />
-              </div>
-
-              {/* Ledger Master Table */}
-              <div className="rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs overflow-hidden divide-y divide-slate-100 dark:divide-white/5">
-                {filteredLedger.map((order) => (
-                  <div
-                    key={order.id}
-                    className="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-xs font-mono"
-                  >
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <strong className="text-sm font-bold text-slate-900 dark:text-white">{order.id}</strong>
-                        <span className="text-slate-400">({order.invoiceId})</span>
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                          order.provisionStatus === 'Auto-Provisioned'
-                            ? 'bg-emerald-50 dark:bg-emerald-950 text-emerald-600'
-                            : order.provisionStatus === 'Refunded'
-                            ? 'bg-rose-50 dark:bg-rose-950 text-rose-500'
-                            : 'bg-amber-50 dark:bg-amber-950 text-amber-600'
-                        }`}>
-                          {order.provisionStatus}
-                        </span>
-                      </div>
-                      <div className="text-[11px] text-slate-400 mt-1">
-                        Client: <span className="text-slate-700 dark:text-zinc-300 font-bold">{order.customerName}</span> • Gateway: {order.gateway} • TrxID: {order.trxID} • {order.timestamp}
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-3">
-                      <strong className="text-base text-slate-900 dark:text-white">৳{order.amountBDT.toLocaleString()}</strong>
-                      {order.provisionStatus === 'Pending Approval' && (
-                        <button
-                          type="button"
-                          onClick={() => approveLedgerOrder(order.id)}
-                          className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold cursor-pointer"
-                        >
-                          Approve trxID
-                        </button>
-                      )}
-                      {order.provisionStatus !== 'Refunded' && (
-                        <button
-                          type="button"
-                          onClick={() => refundLedgerOrder(order.id)}
-                          className="px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 text-slate-600 dark:text-zinc-300 font-semibold cursor-pointer"
-                        >
-                          Refund
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          {activeModule === 'billing_ledger' && <AdminFinancialLedgerView />}
 
           {/* =========================================================================
               MODULE 5: WHMCS / WHM AUTOMATION CRON & DUNNING ENGINE
@@ -2674,6 +2524,8 @@ export default function AdminCommandCenterPage() {
              ========================================================================= */}
           {activeModule === 'security_audit' && (
             <div className="space-y-8 animate-in fade-in duration-150">
+              {/* Real-time Edge WAF Firewall Manager */}
+              <AdminWafRulesManager />
               {/* SOC Header & Telemetry Grid */}
               <div className="p-6 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs space-y-6">
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-slate-200 dark:border-white/5">
@@ -3030,6 +2882,16 @@ export default function AdminCommandCenterPage() {
               </div>
             </div>
           )}
+          {/* =========================================================================
+              MODULE: SERVER CLUSTER & WHM NODE MANAGER
+             ========================================================================= */}
+          {activeModule === 'server_nodes' && <AdminServerNodesView />}
+
+          {/* =========================================================================
+              MODULE: HEADLESS CMS, FX EXCHANGE RATE & GATEWAYS
+             ========================================================================= */}
+          {activeModule === 'cms_config' && <AdminCmsConfigView />}
+
           {/* =========================================================================
               MODULE 10: FOUNDER & ROOT ADMIN 2FA / SUDO SECURITY PROFILE
              ========================================================================= */}

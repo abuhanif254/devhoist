@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
@@ -39,6 +39,23 @@ export default function Navbar() {
   const { language, setLanguage, t } = useLanguage();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
+  const [cmsBanner, setCmsBanner] = useState<{
+    enabled: boolean;
+    badge_en: string;
+    badge_bn: string;
+    text_en: string;
+    text_bn: string;
+    promo_code?: string;
+  } | null>(null);
+
+  useEffect(() => {
+    fetch('/api/admin/cms-config?key=announcement_banner')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && data.config) setCmsBanner(data.config);
+      })
+      .catch(() => {});
+  }, []);
 
   const isLight = theme === 'light';
 
@@ -56,7 +73,14 @@ export default function Navbar() {
               <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-600" />
             </span>
             <span className="truncate text-[11px] sm:text-xs font-mono text-slate-700 dark:text-zinc-300">
-              <strong className="text-emerald-700 dark:text-emerald-400 font-semibold">99.99%</strong> Global Uptime SLA — Instant bKash &amp; Nagad Activation
+              <strong className="text-emerald-700 dark:text-emerald-400 font-semibold mr-1.5">
+                {cmsBanner?.enabled ? (language === 'BN' ? cmsBanner.badge_bn : cmsBanner.badge_en) : '99.99%'}
+              </strong>
+              <span>
+                {cmsBanner?.enabled
+                  ? (language === 'BN' ? cmsBanner.text_bn : cmsBanner.text_en)
+                  : 'Global Uptime SLA — Instant bKash & Nagad Activation'}
+              </span>
             </span>
           </div>
 

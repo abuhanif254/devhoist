@@ -1,8 +1,76 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { getClientIp, checkEdgeWaf, getSecurityLockdown } from '@/lib/wafEngine';
 
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   const { pathname, searchParams } = request.nextUrl;
+  const clientIp = getClientIp(request);
+
+  // ----------------------------------------------------------------------------
+  // 0. REAL-TIME EDGE WAF IP BLACKLIST & EMERGENCY LOCKDOWN ENFORCEMENT
+  // ----------------------------------------------------------------------------
+  try {
+    // 0A. Evaluate client IP against active edge WAF blacklist rules
+    const wafCheck = await checkEdgeWaf(clientIp);
+    if (wafCheck.blocked && wafCheck.action === 'block_403') {
+      return new NextResponse(
+        JSON.stringify({
+          error: 'Access Denied',
+          message: '403 Forbidden — Access Denied by DevHost Cloud Edge WAF Firewall.',
+          reason: wafCheck.reason || 'Malicious entity or IP detected.',
+          clientIp,
+          timestamp: new Date().toISOString(),
+        }),
+        {
+          status: 403,
+          headers: {
+            'Content-Type': 'application/json',
+            'X-DevHost-WAF-Block': 'true',
+            'Retry-After': '86400',
+          },
+        }
+      );
+    }
+
+    // 0B. Check sitewide emergency lockdown configuration
+    const lockdown = await getSecurityLockdown();
+
+    // Maintenance Mode Check
+    if (
+      lockdown.maintenance_mode &&
+      !pathname.startsWith('/admin') &&
+      !pathname.startsWith('/api/admin') &&
+      !pathname.startsWith('/login') &&
+      !pathname.startsWith('/_next')
+    ) {
+      return new NextResponse(
+        JSON.stringify({
+          status: 'Maintenance',
+          message: 'DevHost Cloud is undergoing scheduled infrastructure upgrades. Please check back shortly.',
+          timestamp: new Date().toISOString(),
+        }),
+        { status: 503, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Block New Signups Emergency Switch
+    if (
+      lockdown.block_new_signups &&
+      (pathname === '/register' || pathname.startsWith('/api/auth/register'))
+    ) {
+      return new NextResponse(
+        JSON.stringify({
+          error: 'Registration Paused',
+          message: 'New user registrations are temporarily paused by administration.',
+        }),
+        { status: 403, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+  } catch (wafErr) {
+    // Fail-open defensively so unexpected Edge errors do not take down normal browsing
+    console.warn('[Edge Middleware WAF Warning]:', wafErr);
+  }
+
   const response = NextResponse.next();
 
   // ----------------------------------------------------------------------------
@@ -38,7 +106,8 @@ export function middleware(request: NextRequest) {
   if (
     pathname.startsWith('/api/') &&
     ['POST', 'PUT', 'DELETE', 'PATCH'].includes(request.method) &&
-    !pathname.startsWith('/api/payments/webhook') // Webhooks from bKash/Nagad are external
+    !pathname.startsWith('/api/payments/webhook') && // External webhooks
+    !pathname.startsWith('/api/webhooks/git') // GitHub deploy webhooks
   ) {
     const origin = request.headers.get('origin');
     const host = request.headers.get('host');
@@ -46,7 +115,12 @@ export function middleware(request: NextRequest) {
     if (origin && host) {
       try {
         const originUrl = new URL(origin);
-        if (originUrl.host !== host && !originUrl.host.includes('localhost') && !originUrl.host.includes('devhoist.pages.dev') && !originUrl.host.includes('devhost.net')) {
+        if (
+          originUrl.host !== host &&
+          !originUrl.host.includes('localhost') &&
+          !originUrl.host.includes('devhoist.pages.dev') &&
+          !originUrl.host.includes('devhost.net')
+        ) {
           return NextResponse.json(
             { error: 'Forbidden', message: 'CSRF Origin mismatch blocked' },
             { status: 403 }
@@ -64,6 +138,7 @@ export function middleware(request: NextRequest) {
   response.headers.set('X-Content-Type-Options', 'nosniff');
   response.headers.set('X-XSS-Protection', '1; mode=block');
   response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  response.headers.set('X-DevHost-WAF', 'Active-Shield-v2.6');
 
   return response;
 }
@@ -71,11 +146,7 @@ export function middleware(request: NextRequest) {
 export const config = {
   matcher: [
     /*
-     * Match all request paths except for the ones starting with:
-     * - _next/static (static files)
-     * - _next/image (image optimization files)
-     * - favicon.ico (favicon file)
-     * - public files (images, icons)
+     * Match all request paths except for static files and images
      */
     '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],

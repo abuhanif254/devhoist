@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -220,6 +220,14 @@ export default function CustomerDashboardPage() {
   const [activeTab, setActiveTab] = useState<DashboardTab>('overview');
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const [isNotifPopoverOpen, setIsNotifPopoverOpen] = useState(false);
+  const [impersonatedUser, setImpersonatedUser] = useState<{ id: string; name: string; email: string } | null>(null);
+
+  useEffect(() => {
+    try {
+      const imp = sessionStorage.getItem('devhost_impersonate');
+      if (imp) setImpersonatedUser(JSON.parse(imp));
+    } catch {}
+  }, []);
 
   // Copy Feedback State
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -433,6 +441,24 @@ export default function CustomerDashboardPage() {
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-zinc-950 text-slate-900 dark:text-zinc-100 flex flex-col font-sans transition-colors duration-200">
+      {impersonatedUser && (
+        <div className="w-full bg-gradient-to-r from-amber-600 via-rose-600 to-indigo-600 text-white px-4 py-2 text-xs font-mono font-bold flex items-center justify-between shadow-lg sticky top-0 z-50 animate-in slide-in-from-top">
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-white animate-ping" />
+            <span>GOD-MODE IMPERSONATION: Viewing as Client <u>{impersonatedUser.name}</u> ({impersonatedUser.email})</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              sessionStorage.removeItem('devhost_impersonate');
+              window.location.href = '/admin';
+            }}
+            className="px-3 py-1 rounded-lg bg-black/40 hover:bg-black/60 text-white font-bold cursor-pointer transition-all border border-white/20"
+          >
+            Return to Admin God-Mode ↗
+          </button>
+        </div>
+      )}
       {/* GLOBAL SYSTEM ANNOUNCEMENT BROADCASTER (Controlled from /admin) */}
       {systemBroadcast.active && (
         <aside

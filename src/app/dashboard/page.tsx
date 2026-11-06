@@ -10,6 +10,7 @@ import {
   CreditCard,
   LifeBuoy,
   Users,
+  User,
   Shield,
   Layers,
   ArrowRight,
@@ -83,6 +84,9 @@ import {
 } from '@/context/PortalContext';
 import { useBilling } from '@/context/BillingContext';
 import { useLanguage } from '@/context/LanguageContext';
+import CustomerProfileView from '@/components/profiles/CustomerProfileView';
+import AffiliateProfileView from '@/components/profiles/AffiliateProfileView';
+import { useSudoGate } from '@/components/security/SudoGateModal';
 
 type DashboardTab =
   | 'overview'
@@ -91,7 +95,8 @@ type DashboardTab =
   | 'billing'
   | 'support'
   | 'affiliate'
-  | 'security';
+  | 'security'
+  | 'profile';
 
 type ServiceSubTab =
   | 'overview'
@@ -110,6 +115,7 @@ type DomainDrawerSubTab =
 
 export default function CustomerDashboardPage() {
   const router = useRouter();
+  const { requireSudo } = useSudoGate();
   const {
     currentUser,
     activeRole,
@@ -699,6 +705,19 @@ export default function CustomerDashboardPage() {
             >
               <Shield className="w-4 h-4" />
               <span>Security &amp; API Keys</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('profile')}
+              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                activeTab === 'profile'
+                  ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20'
+                  : 'text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800'
+              }`}
+            >
+              <User className="w-4 h-4" />
+              <span>Developer Profile &amp; BIN</span>
             </button>
           </div>
 
@@ -2670,6 +2689,11 @@ export default function CustomerDashboardPage() {
                   </div>
                 </div>
               </div>
+
+              {/* Advanced Affiliate Profile & S2S Postback Settings */}
+              <div className="pt-6 border-t border-slate-200 dark:border-white/10">
+                <AffiliateProfileView />
+              </div>
             </div>
           )}
 
@@ -2828,6 +2852,15 @@ export default function CustomerDashboardPage() {
                   ))}
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* =========================================================================
+              MODULE 8: DEDICATED CUSTOMER / DEVELOPER PROFILE & CORPORATE VAT / BIN
+             ========================================================================= */}
+          {activeTab === 'profile' && (
+            <div className="animate-in fade-in duration-150">
+              <CustomerProfileView />
             </div>
           )}
         </main>
@@ -3177,7 +3210,13 @@ export default function CustomerDashboardPage() {
                         />
                         <button
                           type="button"
-                          onClick={() => setRevealedEpp(!revealedEpp)}
+                          onClick={() => {
+                            if (!revealedEpp) {
+                              requireSudo(() => setRevealedEpp(true), 'Reveal Domain EPP / Auth Transfer Code');
+                            } else {
+                              setRevealedEpp(false);
+                            }
+                          }}
                           className="px-3 py-2 rounded-xl bg-slate-200 dark:bg-zinc-800 text-xs font-semibold cursor-pointer"
                         >
                           {revealedEpp ? 'Hide' : 'Reveal'}

@@ -4,6 +4,7 @@ import './globals.css';
 import { BillingProvider } from '@/context/BillingContext';
 import { LanguageProvider } from '@/context/LanguageContext';
 import { PortalProvider } from '@/context/PortalContext';
+import { SudoGateProvider } from '@/components/security/SudoGateModal';
 import CommandPalette from '@/components/common/CommandPalette';
 import StackBuilderDrawer from '@/components/checkout/StackBuilderDrawer';
 import FloatingConversionDock from '@/components/common/FloatingConversionDock';
@@ -150,12 +151,14 @@ export default function RootLayout({
         <LanguageProvider>
           <BillingProvider>
             <PortalProvider>
-              <AnalyticsProvider>
+              <SudoGateProvider>
+                <AnalyticsProvider>
                 {children}
                 <CommandPalette />
                 <StackBuilderDrawer />
                 <FloatingConversionDock />
               </AnalyticsProvider>
+              </SudoGateProvider>
             </PortalProvider>
           </BillingProvider>
         </LanguageProvider>

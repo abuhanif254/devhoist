@@ -95,6 +95,8 @@ import {
   TelegramLogEntry,
 } from '@/lib/adminNotifier';
 import { calculateOrderProfitBreakdown } from '@/lib/profitEngine';
+import AdminSecurityProfileView from '@/components/profiles/AdminSecurityProfileView';
+import { useSudoGate } from '@/components/security/SudoGateModal';
 
 type AdminModule =
   | 'overview'
@@ -105,10 +107,12 @@ type AdminModule =
   | 'pricing'
   | 'migrations'
   | 'support_desk'
-  | 'security_audit';
+  | 'security_audit'
+  | 'founder_security';
 
 export default function AdminCommandCenterPage() {
   const router = useRouter();
+  const { requireSudo } = useSudoGate();
   const {
     activeRole,
     switchRole,
@@ -556,14 +560,16 @@ export default function AdminCommandCenterPage() {
   };
 
   const handleSaveDynamicPricing = () => {
-    editablePlans.forEach((p) => {
-      updateHostingPlan(p.id, p);
-    });
-    editableTlds.forEach((t) => {
-      updateTldPricing(t.tld, t);
-    });
-    setPricingSavedToast(true);
-    setTimeout(() => setPricingSavedToast(false), 3000);
+    requireSudo(() => {
+      editablePlans.forEach((p) => {
+        updateHostingPlan(p.id, p);
+      });
+      editableTlds.forEach((t) => {
+        updateTldPricing(t.tld, t);
+      });
+      setPricingSavedToast(true);
+      setTimeout(() => setPricingSavedToast(false), 3000);
+    }, 'Update Production Hosting & Domain Pricing Rates');
   };
 
   const handleRunCron = async () => {
@@ -825,6 +831,24 @@ export default function AdminCommandCenterPage() {
               <span className="px-3 text-[10px] font-mono uppercase tracking-wider text-slate-400 font-bold">
                 Security &amp; Compliance
               </span>
+
+              <button
+                type="button"
+                onClick={() => setActiveModule('founder_security')}
+                className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                  activeModule === 'founder_security'
+                    ? 'bg-rose-600 text-white shadow-md shadow-rose-600/20'
+                    : 'text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <ShieldCheck className="w-4 h-4 text-emerald-500" />
+                  <span>Founder 2FA &amp; Sudo Vault</span>
+                </div>
+                <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-400 font-bold">
+                  ROOT
+                </span>
+              </button>
 
               <button
                 type="button"
@@ -3004,6 +3028,15 @@ export default function AdminCommandCenterPage() {
               </div>
             </div>
           )}
+          {/* =========================================================================
+              MODULE 10: FOUNDER & ROOT ADMIN 2FA / SUDO SECURITY PROFILE
+             ========================================================================= */}
+          {activeModule === 'founder_security' && (
+            <div className="space-y-6 animate-in fade-in duration-150">
+              <AdminSecurityProfileView />
+            </div>
+          )}
+
         </main>
       </div>
 

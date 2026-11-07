@@ -459,7 +459,7 @@ export default function CustomerDashboardPage() {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-white">
         <Loader2 className="w-8 h-8 animate-spin text-emerald-500 mb-4" />
-        <p className="text-sm text-slate-400">Authenticating secure cloud session...</p>
+        <p className="text-sm text-slate-400">Verifying secure cloud session...</p>
       </div>
     );
   }

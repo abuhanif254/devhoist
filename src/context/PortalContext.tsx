@@ -1,7 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { supabase, isSupabaseConfigured } from '@/lib/supabase';
+import { supabase, isSupabaseConfigured, syncAuthCookie } from '@/lib/supabase';
 import { HOSTING_PACKAGES } from '@/config/hostingData';
 import { TLD_PRICING_LIST } from '@/config/whmcs';
 
@@ -1107,16 +1107,52 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         setDomains([]);
         setInvoices([]);
         setWalletBalanceBDT(0);
+        syncAuthCookie(null);
         setAuthLoading(false);
         return;
       }
 
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', session.user.id)
-        .maybeSingle();
+      // Self-healing profile loader: maybeSingle() never throws when the row is missing.
+      let profile: any = null;
+      let profileQueryFailed = false;
+      try {
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', session.user.id)
+          .maybeSingle();
+        if (error) {
+          profileQueryFailed = true;
+          console.warn('[PortalContext] profile query notice:', error.message);
+        } else {
+          profile = data;
+        }
+      } catch (profileErr) {
+        profileQueryFailed = true;
+        console.warn('[PortalContext] profile query exception:', profileErr);
+      }
 
+      if (!profile && !profileQueryFailed) {
+        // Row genuinely missing: provision it. ignoreDuplicates => ON CONFLICT DO NOTHING, so this
+        // can NEVER overwrite an existing row's role or wallet balance.
+        try {
+          const email = session.user.email || '';
+          const provisioned = {
+            id: session.user.id,
+            email,
+            full_name: session.user.user_metadata?.full_name || session.user.user_metadata?.name || email.split('@')[0] || 'User',
+            role: 'client',
+            wallet_balance_bdt: 0,
+          };
+          await supabase.from('profiles').upsert(provisioned, { onConflict: 'id', ignoreDuplicates: true });
+          profile = provisioned;
+        } catch (provisionErr) {
+          console.warn('[PortalContext] profile provisioning notice:', provisionErr);
+        }
+      }
+
+      // Even if the DB/RLS misbehaves, build a valid in-memory user from the session so the
+      // authenticated user can still enter the dashboard instead of being bounced to /login.
       const role: UserRole = profile?.role === 'admin' ? 'admin' : 'client';
       const u: CurrentUser = {
         id: session.user.id,
@@ -1131,6 +1167,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       setCurrentUser(u);
       setActiveRole(role);
       setWalletBalanceBDT(Number(profile?.wallet_balance_bdt || 0));
+      syncAuthCookie(session, role);
 
       const refCode = profile?.referral_code || session.user.email?.split('@')[0] || 'ref';
       setAffiliate((prev) => ({
@@ -1139,6 +1176,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         referralCode: refCode,
       }));
 
+      // Secondary data must never break login (fetchUserData has its own try/catch)
       await fetchUserData(session.user.id);
     } catch (err) {
       console.error('[PortalContext] refreshUserData error:', err);
@@ -1158,7 +1196,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     setIsClientLoaded(true);
 
     if (isSupabaseConfigured()) {
-      const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
+      const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
         if (event === 'SIGNED_OUT' || !session) {
           setCurrentUser(null);
           setActiveRole('client');
@@ -1167,9 +1205,18 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
           setInvoices([]);
           setWalletTransactions([]);
           setWalletBalanceBDT(0);
+          syncAuthCookie(null);
           setAuthLoading(false);
         } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
-          refreshUserData();
+          // Put the guards back into "loading" so /dashboard & /admin never see
+          // { authLoading: false, currentUser: null } in the gap between SIGNED_IN and the
+          // profile fetch finishing (this gap was the cause of the bounce back to /login).
+          if (event === 'SIGNED_IN') setAuthLoading(true);
+          // Defer: calling supabase.auth.* synchronously inside this callback can deadlock
+          // the auth lock held by signIn/exchangeCodeForSession.
+          setTimeout(() => {
+            refreshUserData();
+          }, 0);
         }
       });
 
@@ -1250,6 +1297,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     setWalletBalanceBDT(0);
     setWalletTransactions([]);
     setTickets([]);
+    syncAuthCookie(null);
     if (typeof window !== 'undefined') {
       try {
         localStorage.removeItem(STORAGE_KEY);

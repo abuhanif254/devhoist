@@ -649,20 +649,37 @@ export default function AdminCommandCenterPage() {
   });
 
   useEffect(() => {
-    if (!authLoading) {
-      if (!currentUser) {
-        router.replace('/login?redirect=/admin');
-      } else if (currentUser.role !== 'admin') {
-        router.replace('/dashboard');
-      }
+    // Only redirect once auth has deterministically resolved, and only when signed out.
+    if (!authLoading && !currentUser) {
+      router.replace('/login?redirect=/admin');
     }
   }, [authLoading, currentUser, router]);
 
-  if (authLoading || !currentUser || currentUser.role !== 'admin') {
+  if (authLoading || !currentUser) {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-white">
         <Loader2 className="w-8 h-8 animate-spin text-emerald-500 mb-4" />
         <p className="text-sm text-slate-400">Verifying Founder God-Mode Authorization...</p>
+      </div>
+    );
+  }
+
+  if (currentUser.role !== 'admin') {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-white px-6 text-center">
+        <ShieldAlert className="w-10 h-10 text-rose-500 mb-4" />
+        <h1 className="text-xl font-bold mb-2">Admin Access Required</h1>
+        <p className="text-sm text-slate-400 max-w-md mb-6">
+          Your account ({currentUser.email}) currently has role &apos;{currentUser.role}&apos;. Run the admin
+          promotion query in Supabase (see <span className="font-mono">supabase/make_founder_admin.sql</span>) or
+          return to your dashboard.
+        </p>
+        <Link
+          href="/dashboard"
+          className="px-5 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm font-semibold text-white transition-colors"
+        >
+          Return to Dashboard
+        </Link>
       </div>
     );
   }

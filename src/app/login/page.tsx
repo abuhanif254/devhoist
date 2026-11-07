@@ -20,7 +20,7 @@ import {
   X,
   Loader2,
 } from 'lucide-react';
-import { supabase } from '@/lib/supabase';
+import { supabase, syncAuthCookie } from '@/lib/supabase';
 import { getClientLockoutState, recordClientFailedAttempt, resetClientFailedAttempts, sanitizeRedirect } from '@/lib/authSecurity';
 import Auth3DScene from '@/components/visuals/Auth3DScene';
 
@@ -139,19 +139,21 @@ export default function LoginPage() {
         .maybeSingle();
 
       const userRole = profile?.role || 'client';
+      syncAuthCookie(authData.session, userRole);
 
-      // 4. Strict Role-Based Routing
+      // 4. Strict Role-Based Routing (single clean navigation; PortalContext holds the
+      //    auth guards in a loading state until the profile has resolved)
       if (redirectParam && redirectParam.startsWith('/')) {
         // If regular client tries to redirect to /admin, force /dashboard
         if (redirectParam.startsWith('/admin') && userRole !== 'admin') {
-          router.push('/dashboard');
+          router.replace('/dashboard');
         } else {
-          router.push(redirectParam);
+          router.replace(redirectParam);
         }
       } else if (userRole === 'admin') {
-        router.push('/admin');
+        router.replace('/admin');
       } else {
-        router.push('/dashboard');
+        router.replace('/dashboard');
       }
     } catch (err: any) {
       const lockout = recordClientFailedAttempt();
@@ -274,7 +276,7 @@ export default function LoginPage() {
 
     try {
       await supabase.auth.resetPasswordForEmail(forgotEmail.trim().toLowerCase(), {
-        redirectTo: `${window.location.origin}/reset-password`,
+        redirectTo: `${window.location.origin}/auth/callback?next=/reset-password`,
       });
       setForgotSuccess(true);
     } catch {

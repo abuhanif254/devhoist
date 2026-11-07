@@ -1,4 +1,4 @@
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient, Session } from '@supabase/supabase-js';
 
 // Environment variables for Supabase (with live production project fallback)
 const LIVE_SUPABASE_URL = 'https://senlgfzhomodiyhnclfg.supabase.co';
@@ -27,14 +27,42 @@ export const isSupabaseConfigured = (): boolean => {
 };
 
 // Client-side / Public Supabase Client (Anon Key with RLS enforcement)
+// NOTE: detectSessionInUrl is intentionally FALSE. /auth/callback performs exactly ONE explicit,
+// de-duplicated exchangeCodeForSession(). If the client also auto-exchanged the ?code= on load,
+// the single-use PKCE verifier would be consumed first and the explicit exchange would fail with
+// "PKCE code verifier not found in storage" (which bounced users back to /login).
 export const supabase: SupabaseClient = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     persistSession: true,
     autoRefreshToken: true,
-    detectSessionInUrl: true,
+    detectSessionInUrl: false,
     flowType: 'pkce',
+    storageKey: 'devhost-supabase-auth',
   },
 });
+
+const AUTH_COOKIE_MAX_AGE = 60 * 60 * 24 * 7; // 7 days
+
+/**
+ * Mirrors the client-side session state into lightweight, NON-SECRET cookies so the Edge
+ * middleware can see "a session exists" (no tokens are ever written to these cookies).
+ * Pass `null` on logout to expire both cookies immediately.
+ */
+export function syncAuthCookie(session: Session | null, role?: string): void {
+  if (typeof document === 'undefined') return;
+  try {
+    if (session?.access_token) {
+      const safeRole = role === 'admin' ? 'admin' : 'client';
+      document.cookie = `devhost_auth_active=1; path=/; max-age=${AUTH_COOKIE_MAX_AGE}; SameSite=Lax`;
+      document.cookie = `devhost_user_role=${safeRole}; path=/; max-age=${AUTH_COOKIE_MAX_AGE}; SameSite=Lax`;
+    } else {
+      document.cookie = 'devhost_auth_active=; path=/; max-age=0; SameSite=Lax';
+      document.cookie = 'devhost_user_role=; path=/; max-age=0; SameSite=Lax';
+    }
+  } catch {
+    // Cookie writes must never break authentication
+  }
+}
 
 // Server-side Admin Supabase Client (Bypasses RLS for automated webhooks & WHM provisioning)
 export const getServiceSupabase = (): SupabaseClient => {

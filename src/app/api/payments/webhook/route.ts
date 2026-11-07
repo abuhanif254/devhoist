@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server';
 import { getServiceSupabase, isSupabaseConfigured } from '@/lib/supabase';
 import { executeZeroTouchProvisioning } from '@/lib/zeroTouchProvisioner';
 
-export const runtime = 'edge';
 
 export async function POST(request: Request) {
   try {

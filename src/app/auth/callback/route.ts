@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabase, getServiceSupabase, isSupabaseConfigured } from '@/lib/supabase';
 
-export const runtime = 'edge';
 
 // Strict Open-Redirect Sanitizer (Guarantees relative local paths only)
 function sanitizeRedirect(target: string | null): string {
@@ -60,8 +59,97 @@ export async function GET(request: NextRequest) {
       }
       authUser = data.user;
     } else {
-      // No code or token provided
-      return NextResponse.redirect(`${origin}/login`);
+      // No server query params provided.
+      // This happens when Supabase returns an Implicit OAuth token in the URL hash fragment (#access_token=...)!
+      // Since hash fragments are never sent to the server in HTTP GET, we render an ultra-fast client-side HTML bridge.
+      // The bridge inspects window.location.hash, ensures the Supabase session is established, syncs profile, and redirects to dashboard.
+      const htmlBridge = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Securing Cloud Session | DevHost Cloud</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #09090b; color: #fff; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+    .card { text-align: center; padding: 2.5rem; background: #18181b; border: 1px solid rgba(255,255,255,0.1); border-radius: 1rem; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5); max-width: 420px; width: 90%; }
+    .spinner { border: 3px solid rgba(255,255,255,0.1); border-top-color: #3b82f6; border-radius: 50%; width: 40px; height: 40px; animation: spin 0.8s linear infinite; margin: 0 auto 1.25rem; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="spinner"></div>
+    <div style="font-weight: 600; font-size: 1.15rem; letter-spacing: -0.02em;">Securing Cloud Session...</div>
+    <div style="color: #a1a1aa; font-size: 0.875rem; margin-top: 0.5rem;" id="msg">Finalizing credentials & connecting to dashboard</div>
+  </div>
+  <script>
+    (async function() {
+      try {
+        const hash = window.location.hash;
+        const targetNext = ${JSON.stringify(sanitizedNext)};
+        
+        if (hash && (hash.includes('access_token=') || hash.includes('refresh_token='))) {
+          const hashParams = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash);
+          const accessToken = hashParams.get('access_token');
+          const refreshToken = hashParams.get('refresh_token');
+          const errorDesc = hashParams.get('error_description') || hashParams.get('error');
+
+          if (errorDesc) {
+            window.location.replace('/login?error=' + encodeURIComponent(errorDesc));
+            return;
+          }
+
+          if (accessToken) {
+            // Save tokens directly into localStorage so supabase-js client picks them up
+            try {
+              const storageKey = 'sb-' + ('senlgfzhomodiyhnclfg') + '-auth-token';
+              const sessionPayload = {
+                access_token: accessToken,
+                refresh_token: refreshToken || '',
+                token_type: 'bearer',
+                expires_in: 3600,
+                expires_at: Math.floor(Date.now() / 1000) + 3600
+              };
+              localStorage.setItem(storageKey, JSON.stringify(sessionPayload));
+            } catch (err) {
+              console.warn('Storage sync notice:', err);
+            }
+
+            // Sync user profile on server
+            try {
+              await fetch('/api/auth/sync-session', {
+                method: 'POST',
+                headers: { 
+                  'Content-Type': 'application/json',
+                  'Authorization': 'Bearer ' + accessToken
+                },
+                body: JSON.stringify({ refresh_token: refreshToken })
+              });
+            } catch (err) {
+              console.warn('Sync server notice:', err);
+            }
+
+            window.location.replace(targetNext.startsWith('/') ? targetNext : '/dashboard');
+            return;
+          }
+        }
+        
+        // No hash credentials found, redirect to login
+        window.location.replace('/login');
+      } catch (e) {
+        window.location.replace('/login?error=auth_failed');
+      }
+    })();
+  </script>
+</body>
+</html>`;
+      return new NextResponse(htmlBridge, {
+        status: 200,
+        headers: {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'no-store, no-cache, must-revalidate',
+        },
+      });
     }
 
     if (!authUser) {

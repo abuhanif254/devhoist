@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServiceSupabase, isSupabaseConfigured } from '@/lib/supabase';
 
-export const runtime = 'edge';
 
 // Mock in-memory store for local sandbox testing if Supabase is offline
 const inMemoryHandovers = new Map<string, any>();

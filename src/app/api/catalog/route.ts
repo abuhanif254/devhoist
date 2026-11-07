@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { supabase, getServiceSupabase, isSupabaseConfigured } from '@/lib/supabase';
 import { validatePricingPlanChange } from '@/lib/profitEngine';
 
-export const runtime = 'edge';
 
 // Default Production Fallback & Seeding Datasets
 export const DEFAULT_PRODUCTION_HOSTING_PLANS = [

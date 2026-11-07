@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
 import { triggerAutoWafRule, getSecurityLockdown, updateCmsConfig } from '@/lib/wafEngine';
 
-export const runtime = 'edge';
 
 async function logAdminAudit(
   actionType: string,

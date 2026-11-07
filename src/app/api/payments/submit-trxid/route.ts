@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
 import { notifyManualPaymentVerification } from '@/lib/adminNotifier';
 
-export const runtime = 'edge';
 
 const BD_PHONE_REGEX = /^01[3-9]\d{8}$/;
 const TRX_ID_REGEX = /^[A-Z0-9]{8,12}$/;

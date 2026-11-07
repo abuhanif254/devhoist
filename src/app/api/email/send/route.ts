@@ -13,7 +13,6 @@ import {
   EmailTemplateId,
 } from '@/lib/emailEngine';
 
-export const runtime = 'edge';
 
 export async function GET() {
   const outbox = getEmailOutboxLogs();

@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
 import { validateShellCommand, describeCronExpression } from '@/lib/projectEngine';
 
-export const runtime = 'edge';
 
 async function logAudit(
   actorId: string | null,

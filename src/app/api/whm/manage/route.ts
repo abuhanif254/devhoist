@@ -4,7 +4,6 @@ import { checkRateLimit } from '@/lib/edgeRateLimit';
 import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
 import { executeZeroTouchProvisioning } from '@/lib/zeroTouchProvisioner';
 
-export const runtime = 'edge';
 
 export async function POST(request: Request) {
   // Rate limit admin API

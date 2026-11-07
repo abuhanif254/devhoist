@@ -6,7 +6,6 @@ import {
 } from '@/lib/logDoctorEngine';
 import { getServiceSupabase, isSupabaseConfigured } from '@/lib/supabase';
 
-export const runtime = 'edge';
 
 export async function GET(request: NextRequest) {
   try {

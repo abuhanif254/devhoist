@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
 import { updateCmsConfig } from '@/lib/wafEngine';
 
-export const runtime = 'edge';
 
 async function logCmsAudit(
   actionType: string,

@@ -8,7 +8,6 @@ import {
   validateShellCommand,
 } from '@/lib/projectEngine';
 
-export const runtime = 'edge';
 
 async function logAudit(
   actorId: string | null,

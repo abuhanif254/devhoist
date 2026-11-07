@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServiceSupabase, isSupabaseConfigured } from '@/lib/supabase';
 
-export const runtime = 'edge';
 
 // Edge-native in-memory sliding window rate limiter (30 req / min)
 const tokenRateLimitMap = new Map<string, { count: number; resetAt: number }>();

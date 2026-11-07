@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, getServiceSupabase, supabase } from '@/lib/supabase';
 
-export const runtime = 'edge';
 
 export async function POST(req: NextRequest) {
   try {

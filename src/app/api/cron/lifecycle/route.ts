@@ -8,7 +8,6 @@ import {
 } from '@/lib/emailEngine';
 import { sendTelegramAlert } from '@/lib/adminNotifier';
 
-export const runtime = 'edge';
 
 export async function GET(req: NextRequest) {
   return handleLifecycleCron(req);

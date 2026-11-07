@@ -3,7 +3,6 @@ import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
 import { EXACT_DOCS_ARTICLES } from '@/config/docsData';
 import { COMPLETE_FAQ_LIST } from '@/config/faqData';
 
-export const runtime = 'edge';
 
 async function logDocsAudit(
   actionType: string,

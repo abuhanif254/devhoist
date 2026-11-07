@@ -5,7 +5,6 @@ import { encryptEnvValue, decryptEnvValue, validateShellCommand } from '@/lib/pr
 import { validateDnsRecord } from '@/lib/dnsEngine';
 import { getActiveWafRules, getSecurityLockdown } from '@/lib/wafEngine';
 
-export const runtime = 'edge';
 
 export interface AuditCheckResult {
   id: string;

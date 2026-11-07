@@ -13,7 +13,6 @@ import {
 } from '@/lib/totpEngine';
 import { getServiceSupabase, isSupabaseConfigured } from '@/lib/supabase';
 
-export const runtime = 'edge';
 
 export async function GET(req: NextRequest) {
   try {

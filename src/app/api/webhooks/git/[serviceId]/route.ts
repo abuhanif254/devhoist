@@ -2,8 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
 import { verifyGitHubSignature } from '@/lib/projectEngine';
 
-export const runtime = 'edge';
-
 export async function POST(
   request: NextRequest,
   context: { params: Promise<{ serviceId: string }> }

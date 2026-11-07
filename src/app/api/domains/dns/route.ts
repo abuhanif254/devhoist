@@ -10,7 +10,6 @@ import {
 } from '@/lib/dnsEngine';
 import { DnsRecord } from '@/context/PortalContext';
 
-export const runtime = 'edge';
 
 // Helper to log actions into security_audit_logs
 async function logAudit(

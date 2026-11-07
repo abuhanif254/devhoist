@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
 import { renderHostingProvisionedEmail } from '@/lib/emailEngine';
 
-export const runtime = 'edge';
 
 const CONFIG_KEY = 'live_integrations';
 

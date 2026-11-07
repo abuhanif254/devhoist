@@ -80,6 +80,9 @@ export default function LoginPage() {
       setLoginError(null);
     } else if (searchParams.get('logged_out') === 'true') {
       setLoginError(null);
+    } else if (searchParams.get('error')) {
+      const err = searchParams.get('error');
+      if (err) setLoginError(decodeURIComponent(err));
     }
   }, [searchParams]);
 

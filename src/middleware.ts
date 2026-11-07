@@ -1,26 +1,14 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { getClientIp, checkEdgeWaf, getSecurityLockdown } from '@/lib/wafEngine';
 
 /**
- * Auth/static routes that must NEVER hit a database or WAF lookup from the edge.
- * Sessions live in the browser (Supabase localStorage), so the middleware deliberately does NOT
- * gate /dashboard or /admin: route protection is done client-side by PortalContext once
- * supabase.auth.getSession() has resolved. This prevents server/client redirect loops.
+ * High-performance, zero-database Cloudflare Edge Middleware.
+ * Deliberately performs ZERO remote database or external fetch calls on the request path,
+ * eliminating Cloudflare Error 1102 (Worker exceeded resource limits / CPU time limit).
+ * 
+ * Route authentication is handled client-side by PortalContext once Supabase
+ * has deterministically resolved the session.
  */
-const DB_FREE_PREFIXES = [
-  '/_next',
-  '/auth/callback',
-  '/login',
-  '/register',
-  '/forgot-password',
-  '/reset-password',
-  '/favicon',
-];
-
-function isDbFreePath(pathname: string): boolean {
-  return DB_FREE_PREFIXES.some((p) => pathname === p || pathname.startsWith(p + '/') || pathname.startsWith(p));
-}
 
 function applySecurityHeaders(response: NextResponse): NextResponse {
   response.headers.set('X-Content-Type-Options', 'nosniff');
@@ -31,66 +19,21 @@ function applySecurityHeaders(response: NextResponse): NextResponse {
   return response;
 }
 
-export async function middleware(request: NextRequest) {
+export function middleware(request: NextRequest) {
   try {
     const { pathname, searchParams } = request.nextUrl;
 
-    // ------------------------------------------------------------------------
-    // 0. EDGE WAF / EMERGENCY LOCKDOWN (skipped for static + auth pages; fail-open)
-    // ------------------------------------------------------------------------
-    if (!isDbFreePath(pathname) || pathname === '/register') {
-      try {
-        const clientIp = getClientIp(request);
-
-        if (!isDbFreePath(pathname)) {
-          const wafCheck = await checkEdgeWaf(clientIp);
-          if (wafCheck.blocked && wafCheck.action === 'block_403') {
-            return new NextResponse(
-              JSON.stringify({
-                error: 'Access Denied',
-                message: '403 Forbidden — Access Denied by DevHost Cloud Edge WAF Firewall.',
-                reason: wafCheck.reason || 'Malicious entity or IP detected.',
-                clientIp,
-                timestamp: new Date().toISOString(),
-              }),
-              {
-                status: 403,
-                headers: {
-                  'Content-Type': 'application/json',
-                  'X-DevHost-WAF-Block': 'true',
-                  'Retry-After': '86400',
-                },
-              }
-            );
-          }
-        }
-
-        const lockdown = await getSecurityLockdown();
-
-        if (lockdown.maintenance_mode && !pathname.startsWith('/admin') && !pathname.startsWith('/api/admin') && !isDbFreePath(pathname)) {
-          return new NextResponse(
-            JSON.stringify({
-              status: 'Maintenance',
-              message: 'DevHost Cloud is undergoing scheduled infrastructure upgrades. Please check back shortly.',
-              timestamp: new Date().toISOString(),
-            }),
-            { status: 503, headers: { 'Content-Type': 'application/json' } }
-          );
-        }
-
-        if (lockdown.block_new_signups && (pathname === '/register' || pathname.startsWith('/api/auth/register'))) {
-          return new NextResponse(
-            JSON.stringify({
-              error: 'Registration Paused',
-              message: 'New user registrations are temporarily paused by administration.',
-            }),
-            { status: 403, headers: { 'Content-Type': 'application/json' } }
-          );
-        }
-      } catch (wafErr) {
-        // Fail-open so unexpected Edge errors never take down normal browsing
-        console.warn('[Edge Middleware WAF Warning]:', wafErr);
-      }
+    // Immediately pass through Next.js internal and static routes
+    if (
+      pathname.startsWith('/_next') ||
+      pathname.startsWith('/favicon') ||
+      pathname.endsWith('.ico') ||
+      pathname.endsWith('.svg') ||
+      pathname.endsWith('.png') ||
+      pathname.endsWith('.jpg') ||
+      pathname.endsWith('.woff2')
+    ) {
+      return NextResponse.next();
     }
 
     const response = NextResponse.next();
@@ -154,8 +97,8 @@ export async function middleware(request: NextRequest) {
     // ------------------------------------------------------------------------
     return applySecurityHeaders(response);
   } catch (err) {
-    // Middleware must NEVER surface a 500 to the user
-    console.error('[Edge Middleware Fatal - failing open]:', err);
+    // Middleware must NEVER fail or surface a 500/1102 to the user
+    console.warn('[Edge Middleware Notice - fail-open]:', err);
     return NextResponse.next();
   }
 }

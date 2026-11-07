@@ -65,6 +65,8 @@ import {
   LogOut,
   Wallet,
   Loader2,
+  Stethoscope,
+  Briefcase,
 } from 'lucide-react';
 import {
   usePortal,
@@ -91,6 +93,10 @@ import DnsZoneManager from '@/components/domains/DnsZoneManager';
 import DomainTransferTracker from '@/components/domains/DomainTransferTracker';
 import HostingAddonManager from '@/components/domains/HostingAddonManager';
 import HostingProjectControlStudio from '@/components/hosting/HostingProjectControlStudio';
+import SelfHealingUptimeCard from '@/components/dashboard/SelfHealingUptimeCard';
+import LogDoctorModal from '@/components/dashboard/LogDoctorModal';
+import AgencyHandoverView from '@/components/dashboard/AgencyHandoverView';
+import DeveloperCliSnippetCard from '@/components/dashboard/DeveloperCliSnippetCard';
 
 type DashboardTab =
   | 'overview'
@@ -99,6 +105,7 @@ type DashboardTab =
   | 'billing'
   | 'support'
   | 'affiliate'
+  | 'agency_handover'
   | 'security'
   | 'profile';
 
@@ -248,6 +255,7 @@ export default function CustomerDashboardPage() {
   // Service Deep Workspace Sub-Tabs
   const [serviceSubTab, setServiceSubTab] = useState<ServiceSubTab>('overview');
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
+  const [isLogDoctorOpen, setIsLogDoctorOpen] = useState(false);
   const [newCpanelPass, setNewCpanelPass] = useState('DhcSecure_2026!#' + Math.random().toString(36).substring(2, 6));
   const [isDeploying, setIsDeploying] = useState(false);
   const [deployLogs, setDeployLogs] = useState<string[]>([]);
@@ -756,6 +764,24 @@ export default function CustomerDashboardPage() {
 
             <button
               type="button"
+              onClick={() => setActiveTab('agency_handover')}
+              className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                activeTab === 'agency_handover'
+                  ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20'
+                  : 'text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <Briefcase className="w-4 h-4" />
+                <span>Agency Handover</span>
+              </div>
+              <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 font-semibold">
+                Earn 25%
+              </span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => setActiveTab('security')}
               className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
                 activeTab === 'security'
@@ -1090,24 +1116,35 @@ export default function CustomerDashboardPage() {
                 </div>
               ) : (
                 <>
-                  {/* Service Selector Tabs */}
-              <div className="flex items-center gap-2 overflow-x-auto pb-1">
-                {services.map((srv) => (
-                  <button
-                    key={srv.id}
-                    type="button"
-                    onClick={() => setActiveServiceId(srv.id)}
-                    className={`px-4 py-2.5 rounded-xl text-xs font-mono font-semibold transition-all cursor-pointer whitespace-nowrap flex items-center gap-2 border ${
-                      activeService.id === srv.id
-                        ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
-                        : 'bg-white dark:bg-zinc-900/60 text-slate-700 dark:text-zinc-300 border-slate-200 dark:border-white/10 hover:border-blue-400'
-                    }`}
-                  >
-                    <Server className="w-3.5 h-3.5" />
-                    <span>{srv.domain}</span>
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                  </button>
-                ))}
+                  {/* Service Selector Tabs & Log Doctor Action */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-1">
+                <div className="flex items-center gap-2 overflow-x-auto">
+                  {services.map((srv) => (
+                    <button
+                      key={srv.id}
+                      type="button"
+                      onClick={() => setActiveServiceId(srv.id)}
+                      className={`px-4 py-2.5 rounded-xl text-xs font-mono font-semibold transition-all cursor-pointer whitespace-nowrap flex items-center gap-2 border ${
+                        activeService.id === srv.id
+                          ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                          : 'bg-white dark:bg-zinc-900/60 text-slate-700 dark:text-zinc-300 border-slate-200 dark:border-white/10 hover:border-blue-400'
+                      }`}
+                    >
+                      <Server className="w-3.5 h-3.5" />
+                      <span>{srv.domain}</span>
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsLogDoctorOpen(true)}
+                  className="px-3.5 py-2 rounded-xl bg-blue-50 dark:bg-blue-950/60 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 text-xs font-semibold hover:bg-blue-100 flex items-center gap-1.5 cursor-pointer shrink-0 self-start sm:self-auto"
+                >
+                  <Stethoscope className="w-4 h-4 text-blue-600" />
+                  <span>🩺 AI DevOps Log Doctor</span>
+                </button>
               </div>
 
               {/* Service Control Workspace Card */}
@@ -1200,6 +1237,16 @@ export default function CustomerDashboardPage() {
                      ========================================== */}
                   {serviceSubTab === 'overview' && (
                     <div className="space-y-6">
+                      {/* Autonomous 30-Day SLA Uptime & Self-Healing Card */}
+                      <SelfHealingUptimeCard
+                        serviceId={activeService.id}
+                        domain={activeService.domain}
+                        userId={currentUser?.id}
+                        uptimePercent={99.99}
+                        avgLatencyMs={38}
+                        sslDaysRemaining={88}
+                      />
+
                       {/* Server Details Grid */}
                       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/50 border border-slate-200 dark:border-white/5 text-xs font-mono">
                         <div>
@@ -1799,6 +1846,31 @@ export default function CustomerDashboardPage() {
                 </button>
               </div>
 
+              {/* Pre-Ticket AI DevOps Log Doctor Banner */}
+              <div className="p-4 rounded-2xl bg-gradient-to-r from-blue-50 to-indigo-50/60 dark:from-zinc-900 dark:to-blue-950/30 border border-blue-200 dark:border-blue-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0">
+                    <Stethoscope className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-xs sm:text-sm text-slate-900 dark:text-white">
+                      Instant Diagnosis: Run AI DevOps Log Doctor First
+                    </h4>
+                    <p className="text-xs text-slate-600 dark:text-zinc-400 mt-0.5">
+                      Our automated engine checks DNS routing, Passenger 503 hangs, Inode bloat, and SSL certificates with 1-click auto-fixes in 1.2 seconds.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsLogDoctorOpen(true)}
+                  className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs shadow-xs transition-all shrink-0 cursor-pointer flex items-center gap-1.5 self-start sm:self-center"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>🩺 Run Pre-Ticket Scan</span>
+                </button>
+              </div>
+
               {/* Tickets Accordion */}
               <div className="space-y-3">
                 {tickets.map((tkt) => (
@@ -2370,6 +2442,18 @@ export default function CustomerDashboardPage() {
           )}
 
           {/* =========================================================================
+              MODULE 6B: AGENCY WHITE-LABEL CLIENT HANDOVER STUDIO
+             ========================================================================= */}
+          {activeTab === 'agency_handover' && (
+            <div className="space-y-6 animate-in fade-in duration-150">
+              <AgencyHandoverView
+                developerUserId={currentUser?.id}
+                developerName={currentUser?.name || 'Tanvir Ahmed'}
+              />
+            </div>
+          )}
+
+          {/* =========================================================================
               MODULE 7: SECURITY & SSH KEYS
              ========================================================================= */}
           {activeTab === 'security' && (
@@ -2423,6 +2507,13 @@ export default function CustomerDashboardPage() {
                   ))}
                 </div>
               </div>
+
+              {/* Public REST API v1 & Terminal CLI Studio */}
+              <DeveloperCliSnippetCard
+                apiToken="dh_live_948a2bc7190e21a"
+                domain={activeService?.domain || 'ecommerce-live.com'}
+                serviceId={activeService?.id || 'srv_production_sg1'}
+              />
             </div>
           )}
 
@@ -3150,6 +3241,21 @@ export default function CustomerDashboardPage() {
           </div>
         </div>
       )}
+
+      {/* =========================================================================
+          MODAL: PRE-TICKET AI DEVOPS LOG DOCTOR
+         ========================================================================= */}
+      <LogDoctorModal
+        isOpen={isLogDoctorOpen}
+        onClose={() => setIsLogDoctorOpen(false)}
+        serviceId={activeService?.id || 'srv_default'}
+        domain={activeService?.domain || 'ecommerce-live.com'}
+        serverIp={activeService?.ipAddress || '103.151.102.45'}
+        inodesUsed={activeService?.inodesUsed || 38400}
+        inodeLimit={activeService?.inodeLimit || 250000}
+        ramUsedMB={activeService?.ramUsedMB || 420}
+        ramLimitMB={activeService?.ramLimitMB || 2048}
+      />
     </div>
   );
 }

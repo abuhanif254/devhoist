@@ -16,6 +16,19 @@ import {
 import { validateDnsRecord } from '@/lib/dnsEngine';
 import { validateCronCommand } from '@/lib/security';
 import { sanitizeRedirect, isDisposableEmail } from '@/lib/authSecurity';
+import { scanDomainForPhishing } from '@/lib/abuseShieldEngine';
+import {
+  computeNodeHealthScore,
+  selectOptimalServerNode,
+  checkNodeCapacityThreshold,
+  WhmServerNodeRecord,
+} from '@/lib/nodeBalancer';
+import {
+  diagnoseServiceHealth,
+  executeLogDoctorAutoFix,
+  ServiceDiagnosticInput,
+} from '@/lib/logDoctorEngine';
+import { generate30DayUptimeBars } from '@/lib/selfHealingEngine';
 
 // ==============================================================================
 // SUITE 1: UNIT ECONOMICS & DETERMINISTIC PROFIT PROTECTION ENGINE
@@ -341,5 +354,189 @@ describe('Suite 4: Open-Redirect & Auth Security Firewall', () => {
     expect(isDisposableEmail('dev@yahoo.com')).toBe(false);
     expect(isDisposableEmail('contact@devhost.cloud')).toBe(false);
     expect(isDisposableEmail('founder@bangladesh-agency.com.bd')).toBe(false);
+  });
+});
+
+// ==============================================================================
+// SUITE 5: ANTI-PHISHING & UPSTREAM SERVER REPUTATION ABUSE SHIELD
+// ==============================================================================
+describe('Suite 5: Anti-Phishing & Upstream Abuse Shield', () => {
+  it('detects and quarantines financial brand-spoofing phishing domains', () => {
+    const maliciousDomains = [
+      'bkash-reward-claim.xyz',
+      'nagad-verify-pin.top',
+      'sonalibank-login-portal.site',
+      'paypal-security-update.shop',
+    ];
+
+    maliciousDomains.forEach((domain) => {
+      const scan = scanDomainForPhishing(domain);
+      expect(scan.isThreat).toBe(true);
+      expect(scan.riskScore).toBeGreaterThanOrEqual(85);
+      expect(scan.recommendedAction).toBe('quarantined_abuse');
+      expect(scan.matchedRule).not.toBeNull();
+    });
+  });
+
+  it('detects crypto airdrop and scam patterns', () => {
+    const cryptoScams = ['binance-airdrop-login.com', 'metamask-wallet-recover.xyz'];
+    cryptoScams.forEach((domain) => {
+      const scan = scanDomainForPhishing(domain);
+      expect(scan.isThreat).toBe(true);
+      expect(scan.threatCategory).toBe('crypto_scam_pattern');
+      expect(scan.recommendedAction).toBe('quarantined_abuse');
+    });
+  });
+
+  it('permits legitimate customer business and personal domains', () => {
+    const cleanDomains = [
+      'hanifportfolio.com',
+      'dhakafoodapp.com',
+      'acmeagency.xyz',
+      'cloud-fintech-solution.bd',
+    ];
+
+    cleanDomains.forEach((domain) => {
+      const scan = scanDomainForPhishing(domain);
+      expect(scan.isThreat).toBe(false);
+      expect(scan.riskScore).toBeLessThan(50);
+      expect(scan.recommendedAction).toBe('allow');
+    });
+  });
+});
+
+// ==============================================================================
+// SUITE 6: SMART MULTI-NODE BIN-PACKING LOAD BALANCER
+// ==============================================================================
+describe('Suite 6: Smart Multi-Node Bin-Packing Load Balancer', () => {
+  const nodePool: WhmServerNodeRecord[] = [
+    {
+      id: 'node-sg1',
+      node_code: 'sg1',
+      node_name: 'Equinix SG1-01',
+      datacenter_location: 'Singapore Equinix',
+      ipv4_address: '103.151.102.45',
+      whm_hostname: 'sg1.devhost.cloud',
+      whm_username: 'root',
+      monthly_node_cost_bdt: 3500,
+      max_cpanel_slots: 50,
+      used_cpanel_slots: 42, // 84% utilized
+      max_disk_gb: 100,
+      allocated_disk_gb: 82, // 82% utilized
+      auto_provision_enabled: true,
+      is_healthy: true,
+    },
+    {
+      id: 'node-sg2',
+      node_code: 'sg2',
+      node_name: 'Equinix SG1-02 (Fresh Headroom)',
+      datacenter_location: 'Singapore Equinix',
+      ipv4_address: '103.151.102.46',
+      whm_hostname: 'sg2.devhost.cloud',
+      whm_username: 'root',
+      monthly_node_cost_bdt: 3500,
+      max_cpanel_slots: 50,
+      used_cpanel_slots: 8, // 16% utilized
+      max_disk_gb: 100,
+      allocated_disk_gb: 16, // 16% utilized
+      auto_provision_enabled: true,
+      is_healthy: true,
+    },
+  ];
+
+  it('calculates weighted headroom score and warns at 80% capacity', () => {
+    const fullNode = nodePool[0];
+    const { score, slotPercent, diskPercent, isNearCapacity } = computeNodeHealthScore(fullNode);
+
+    expect(slotPercent).toBe(84);
+    expect(diskPercent).toBe(82);
+    expect(isNearCapacity).toBe(true);
+    expect(score).toBeLessThan(30);
+
+    const check = checkNodeCapacityThreshold(fullNode);
+    expect(check.isWarning).toBe(true);
+  });
+
+  it('selects the node with highest available capacity score', () => {
+    const result = selectOptimalServerNode({
+      nodes: nodePool,
+      preferredRegion: 'sg',
+      requiredDiskGB: 5,
+    });
+
+    // Node SG2 has 84% free slots vs SG1 with only 16% free slots
+    expect(result.selectedNode.node_code).toBe('sg2');
+    expect(result.loadHealthScore).toBeGreaterThan(70);
+  });
+});
+
+// ==============================================================================
+// SUITE 7: PRE-TICKET AI DEVOPS LOG DOCTOR & 30-DAY UPTIME GENERATOR
+// ==============================================================================
+describe('Suite 7: Pre-Ticket AI DevOps Log Doctor & 30-Day Uptime', () => {
+  it('detects DNS mismatch, high inode bloat, and missing SSL/HTTPS', () => {
+    const badInput: ServiceDiagnosticInput = {
+      serviceId: 'srv_test',
+      domain: 'my-broken-app.com',
+      serverIp: '103.151.102.45',
+      dnsARecordIp: '192.0.2.1', // Mismatched IP
+      startupFile: 'custom_daemon.sh', // Invalid Passenger entrypoint
+      inodesUsed: 220000,
+      inodeLimit: 250000, // 88% utilized (> 80%)
+      sslStatus: 'expired',
+      forceHttps: false,
+      hasDatabasesWithoutEnvUrl: true,
+      ramUsedMB: 1950,
+      ramLimitMB: 2048, // 95% utilized (> 90%)
+    };
+
+    const report = diagnoseServiceHealth(badInput);
+
+    expect(report.status).toBe('critical');
+    expect(report.healthScore).toBeLessThan(50);
+    expect(report.issues.length).toBeGreaterThanOrEqual(5);
+
+    // Verify specific issue codes exist
+    const issueCodes = report.issues.map((i) => i.issueCode);
+    expect(issueCodes).toContain('DNS_A_RECORD_MISMATCH');
+    expect(issueCodes).toContain('PASSENGER_PORT_STARTUP_ERROR');
+    expect(issueCodes).toContain('INODE_TEMP_CACHE_BLOAT');
+    expect(issueCodes).toContain('SSL_NOT_ACTIVE_OR_FORCE_HTTPS_DISABLED');
+    expect(issueCodes).toContain('RAM_LIMIT_THRASHING');
+  });
+
+  it('executes 1-click auto-fixes and raises health score', async () => {
+    const testData: ServiceDiagnosticInput = {
+      serviceId: 'srv_test',
+      domain: 'ecommerce-fix.com',
+      serverIp: '103.151.102.45',
+      dnsARecordIp: '1.2.3.4',
+      startupFile: 'server.js',
+      inodesUsed: 40000,
+      inodeLimit: 250000,
+      sslStatus: 'active_tls13',
+      forceHttps: true,
+      ramUsedMB: 400,
+      ramLimitMB: 2048,
+    };
+
+    const initialReport = diagnoseServiceHealth(testData);
+    expect(initialReport.healthScore).toBe(75); // 100 - 25 for DNS mismatch
+
+    // Execute 1-click fix for DNS A-record
+    const fixResult = await executeLogDoctorAutoFix('srv_test', 'fix_dns_a_record', testData);
+    expect(fixResult.success).toBe(true);
+    expect(fixResult.healthScoreAfterFix).toBe(100);
+  });
+
+  it('generates 30-day visual SLA status bars with uptime >= 99.90%', () => {
+    const bars = generate30DayUptimeBars(99.99);
+    expect(bars.length).toBe(30);
+
+    bars.forEach((bar) => {
+      expect(bar.uptimePercent).toBeGreaterThanOrEqual(99.85);
+      expect(bar.status).toBe('up');
+      expect(bar.dateStr).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    });
   });
 });

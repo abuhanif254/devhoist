@@ -98,6 +98,7 @@ import {
 } from '@/lib/adminNotifier';
 import { calculateOrderProfitBreakdown } from '@/lib/profitEngine';
 import AdminSecurityProfileView from '@/components/profiles/AdminSecurityProfileView';
+import AdminAbuseShieldView from '@/components/admin/AdminAbuseShieldView';
 import AdminDomainOperationsView from '@/components/domains/AdminDomainOperationsView';
 import AdminServerNodesView from '@/components/admin/AdminServerNodesView';
 import AdminCmsConfigView from '@/components/admin/AdminCmsConfigView';
@@ -2994,6 +2995,7 @@ export default function AdminCommandCenterPage() {
              ========================================================================= */}
           {activeModule === 'founder_security' && (
             <div className="space-y-6 animate-in fade-in duration-150">
+              <AdminAbuseShieldView />
               <AdminSecurityProfileView />
             </div>
           )}

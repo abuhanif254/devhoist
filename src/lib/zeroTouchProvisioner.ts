@@ -9,6 +9,8 @@ import { whmClient } from '@/lib/whmClient';
 import { calculateOrderProfitBreakdown } from '@/lib/profitEngine';
 import { renderHostingProvisionedEmail, sendEmail } from '@/lib/emailEngine';
 import { notifyNewPaidOrder, sendTelegramAlert } from '@/lib/adminNotifier';
+import { scanDomainForPhishing, quarantineAbuseDomain } from '@/lib/abuseShieldEngine';
+import { selectOptimalServerNode, checkNodeCapacityThreshold, WhmServerNodeRecord } from '@/lib/nodeBalancer';
 
 export interface ZeroTouchProvisionParams {
   invoiceId?: string;
@@ -109,6 +111,33 @@ export async function executeZeroTouchProvisioning(
 
   console.log(`[ZeroTouchProvisioner] Starting 5-Step Pipeline for ${cleanDomain} (cPanel: ${cpanelUser})...`);
 
+  // ===========================================================================
+  // STEP 0 — PROACTIVE ANTI-PHISHING & ABUSE QUARANTINE SHIELD
+  // ===========================================================================
+  const abuseScan = scanDomainForPhishing(cleanDomain);
+  if (abuseScan.isThreat) {
+    console.warn(`[ZeroTouch BLOCKED] Domain ${cleanDomain} quarantined for phishing brand-spoofing!`, abuseScan);
+    await quarantineAbuseDomain({
+      hostname: cleanDomain,
+      userId: params.userId,
+      scanResult: abuseScan,
+    });
+
+    return {
+      success: false,
+      message: `Activation Halted & Quarantined: High-risk brand spoofing / phishing heuristic detected (${abuseScan.matchedRule}). Zero server activation permitted.`,
+      durationMs: Date.now() - startTime,
+      cpanelUsername: '',
+      domain: cleanDomain,
+      serverNode: 'quarantine',
+      serverIp: '0.0.0.0',
+      nameservers: [],
+      sslStatus: 'blocked_abuse',
+      stepsCompleted: ['Step 0: Anti-Phishing Abuse Shield Triggered - Domain Quarantined'],
+      error: abuseScan.reason,
+    };
+  }
+
   try {
     const db = isSupabaseConfigured() ? getServiceSupabase() : null;
 
@@ -178,25 +207,32 @@ export async function executeZeroTouchProvisioning(
     // =========================================================================
     // STEP 2 — AUTOMATED CPANEL & CLOUDLINUX CONTAINER CREATION
     // =========================================================================
-    // Select healthiest server node
+    // Smart Multi-Node Bin-Packing Placement
     if (db) {
       try {
         const { data: activeNodes } = await db
           .from('whm_server_nodes')
           .select('*')
           .eq('auto_provision_enabled', true)
-          .eq('is_healthy', true)
-          .order('used_cpanel_slots', { ascending: true })
-          .limit(1);
+          .eq('is_healthy', true);
 
         if (activeNodes && activeNodes.length > 0) {
-          const selectedNode = activeNodes[0];
+          const balancerResult = selectOptimalServerNode({
+            nodes: activeNodes as WhmServerNodeRecord[],
+            preferredRegion: params.targetServerNode || 'sg',
+            requiredDiskGB: 5,
+          });
+
+          const selectedNode = balancerResult.selectedNode;
           serverNodeCode = selectedNode.node_code || 'sg1';
           serverIp = selectedNode.ipv4_address || defaultIp;
           serverNameservers = [
             selectedNode.primary_nameserver || 'ns1.devhost.cloud',
             selectedNode.secondary_nameserver || 'ns2.devhost.cloud',
           ];
+
+          // Check if this node is crossing 80% threshold and trigger proactive alert
+          checkNodeCapacityThreshold(selectedNode);
 
           // Atomically increment node capacity counters
           await db
@@ -208,7 +244,7 @@ export async function executeZeroTouchProvisioning(
             .eq('id', selectedNode.id);
         }
       } catch (nodeErr) {
-        console.warn('[ZeroTouch Warning] Node selection query fallback:', nodeErr);
+        console.warn('[ZeroTouch Warning] Smart node balancer fallback:', nodeErr);
       }
     }
 

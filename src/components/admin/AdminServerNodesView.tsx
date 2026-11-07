@@ -23,6 +23,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { useSudoGate } from '@/components/security/SudoGateModal';
+import AdminNodeBalancerCard from '@/components/admin/AdminNodeBalancerCard';
 
 interface ServerNodeItem {
   id: string;
@@ -365,6 +366,9 @@ export default function AdminServerNodesView() {
           </div>
         </div>
       )}
+
+      {/* Smart Multi-Node Bin-Packing Load Balancer Card */}
+      <AdminNodeBalancerCard nodes={nodes} />
 
       {/* Cluster Overview Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

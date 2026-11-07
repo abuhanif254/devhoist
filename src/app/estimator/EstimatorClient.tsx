@@ -53,7 +53,7 @@ const CATALOG_ITEMS: ServiceItem[] = [
     name: 'Business Max Cloud Hosting',
     type: 'hosting',
     priceMonthlyBDT: 900,
-    desc: '10 GB NVMe, 4 GB RAM, 2 Cores High-Freq, 600K Inodes',
+    desc: '15 GB NVMe, 4 GB RAM, 4 Cores High-Freq, 600K Inodes',
   },
 
   // Cloud VPS

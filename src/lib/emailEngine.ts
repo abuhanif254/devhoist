@@ -4,6 +4,8 @@
  * Integrates Resend REST API (https://api.resend.com/emails) with graceful offline/dev simulation outbox.
  */
 
+import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
+
 export type EmailTemplateId =
   | 'welcome_and_verify'
   | 'hosting_provisioned_credentials'
@@ -67,17 +69,76 @@ export async function sendEmail(params: {
   template: EmailLogEntry['template'];
   html: string;
 }): Promise<{ success: boolean; id: string }> {
-  const emailId = `eml-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  let emailId = `eml-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  let resendApiKey = process.env.RESEND_API_KEY;
+  let fromEmail = process.env.RESEND_FROM_EMAIL || 'DevHost Cloud <onboarding@resend.dev>';
+
+  // Check cms_global_config for saved live credentials if env key not set
+  if (!resendApiKey && isSupabaseConfigured()) {
+    try {
+      const db = getServiceSupabase();
+      const { data } = await db
+        .from('cms_global_config')
+        .select('config_value')
+        .eq('config_key', 'live_integrations')
+        .maybeSingle();
+
+      if (data?.config_value?.resend_api_key) {
+        resendApiKey = data.config_value.resend_api_key;
+        if (data.config_value.resend_from_email) {
+          fromEmail = data.config_value.resend_from_email;
+        }
+      }
+    } catch (err) {
+      console.warn('[EmailEngine] CMS credentials lookup:', err);
+    }
+  }
+
+  let status: 'delivered' | 'simulated' | 'failed' = 'simulated';
+
+  // Live Resend API Dispatch
+  if (resendApiKey) {
+    try {
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${resendApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: fromEmail,
+          to: [params.to],
+          subject: params.subject,
+          html: params.html,
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data?.id) {
+        emailId = data.id;
+        status = 'delivered';
+      } else {
+        console.warn('[EmailEngine] Resend API returned error:', data);
+        status = 'failed';
+      }
+    } catch (err) {
+      console.warn('[EmailEngine] Resend live email network warning:', err);
+    }
+  } else {
+    status = 'delivered'; // Delivered to local outbox simulation
+  }
+
   logEmailToOutbox({
     id: emailId,
     to: params.to,
     subject: params.subject,
     template: params.template,
-    status: 'delivered',
+    status,
     sentAt: new Date().toISOString(),
     previewText: params.subject,
     html: params.html,
   });
+
   return { success: true, id: emailId };
 }
 

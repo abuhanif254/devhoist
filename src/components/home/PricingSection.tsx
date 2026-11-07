@@ -126,27 +126,45 @@ export default function PricingSection() {
             const isHighlighted = plan.highlighted;
             const isMobileVisible = mobileActivePlanId === plan.id;
 
+            // Dynamically construct top 3 specification bullets from database single source of truth
+            const dynamicTopBullets = [
+              `${storageText} Pure NVMe SSD`,
+              `${ramText} Dedicated CloudLinux RAM`,
+              `${cpuText} | ${plan.ioLimit} Disk I/O`,
+            ];
+
+            const nonHardwareFeatures = plan.features.filter(
+              (f) =>
+                !f.toLowerCase().includes('nvme') &&
+                !f.toLowerCase().includes('ram') &&
+                !f.toLowerCase().includes('cpu') &&
+                !f.toLowerCase().includes('disk i/o') &&
+                !f.toLowerCase().includes('core')
+            );
+
+            const finalDisplayFeatures = [...dynamicTopBullets, ...nonHardwareFeatures];
+
             return (
               <SpotlightCard
                 key={plan.id}
-                className={`flex flex-col rounded-2xl p-6 sm:p-7 relative transition-all duration-300 ${
+                className={`flex flex-col rounded-2xl relative transition-all duration-300 ${
                   isHighlighted
-                    ? 'bg-white dark:bg-zinc-900 border-2 border-blue-600 dark:border-blue-500 shadow-xl md:-translate-y-1.5'
-                    : 'bg-white dark:bg-zinc-950 border border-slate-200 dark:border-white/[0.08] shadow-md hover:border-slate-300 dark:hover:border-white/[0.16]'
+                    ? 'bg-white dark:bg-zinc-900 border-2 border-blue-600 dark:border-blue-500 shadow-xl md:-translate-y-1.5 p-6 sm:p-7 pt-8 sm:pt-9'
+                    : 'bg-white dark:bg-zinc-950 border border-slate-200 dark:border-white/[0.08] shadow-md hover:border-slate-300 dark:hover:border-white/[0.16] p-6 sm:p-7'
                 } ${!isMobileVisible ? 'hidden md:flex' : 'flex'}`}
               >
                 {/* Most Popular Badge */}
                 {isHighlighted && (
-                  <div className="absolute -top-3.5 left-1/2 -translate-x-1/2">
-                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-600 text-white text-[11px] font-mono font-bold shadow-md shadow-blue-500/30">
+                  <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 z-10 whitespace-nowrap">
+                    <span className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-blue-600 text-white text-xs font-semibold shadow-md whitespace-nowrap">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                      {plan.badge || 'Recommended'}
+                      {plan.badge || 'Most Popular / Developer Choice'}
                     </span>
                   </div>
                 )}
 
                 {/* Plan Header */}
-                <div className="mb-5">
+                <div className={`mb-5 ${isHighlighted ? 'pt-2' : ''}`}>
                   <h3 className="text-xl font-bold text-slate-900 dark:text-white">{plan.name}</h3>
                   <p className="text-xs text-slate-600 dark:text-zinc-400 mt-1 min-h-[32px] font-normal leading-relaxed">
                     {plan.tagline}
@@ -174,7 +192,28 @@ export default function PricingSection() {
                     <div className="text-xs text-slate-500 dark:text-zinc-500 mt-1.5 font-mono">Monthly flexible billing</div>
                   )}
 
-                  <div className="text-[11px] text-slate-400 dark:text-zinc-500 mt-1">
+                  {/* Glowing 1st-Year Free Domain Badge or Switch Note */}
+                  {isAnnual ? (
+                    <div className="mt-3 p-2.5 rounded-xl bg-gradient-to-r from-emerald-500/15 via-emerald-500/10 to-transparent border border-emerald-500/30 dark:border-emerald-500/20 text-emerald-800 dark:text-emerald-300 text-xs font-semibold flex items-center gap-2 animate-in fade-in duration-200">
+                      <span className="text-sm shrink-0">🎁</span>
+                      <span className="leading-tight">
+                        {plan.id === 'starter'
+                          ? 'Includes 1st-Year FREE .xyz or .shop Domain (Save ৳290)'
+                          : 'Includes 1st-Year FREE .com Domain (Save ৳1,350)'}
+                      </span>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setBillingCycle('annually')}
+                      className="mt-2.5 text-[11px] text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 font-medium flex items-center gap-1 transition-colors group cursor-pointer text-left"
+                    >
+                      <span>Switch to Yearly billing to claim a 1st-Year FREE Domain</span>
+                      <span className="group-hover:translate-x-0.5 transition-transform">→</span>
+                    </button>
+                  )}
+
+                  <div className="text-[11px] text-slate-400 dark:text-zinc-500 mt-2">
                     Renewal at same price • Zero hidden rate hikes
                   </div>
                 </div>
@@ -200,7 +239,7 @@ export default function PricingSection() {
                   <div className="text-[11px] font-mono uppercase tracking-wider text-slate-400 dark:text-zinc-500 font-semibold">
                     Resource Specifications:
                   </div>
-                  {plan.features.map((feature, idx) => (
+                  {finalDisplayFeatures.map((feature, idx) => (
                     <div key={idx} className="flex items-start gap-2 text-xs text-slate-700 dark:text-zinc-300">
                       <Check className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
                       <span>{feature}</span>

@@ -12,14 +12,34 @@ import {
   RefreshCw,
   Save,
   Sparkles,
+  Zap,
+  Mail,
+  Send,
+  Loader2,
+  ExternalLink,
+  Check,
 } from 'lucide-react';
 import { useSudoGate } from '@/components/security/SudoGateModal';
 
 export default function AdminCmsConfigView() {
   const { requireSudo } = useSudoGate();
-  const [activeSubTab, setActiveSubTab] = useState<'banner' | 'currency' | 'gateways' | 'hero' | 'lockdown'>('banner');
+  const [activeSubTab, setActiveSubTab] = useState<'banner' | 'currency' | 'gateways' | 'hero' | 'lockdown' | 'live_integrations'>('banner');
   const [isLoading, setIsLoading] = useState(true);
   const [toast, setToast] = useState<string | null>(null);
+
+  // Live Integrations (Telegram & Resend) State
+  const [telegramBotToken, setTelegramBotToken] = useState('');
+  const [telegramChatId, setTelegramChatId] = useState('');
+  const [resendApiKey, setResendApiKey] = useState('');
+  const [resendFromEmail, setResendFromEmail] = useState('DevHost Cloud <onboarding@resend.dev>');
+  const [founderEmail, setFounderEmail] = useState('mohammadbitullah@gmail.com');
+  const [isTelegramConnected, setIsTelegramConnected] = useState(false);
+  const [isResendConnected, setIsResendConnected] = useState(false);
+  const [isTestingTelegram, setIsTestingTelegram] = useState(false);
+  const [telegramTestFeedback, setTelegramTestFeedback] = useState<{ success: boolean; msg: string } | null>(null);
+  const [isTestingResend, setIsTestingResend] = useState(false);
+  const [resendTestFeedback, setResendTestFeedback] = useState<{ success: boolean; msg: string } | null>(null);
+  const [isSavingIntegrations, setIsSavingIntegrations] = useState(false);
 
   // CMS State
   const [bannerConfig, setBannerConfig] = useState({
@@ -77,6 +97,19 @@ export default function AdminCmsConfigView() {
         if (data.configs.hero_cms_content) setHeroConfig(data.configs.hero_cms_content);
         if (data.configs.security_lockdown) setLockdownConfig(data.configs.security_lockdown);
       }
+
+      // Fetch Live Integrations
+      const intRes = await fetch('/api/admin/live-integrations');
+      const intData = await intRes.json();
+      if (intData.success && intData.config) {
+        if (intData.config.telegram_bot_token) setTelegramBotToken(intData.config.telegram_bot_token);
+        if (intData.config.telegram_chat_id) setTelegramChatId(intData.config.telegram_chat_id);
+        if (intData.config.resend_api_key) setResendApiKey(intData.config.resend_api_key);
+        if (intData.config.resend_from_email) setResendFromEmail(intData.config.resend_from_email);
+        if (intData.config.founder_email) setFounderEmail(intData.config.founder_email);
+        setIsTelegramConnected(intData.config.is_telegram_connected);
+        setIsResendConnected(intData.config.is_resend_connected);
+      }
     } catch (err) {
       console.warn('Failed to fetch CMS configs:', err);
     } finally {
@@ -114,6 +147,86 @@ export default function AdminCmsConfigView() {
         alert(err.message);
       }
     }, `Update ${label}`);
+  };
+
+  const handleSaveIntegrations = () => {
+    requireSudo(async () => {
+      setIsSavingIntegrations(true);
+      try {
+        const res = await fetch('/api/admin/live-integrations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'save',
+            telegram_bot_token: telegramBotToken,
+            telegram_chat_id: telegramChatId,
+            resend_api_key: resendApiKey,
+            resend_from_email: resendFromEmail,
+            founder_email: founderEmail,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) throw new Error(data.error || 'Failed to save integrations');
+
+        showToast('Live Integrations credentials saved successfully!');
+        fetchConfigs();
+      } catch (err: any) {
+        alert(err.message);
+      } finally {
+        setIsSavingIntegrations(false);
+      }
+    }, 'Save Zero-Cost Telegram & Resend Integrations');
+  };
+
+  const handleTestTelegram = async () => {
+    setIsTestingTelegram(true);
+    setTelegramTestFeedback(null);
+    try {
+      const res = await fetch('/api/admin/live-integrations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'test_telegram',
+          telegram_bot_token: telegramBotToken,
+          telegram_chat_id: telegramChatId,
+        }),
+      });
+      const data = await res.json();
+      setTelegramTestFeedback({
+        success: data.success,
+        msg: data.success ? data.message : `Error: ${data.error || 'Failed to send Telegram message'}`,
+      });
+    } catch (err: any) {
+      setTelegramTestFeedback({ success: false, msg: err.message });
+    } finally {
+      setIsTestingTelegram(false);
+    }
+  };
+
+  const handleTestResend = async () => {
+    setIsTestingResend(true);
+    setResendTestFeedback(null);
+    try {
+      const res = await fetch('/api/admin/live-integrations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'test_resend',
+          resend_api_key: resendApiKey,
+          founder_email: founderEmail,
+          resend_from_email: resendFromEmail,
+        }),
+      });
+      const data = await res.json();
+      setResendTestFeedback({
+        success: data.success,
+        msg: data.success ? data.message : `Error: ${data.error || 'Failed to send email'}`,
+      });
+    } catch (err: any) {
+      setResendTestFeedback({ success: false, msg: err.message });
+    } finally {
+      setIsTestingResend(false);
+    }
   };
 
   return (
@@ -203,6 +316,19 @@ export default function AdminCmsConfigView() {
         >
           <FileText className="w-3.5 h-3.5" />
           <span>Hero Headlines &amp; Copy</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveSubTab('live_integrations')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold transition-all cursor-pointer ${
+            activeSubTab === 'live_integrations'
+              ? 'bg-purple-600 text-white shadow-xs'
+              : 'text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-950/40'
+          }`}
+        >
+          <Zap className="w-3.5 h-3.5" />
+          <span>⚡ Zero-Cost Telegram &amp; Email Integrations</span>
         </button>
 
         <button
@@ -616,6 +742,209 @@ export default function AdminCmsConfigView() {
             >
               <ShieldAlert className="w-4 h-4" />
               <span>Apply Emergency Lockdown (Sudo Verified)</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Subtab 6: Zero-Cost Live Integrations (Telegram & Resend Email) */}
+      {activeSubTab === 'live_integrations' && (
+        <div className="space-y-6 font-mono text-xs animate-in fade-in">
+          {/* Blueprint Hero Card */}
+          <div className="p-6 rounded-2xl bg-gradient-to-r from-purple-950/40 via-blue-950/30 to-zinc-900 border border-purple-500/20 space-y-2">
+            <div className="flex items-center gap-2">
+              <Zap className="w-5 h-5 text-purple-400" />
+              <strong className="text-base text-white">Zero-Cost Founder Live Integrations Wizard</strong>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                100% Free Forever
+              </span>
+            </div>
+            <p className="text-slate-300 text-xs font-sans leading-relaxed">
+              Before purchasing a domain or cPanel server, you can test real mobile push alerts and real transactional invoice emails to your smartphone right now at <strong>৳0 cost</strong>.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Telegram Bot Live Connector Card */}
+            <div className="p-6 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs space-y-4">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-white/5">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-sky-500/10 text-sky-500 flex items-center justify-center font-bold">
+                    📱
+                  </div>
+                  <div>
+                    <strong className="text-sm text-slate-900 dark:text-white block">Telegram Bot Mobile Push</strong>
+                    <span className="text-[11px] text-slate-400">Instant notifications on order payments &amp; provisioning</span>
+                  </div>
+                </div>
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                  isTelegramConnected
+                    ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                    : 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                }`}>
+                  {isTelegramConnected ? 'CONNECTED' : 'AWAITING SETUP'}
+                </span>
+              </div>
+
+              <div className="space-y-3">
+                <div>
+                  <label className="text-slate-700 dark:text-zinc-300 font-semibold block mb-1">
+                    Telegram Bot Token (from @BotFather)
+                  </label>
+                  <input
+                    type="password"
+                    placeholder="e.g. 7123456789:AAHq_Abc123DeFGhiJklMNop"
+                    value={telegramBotToken}
+                    onChange={(e) => setTelegramBotToken(e.target.value)}
+                    className="w-full h-9 px-3 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-zinc-950 text-slate-900 dark:text-white"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Message <a href="https://t.me/BotFather" target="_blank" rel="noreferrer" className="text-sky-500 underline">@BotFather</a> on Telegram, send <code>/newbot</code>, and copy the API token.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="text-slate-700 dark:text-zinc-300 font-semibold block mb-1">
+                    Admin Chat ID
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. 987654321"
+                    value={telegramChatId}
+                    onChange={(e) => setTelegramChatId(e.target.value)}
+                    className="w-full h-9 px-3 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-zinc-950 text-slate-900 dark:text-white"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Message <a href="https://t.me/userinfobot" target="_blank" rel="noreferrer" className="text-sky-500 underline">@userinfobot</a> on Telegram to discover your personal numerical ID.
+                  </p>
+                </div>
+
+                {telegramTestFeedback && (
+                  <div className={`p-3 rounded-xl border text-[11px] ${
+                    telegramTestFeedback.success
+                      ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-300 text-emerald-800 dark:text-emerald-300'
+                      : 'bg-rose-50 dark:bg-rose-950/30 border-rose-300 text-rose-800 dark:text-rose-300'
+                  }`}>
+                    {telegramTestFeedback.msg}
+                  </div>
+                )}
+
+                <div className="flex items-center gap-2 pt-2">
+                  <button
+                    type="button"
+                    disabled={isTestingTelegram || !telegramBotToken || !telegramChatId}
+                    onClick={handleTestTelegram}
+                    className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 disabled:opacity-50 text-white font-semibold cursor-pointer shadow-xs transition-all"
+                  >
+                    {isTestingTelegram ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                    <span>Send Real Test Alert to My Phone</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Resend Email Live Connector Card */}
+            <div className="p-6 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs space-y-4">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-white/5">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-emerald-500/10 text-emerald-500 flex items-center justify-center font-bold">
+                    ✉️
+                  </div>
+                  <div>
+                    <strong className="text-sm text-slate-900 dark:text-white block">Resend Email REST API</strong>
+                    <span className="text-[11px] text-slate-400">Zero-cost live transactional emails (3,000/mo free)</span>
+                  </div>
+                </div>
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                  isResendConnected
+                    ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                    : 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                }`}>
+                  {isResendConnected ? 'CONNECTED' : 'AWAITING SETUP'}
+                </span>
+              </div>
+
+              <div className="space-y-3">
+                <div>
+                  <label className="text-slate-700 dark:text-zinc-300 font-semibold block mb-1">
+                    Resend API Key (starts with re_)
+                  </label>
+                  <input
+                    type="password"
+                    placeholder="e.g. re_1234567890abcdef"
+                    value={resendApiKey}
+                    onChange={(e) => setResendApiKey(e.target.value)}
+                    className="w-full h-9 px-3 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-zinc-950 text-slate-900 dark:text-white"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Sign up free at <a href="https://resend.com" target="_blank" rel="noreferrer" className="text-emerald-500 underline">resend.com</a> and generate an API key in 1 click.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="text-slate-700 dark:text-zinc-300 font-semibold block mb-1">
+                    From Sender (Use onboarding@resend.dev for test)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="DevHost Cloud <onboarding@resend.dev>"
+                    value={resendFromEmail}
+                    onChange={(e) => setResendFromEmail(e.target.value)}
+                    className="w-full h-9 px-3 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-zinc-950 text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-slate-700 dark:text-zinc-300 font-semibold block mb-1">
+                    Founder Test Destination Email
+                  </label>
+                  <input
+                    type="email"
+                    placeholder="mohammadbitullah@gmail.com"
+                    value={founderEmail}
+                    onChange={(e) => setFounderEmail(e.target.value)}
+                    className="w-full h-9 px-3 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-zinc-950 text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                {resendTestFeedback && (
+                  <div className={`p-3 rounded-xl border text-[11px] ${
+                    resendTestFeedback.success
+                      ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-300 text-emerald-800 dark:text-emerald-300'
+                      : 'bg-rose-50 dark:bg-rose-950/30 border-rose-300 text-rose-800 dark:text-rose-300'
+                  }`}>
+                    {resendTestFeedback.msg}
+                  </div>
+                )}
+
+                <div className="flex items-center gap-2 pt-2">
+                  <button
+                    type="button"
+                    disabled={isTestingResend || !resendApiKey}
+                    onClick={handleTestResend}
+                    className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-semibold cursor-pointer shadow-xs transition-all"
+                  >
+                    {isTestingResend ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Mail className="w-3.5 h-3.5" />}
+                    <span>Send Real Test Invoice &amp; Welcome Email</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Master Save Button */}
+          <div className="p-4 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] flex items-center justify-between">
+            <div className="text-[11px] text-slate-400">
+              Credentials are saved securely into <code>cms_global_config</code> and active immediately across all serverless routes.
+            </div>
+            <button
+              type="button"
+              disabled={isSavingIntegrations}
+              onClick={handleSaveIntegrations}
+              className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-semibold cursor-pointer shadow-md disabled:opacity-50"
+            >
+              <Save className="w-4 h-4" />
+              <span>{isSavingIntegrations ? 'Saving...' : 'Save Live Integration Credentials'}</span>
             </button>
           </div>
         </div>

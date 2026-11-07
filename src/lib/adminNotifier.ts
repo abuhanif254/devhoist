@@ -4,6 +4,8 @@
  * Gracefully simulates and records notifications if tokens are not configured in .env
  */
 
+import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
+
 export interface TelegramLogEntry {
   id: string;
   type: 'order' | 'payment_verify' | 'migration' | 'ticket' | 'fraud' | 'test';
@@ -48,8 +50,27 @@ export async function sendTelegramAlert(
   message: string,
   type: TelegramLogEntry['type'] = 'test'
 ): Promise<{ success: boolean; simulated: boolean; id: string; error?: string }> {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
+  let token = process.env.TELEGRAM_BOT_TOKEN;
+  let chatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
+
+  // Check cms_global_config for saved credentials if env keys are not present
+  if ((!token || !chatId) && isSupabaseConfigured()) {
+    try {
+      const db = getServiceSupabase();
+      const { data } = await db
+        .from('cms_global_config')
+        .select('config_value')
+        .eq('config_key', 'live_integrations')
+        .maybeSingle();
+
+      if (data?.config_value) {
+        token = token || data.config_value.telegram_bot_token;
+        chatId = chatId || data.config_value.telegram_chat_id;
+      }
+    } catch (err) {
+      console.warn('[TelegramAlert] CMS credentials lookup:', err);
+    }
+  }
 
   if (token && chatId) {
     try {

@@ -327,3 +327,50 @@ export async function createFraudAlert(params: FraudAlertParams): Promise<void> 
     console.warn(`[FRAUD_RADAR] [${payload.severity.toUpperCase()}] ${payload.alert_type}:`, payload.details);
   }
 }
+
+// ------------------------------------------------------------------------------
+// 7. CRON COMMAND & SHELL INJECTION FIREWALL
+// ------------------------------------------------------------------------------
+const DANGEROUS_COMMAND_PATTERNS = [
+  /rm\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r|--recursive)\s+[\/\*]/i, // rm -rf / or *
+  /rm\s+(-[a-zA-Z]*r|--recursive)\s+[\/\*]/i,
+  /(?:curl|wget)\s+[^|;]+\|\s*(?:sh|bash|zsh|dash)/i, // curl | sh or wget | bash
+  /:\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/, // fork bomb
+  /\bmkfs\b/i,
+  /\bdd\s+if=/i,
+  /chmod\s+(-[a-zA-Z]*R\s+)?777\s+[\/]/i,
+  /\b(?:nc|netcat)\s+.*-e\s+/i,
+  /\/dev\/tcp\/[0-9.]+\/[0-9]+/i,
+  />\s*\/dev\/sd[a-z]/i,
+  /\bcat\s+\/etc\/(?:shadow|master\.passwd)/i,
+  /\buserdel\b/i,
+  /\binit\s+[06]\b/i,
+  /\bshutdown\b/i,
+  /\breboot\b/i,
+];
+
+export interface CronValidationResult {
+  valid: boolean;
+  error?: string;
+}
+
+export function validateCronCommand(command: string): CronValidationResult {
+  if (!command || !command.trim()) {
+    return { valid: false, error: 'Cron command cannot be empty.' };
+  }
+
+  const trimmed = command.trim();
+
+  // Check against dangerous patterns
+  for (const pattern of DANGEROUS_COMMAND_PATTERNS) {
+    if (pattern.test(trimmed)) {
+      return {
+        valid: false,
+        error: 'Security Alert: Command blocked by platform shell firewall (potential destructive or remote injection pattern detected).',
+      };
+    }
+  }
+
+  return { valid: true };
+}
+

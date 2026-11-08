@@ -11,6 +11,7 @@ import { renderHostingProvisionedEmail, sendEmail } from '@/lib/emailEngine';
 import { notifyNewPaidOrder, sendTelegramAlert } from '@/lib/adminNotifier';
 import { scanDomainForPhishing, quarantineAbuseDomain } from '@/lib/abuseShieldEngine';
 import { selectOptimalServerNode, checkNodeCapacityThreshold, WhmServerNodeRecord } from '@/lib/nodeBalancer';
+import { provisionMarketplaceStack, resolveStackSlug } from '@/lib/stackProvisioner';
 
 export interface ZeroTouchProvisionParams {
   invoiceId?: string;
@@ -387,55 +388,19 @@ export async function executeZeroTouchProvisioning(
 
     if (db && assignedServiceId) {
       try {
-        const webhookToken = `whsec_${generateRandomHex(24)}`;
-
-        // Initialize project settings
-        await db.from('hosting_project_settings').upsert(
-          {
-            service_id: assignedServiceId,
-            user_id: params.userId || null,
-            framework_preset: params.appStack === 'wordpress_lscache' ? 'wordpress_lscache' : 'nextjs_standalone',
-            runtime_version: 'Node.js 22 LTS',
-            root_directory: './',
-            install_command: 'npm ci',
-            build_command: 'npm run build',
-            output_directory: '.next/standalone',
-            startup_file: 'server.js',
-            production_branch: 'main',
-            auto_deploy_on_push: true,
-            webhook_secret_token: webhookToken,
-            litespeed_cache_enabled: true,
-            redis_object_cache_enabled: true,
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: 'service_id' }
+        const targetStackSlug = resolveStackSlug(params.appStack || 'nextjs-15-standalone');
+        const stackProvision = await provisionMarketplaceStack({
+          serviceId: assignedServiceId,
+          userId: params.userId || '00000000-0000-0000-0000-000000000000',
+          stackSlug: targetStackSlug,
+          domain: cleanDomain,
+          cpanelUser,
+        });
+        stepsCompleted.push(
+          `Step 4a: Universal Stack Blueprint Provisioned (${stackProvision.stack.name} | ${stackProvision.runtimeVersion})`
         );
-
-        // Create initial starter production deployment
-        const { data: depData } = await db
-          .from('project_deployments')
-          .insert({
-            service_id: assignedServiceId,
-            user_id: params.userId || null,
-            commit_sha: `init-${Date.now().toString(16).slice(-7)}`,
-            commit_message: 'Initial Production Release (Zero-Touch Provisioned Container)',
-            branch: 'main',
-            author_name: params.customerName || 'DevHost Cloud',
-            trigger_source: 'manual_dashboard',
-            status: 'live_production',
-            environment: 'production',
-            deployed_url: `https://${cleanDomain}`,
-            created_at: new Date().toISOString(),
-            completed_at: new Date().toISOString(),
-          })
-          .select('id')
-          .single();
-
-        if (depData) {
-          deploymentId = depData.id;
-        }
       } catch (gitErr) {
-        console.warn('[ZeroTouch Warning] Git project initialization:', gitErr);
+        console.warn('[ZeroTouch Warning] Universal stack provisioning fallback:', gitErr);
       }
     }
 

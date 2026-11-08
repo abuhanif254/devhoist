@@ -39,6 +39,10 @@ import {
   describeCronExpression,
   getMaskedPreview,
 } from '@/lib/projectEngine';
+import {
+  UNIVERSAL_MARKETPLACE_STACKS,
+  MarketplaceStackBlueprint,
+} from '@/lib/stackProvisioner';
 
 interface HostingProjectControlStudioProps {
   serviceId: string;
@@ -60,7 +64,12 @@ export default function HostingProjectControlStudio({
   const { requireSudo } = useSudoGate();
 
   // Navigation SubTab
-  const [currentTab, setCurrentTab] = useState<'settings_env' | 'deployments' | 'databases' | 'backups_cron'>('deployments');
+  const [currentTab, setCurrentTab] = useState<
+    'settings_env' | 'deployments' | 'databases' | 'backups_cron' | 'stack_installer'
+  >('deployments');
+  const [selectedInstallSlug, setSelectedInstallSlug] = useState<string>('nextjs-15-standalone');
+  const [isInstallingStack, setIsInstallingStack] = useState<boolean>(false);
+  const [lastProvisionResult, setLastProvisionResult] = useState<any | null>(null);
 
   // Sync with parent prop if provided
   useEffect(() => {
@@ -538,6 +547,37 @@ export default function HostingProjectControlStudio({
     }
   };
 
+  // 1-Click Stack Installer Handler
+  const handleInstallMarketplaceStack = async (stackSlug: string) => {
+    setIsInstallingStack(true);
+    setLastProvisionResult(null);
+    try {
+      const res = await fetch('/api/hosting/install-stack', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          serviceId,
+          stackSlug,
+          domain: serviceDomain,
+          cpanelUser,
+          gitRepoUrl: gitRepoUrl || undefined,
+          gitBranch: gitBranch || 'main',
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to provision stack');
+      }
+      setLastProvisionResult(data.result);
+      showToast(data.message || 'Stack provisioned and deployed!');
+      fetchAllData();
+    } catch (err: any) {
+      alert(err.message || 'Stack installation failed');
+    } finally {
+      setIsInstallingStack(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {toast && (
@@ -616,6 +656,19 @@ export default function HostingProjectControlStudio({
         >
           <History className="w-3.5 h-3.5" />
           <span>JetBackup &amp; Cron Jobs</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setCurrentTab('stack_installer')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold transition-all cursor-pointer ${
+            currentTab === 'stack_installer'
+              ? 'bg-blue-600 text-white shadow-xs'
+              : 'text-blue-600 dark:text-blue-400 hover:bg-blue-500/10'
+          }`}
+        >
+          <Sparkles className="w-3.5 h-3.5" />
+          <span>1-Click Stack Installer (16)</span>
         </button>
       </div>
 
@@ -1263,6 +1316,108 @@ export default function HostingProjectControlStudio({
                   )}
                 </div>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =======================================================================
+          TAB 5: 1-CLICK UNIVERSAL STACK INSTALLER (16 PRODUCTION STACKS)
+         ======================================================================= */}
+      {currentTab === 'stack_installer' && (
+        <div className="space-y-6 animate-in fade-in duration-150 font-mono text-xs">
+          <div className="p-5 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-white/5 pb-3">
+              <div>
+                <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2 text-sm">
+                  <Sparkles className="w-4 h-4 text-blue-600" />
+                  <span>Universal 1-Click Application &amp; Stack Installer (16 Stacks)</span>
+                </h3>
+                <p className="text-slate-500 mt-0.5">
+                  Automatically configures runtime engine, provisions MySQL 8.0 / PostgreSQL 16 database, encrypts AES-256-GCM .env secrets, and deploys onto{' '}
+                  <strong className="text-slate-800 dark:text-zinc-200">{serviceDomain}</strong>.
+                </p>
+              </div>
+            </div>
+
+            {lastProvisionResult && (
+              <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-emerald-700 dark:text-emerald-300 flex items-center gap-1.5">
+                    <CheckCircle2 className="w-4 h-4" />
+                    Provisioned: {lastProvisionResult.stack?.name} ({lastProvisionResult.runtimeVersion})
+                  </span>
+                  <span className="px-2 py-0.5 rounded bg-emerald-600 text-white text-[10px] font-bold">
+                    Commit #{lastProvisionResult.deploymentCommitHash} LIVE
+                  </span>
+                </div>
+                {lastProvisionResult.provisionedDatabase && (
+                  <div className="text-[11px] text-slate-700 dark:text-zinc-300">
+                    Auto-Provisioned DB:{' '}
+                    <strong>
+                      {lastProvisionResult.provisionedDatabase.engine} ({lastProvisionResult.provisionedDatabase.dbName})
+                    </strong>{' '}
+                    — <code className="text-emerald-600 dark:text-emerald-400">{lastProvisionResult.provisionedDatabase.connectionUriMasked}</code>
+                  </div>
+                )}
+                <div className="text-[11px] text-slate-600 dark:text-zinc-400">
+                  Injected {lastProvisionResult.injectedEnvKeys?.length || 0} Encrypted .ENV Keys:{' '}
+                  {lastProvisionResult.injectedEnvKeys?.map((k: any) => k.key).join(', ')}
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+              {UNIVERSAL_MARKETPLACE_STACKS.map((stk: MarketplaceStackBlueprint) => {
+                const isSelected = selectedInstallSlug === stk.slug;
+                return (
+                  <div
+                    key={stk.slug}
+                    onClick={() => setSelectedInstallSlug(stk.slug)}
+                    className={`p-4 rounded-2xl border transition-all cursor-pointer flex flex-col justify-between gap-3 ${
+                      isSelected
+                        ? 'border-blue-600 bg-blue-50/40 dark:bg-blue-950/20 ring-1 ring-blue-600'
+                        : 'border-slate-200 dark:border-white/10 bg-slate-50/50 dark:bg-zinc-950/40 hover:border-blue-400'
+                    }`}
+                  >
+                    <div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="px-2 py-0.5 rounded bg-blue-500/10 text-blue-600 dark:text-blue-400 text-[10px] font-bold">
+                          {stk.category}
+                        </span>
+                        <span className="text-[10px] text-slate-500">{stk.default_runtime_version}</span>
+                      </div>
+                      <h4 className="font-bold text-slate-900 dark:text-white mt-1.5 text-xs">
+                        {stk.name}
+                      </h4>
+                      <p className="text-[11px] text-slate-500 dark:text-zinc-400 mt-1 line-clamp-2 font-sans">
+                        {stk.tagline_en}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-2 border-t border-slate-200/70 dark:border-white/5">
+                      <span className="text-[10px] text-slate-500">
+                        DB: <strong>{stk.requires_database}</strong> • .env: <strong>{stk.default_env_schema.length} keys</strong>
+                      </span>
+
+                      <button
+                        type="button"
+                        disabled={isInstallingStack}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedInstallSlug(stk.slug);
+                          handleInstallMarketplaceStack(stk.slug);
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold text-[11px] cursor-pointer shadow-xs"
+                      >
+                        {isInstallingStack && selectedInstallSlug === stk.slug
+                          ? 'Provisioning...'
+                          : 'Auto-Configure & Deploy'}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>

@@ -30,9 +30,15 @@ import {
 import { useBilling } from '@/context/BillingContext';
 import { usePortal } from '@/context/PortalContext';
 import { WHMCS_CONFIG } from '@/config/whmcs';
+import {
+  UNIVERSAL_MARKETPLACE_STACKS,
+  getStackBlueprintBySlug,
+  PLAN_SLUG_TO_PID,
+  resolveStackSlug,
+} from '@/lib/stackProvisioner';
 
 type Region = 'sg' | 'us';
-type AppStack = 'nextjs_git' | 'wordpress_lscache' | 'laravel_php' | 'clean_cpanel';
+type AppStack = string;
 type Cycle = 'monthly' | 'annually';
 type PaymentMethod = 'bKash' | 'Nagad' | 'Wallet' | 'Stripe';
 
@@ -99,11 +105,23 @@ export default function StackBuilderDrawer() {
   const { walletBalanceBDT, currentUser } = usePortal();
 
   const [region, setRegion] = useState<Region>('sg');
-  const [appStack, setAppStack] = useState<AppStack>('nextjs_git');
+  const [appStack, setAppStack] = useState<AppStack>('nextjs-15-standalone');
+  const [selectedPidOverride, setSelectedPidOverride] = useState<number | null>(null);
   const [cycle, setCycle] = useState<Cycle>('monthly');
   const [promoInput, setPromoInput] = useState('');
   const [promoApplied, setPromoApplied] = useState(false);
   const [promoError, setPromoError] = useState<string | null>(null);
+
+  // Sync incoming stackBuilderConfig when opened
+  React.useEffect(() => {
+    if (stackBuilderConfig) {
+      const incomingSlug =
+        stackBuilderConfig.selectedStackSlug ||
+        (stackBuilderConfig.defaultStack ? resolveStackSlug(stackBuilderConfig.defaultStack) : 'nextjs-15-standalone');
+      setAppStack(incomingSlug);
+      setSelectedPidOverride(null);
+    }
+  }, [stackBuilderConfig]);
 
   // Real Payment Flow State
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
@@ -133,8 +151,24 @@ export default function StackBuilderDrawer() {
 
   if (!isStackBuilderOpen) return null;
 
-  const pid = stackBuilderConfig?.pid || 2;
-  const planName = stackBuilderConfig?.planName || 'Developer Pro Cloud';
+  const activeBlueprint =
+    getStackBlueprintBySlug(appStack) || UNIVERSAL_MARKETPLACE_STACKS[0];
+  const minRequiredPid =
+    stackBuilderConfig?.minPlanPid ||
+    PLAN_SLUG_TO_PID[activeBlueprint.recommended_plan_slug]?.pid ||
+    1;
+  const rawConfigPid =
+    selectedPidOverride ||
+    stackBuilderConfig?.pid ||
+    stackBuilderConfig?.defaultPlanId ||
+    minRequiredPid;
+  const pid = Math.max(rawConfigPid, Math.min(minRequiredPid, 3));
+  const planName =
+    pid === 1
+      ? 'Starter Pack Cloud'
+      : pid === 3
+      ? 'Business Max Cloud'
+      : 'Developer Pro Cloud';
   const effectiveDomain = customDomainInput.trim() || stackBuilderConfig?.domainName || 'my-new-app.com';
   const specs = PLAN_SPECS[pid] || PLAN_SPECS[2];
 
@@ -465,33 +499,105 @@ export default function StackBuilderDrawer() {
               </div>
             </div>
 
-            {/* App Stack Selection */}
-            <div className="space-y-2">
-              <label className="font-semibold text-slate-800 dark:text-zinc-200">
-                Runtime Stack &amp; Framework
-              </label>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {STACK_OPTIONS.map((stk) => {
-                  const Icon = stk.icon;
-                  return (
-                    <button
-                      key={stk.id}
-                      type="button"
-                      onClick={() => setAppStack(stk.id)}
-                      className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer ${
-                        appStack === stk.id
-                          ? 'border-blue-600 bg-blue-50/50 dark:bg-blue-950/20 ring-1 ring-blue-600'
-                          : 'border-slate-200 dark:border-white/10 bg-white dark:bg-zinc-900'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2 font-bold text-slate-900 dark:text-white">
-                        <Icon className="w-4 h-4 text-blue-600" />
-                        <span>{stk.name}</span>
-                      </div>
-                      <p className="text-[11px] text-slate-500 mt-1">{stk.desc}</p>
-                    </button>
-                  );
-                })}
+            {/* Universal 16-Stack Blueprint Selector & Hardware Guard */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="font-semibold text-slate-800 dark:text-zinc-200">
+                  Universal Application Stack Blueprint (16 Stacks)
+                </label>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 font-bold">
+                  {activeBlueprint.default_runtime_version}
+                </span>
+              </div>
+
+              <select
+                value={activeBlueprint.slug}
+                onChange={(e) => setAppStack(e.target.value)}
+                className="w-full h-10 px-3 rounded-xl border border-slate-300 dark:border-white/10 bg-slate-50 dark:bg-zinc-900 font-semibold text-slate-900 dark:text-white"
+              >
+                {UNIVERSAL_MARKETPLACE_STACKS.map((stk) => (
+                  <option key={stk.slug} value={stk.slug}>
+                    {stk.name} — [{stk.category}] (Min {stk.min_ram_mb / 1024} GB RAM)
+                  </option>
+                ))}
+              </select>
+
+              <div className="p-3.5 rounded-xl border border-blue-500/30 bg-blue-50/40 dark:bg-blue-950/20 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-blue-600" />
+                    {activeBlueprint.name}
+                  </span>
+                  <span className="text-[10px] font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                    Entry: {activeBlueprint.startup_entry_file}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-600 dark:text-zinc-400">
+                  {activeBlueprint.tagline_en}
+                </p>
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  <span className="px-2 py-0.5 rounded bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-[10px] font-mono">
+                    DB: {activeBlueprint.requires_database}
+                  </span>
+                  <span className="px-2 py-0.5 rounded bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-[10px] font-mono">
+                    .env Keys: {activeBlueprint.default_env_schema.length} encrypted
+                  </span>
+                  {activeBlueprint.requires_redis && (
+                    <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 text-[10px] font-mono font-bold">
+                      Redis Socket Ready
+                    </span>
+                  )}
+                  {activeBlueprint.requires_websocket_proxy && (
+                    <span className="px-2 py-0.5 rounded bg-purple-500/10 text-purple-700 dark:text-purple-300 text-[10px] font-mono font-bold">
+                      WSS Tunnel Enabled
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Hardware Tier Guard Selector */}
+              <div className="space-y-1.5 pt-1">
+                <label className="font-semibold text-slate-800 dark:text-zinc-200 flex items-center justify-between">
+                  <span>CloudLinux Hardware Tier (OOM-Protected)</span>
+                  {minRequiredPid > 1 && (
+                    <span className="text-[10px] text-amber-600 dark:text-amber-400 font-mono">
+                      Requires ≥ {activeBlueprint.min_ram_mb / 1024} GB RAM
+                    </span>
+                  )}
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { id: 1, title: 'Starter Pack', ram: '1 GB RAM', price: '৳200/mo' },
+                    { id: 2, title: 'Developer Pro', ram: '2 GB RAM', price: '৳450/mo' },
+                    { id: 3, title: 'Business Max', ram: '4 GB RAM', price: '৳900/mo' },
+                  ].map((tier) => {
+                    const isLocked = tier.id < Math.min(minRequiredPid, 3);
+                    const isSelected = pid === tier.id;
+                    return (
+                      <button
+                        key={tier.id}
+                        type="button"
+                        disabled={isLocked}
+                        onClick={() => setSelectedPidOverride(tier.id)}
+                        className={`p-2.5 rounded-xl border text-left transition-all ${
+                          isLocked
+                            ? 'opacity-45 cursor-not-allowed border-slate-200 dark:border-white/5 bg-slate-100 dark:bg-zinc-900/40'
+                            : isSelected
+                            ? 'border-blue-600 bg-blue-50/60 dark:bg-blue-950/30 ring-1 ring-blue-600 cursor-pointer'
+                            : 'border-slate-200 dark:border-white/10 bg-white dark:bg-zinc-900 cursor-pointer'
+                        }`}
+                      >
+                        <div className="font-bold text-slate-900 dark:text-white flex items-center justify-between">
+                          <span>{tier.title}</span>
+                          {isLocked && <Lock className="w-3 h-3 text-rose-500" />}
+                        </div>
+                        <div className="text-[10px] font-mono text-blue-600 dark:text-blue-400 mt-0.5">
+                          {tier.ram} • {tier.price}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
 

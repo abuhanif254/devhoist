@@ -28,6 +28,12 @@ import {
   executeLogDoctorAutoFix,
   ServiceDiagnosticInput,
 } from '@/lib/logDoctorEngine';
+import {
+  UNIVERSAL_MARKETPLACE_STACKS,
+  getStackBlueprintBySlug,
+  evaluateStackHardwareCompatibility,
+  generateStackSecret,
+} from '@/lib/stackProvisioner';
 import { generate30DayUptimeBars } from '@/lib/selfHealingEngine';
 
 // ==============================================================================
@@ -538,5 +544,70 @@ describe('Suite 7: Pre-Ticket AI DevOps Log Doctor & 30-Day Uptime', () => {
       expect(bar.status).toBe('up');
       expect(bar.dateStr).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     });
+  });
+});
+
+// ==============================================================================
+// SUITE 7: UNIVERSAL MULTI-STACK PROVISIONER (16 PRODUCTION STACKS)
+// ==============================================================================
+describe('Suite 7: Universal Multi-Stack Provisioning Engine (16 Stacks)', () => {
+  it('provides all 16 complete production stack blueprints with valid CI/CD and server bridges', () => {
+    expect(UNIVERSAL_MARKETPLACE_STACKS.length).toBe(16);
+
+    const expectedSlugs = [
+      'nextjs-15-standalone',
+      'vue-nuxt3-ssr',
+      'laravel-11-saas',
+      'wordpress-woocommerce-turbo',
+      'nestjs-prisma-api',
+      'strapi-headless-cms',
+      'ghost-publishing',
+      'fastapi-django-python',
+      'express-realtime-websocket',
+      'sitejet-ai-corporate',
+      'uptime-kuma-monitor',
+      'n8n-workflow-automation',
+      'astro-mdx-blog',
+      'sveltekit-fullstack',
+      'remix-react-router',
+      'medusa-headless-commerce',
+    ];
+
+    expectedSlugs.forEach((slug) => {
+      const blueprint = getStackBlueprintBySlug(slug);
+      expect(blueprint).toBeDefined();
+      expect(blueprint!.github_workflow_yaml.length).toBeGreaterThan(50);
+      expect(blueprint!.server_bridge_script.length).toBeGreaterThan(20);
+      expect(blueprint!.default_env_schema.length).toBeGreaterThan(0);
+    });
+  });
+
+  it('enforces hardware OOM compatibility guards for memory-intensive stacks', () => {
+    // Strapi v5 requires 4096 MB RAM (Business Max) -> should reject 1024 MB Starter Pack
+    const strapiOnStarter = evaluateStackHardwareCompatibility('strapi-headless-cms', 1024, 1);
+    expect(strapiOnStarter.compatible).toBe(false);
+    expect(strapiOnStarter.recommendedPlan.pid).toBe(3);
+
+    // Strapi v5 on 4096 MB Business Max -> should pass
+    const strapiOnBizMax = evaluateStackHardwareCompatibility('strapi-headless-cms', 4096, 2);
+    expect(strapiOnBizMax.compatible).toBe(true);
+
+    // Astro 5 & WordPress Turbo on 1024 MB Starter Pack -> should pass
+    const astroOnStarter = evaluateStackHardwareCompatibility('astro-mdx-blog', 1024, 1);
+    expect(astroOnStarter.compatible).toBe(true);
+  });
+
+  it('generates cryptographic secrets, Laravel base64 APP_KEY, and site URLs accurately', () => {
+    const laravelAppKey = generateStackSecret(
+      { key: 'APP_KEY', value: 'auto_secret_32', isSecret: true, generator: 'auto_secret_32' },
+      { domain: 'saas.devhost.cloud', stackSlug: 'laravel-11-saas' }
+    );
+    expect(laravelAppKey.startsWith('base64:')).toBe(true);
+
+    const siteUrl = generateStackSecret(
+      { key: 'NEXTAUTH_URL', value: 'auto_site_url', isSecret: false, generator: 'auto_site_url' },
+      { domain: 'app.devhost.cloud' }
+    );
+    expect(siteUrl).toBe('https://app.devhost.cloud');
   });
 });

@@ -8,12 +8,17 @@ type BillingCycle = 'monthly' | 'annually';
 type Theme = 'dark' | 'light';
 
 export interface StackBuilderConfig {
-  pid: number;
+  pid?: number;
+  defaultPlanId?: number;
   planName: string;
-  basePriceMonthlyBDT: number;
-  basePriceMonthlyUSD: number;
+  basePriceMonthlyBDT?: number;
+  basePriceMonthlyUSD?: number;
+  basePriceBDT?: number;
+  basePriceUSD?: number;
   defaultRegion?: 'sg' | 'us';
-  defaultStack?: 'nextjs_git' | 'wordpress_lscache' | 'laravel_php' | 'clean_cpanel';
+  defaultStack?: 'nextjs_git' | 'wordpress_lscache' | 'laravel_php' | 'clean_cpanel' | string;
+  selectedStackSlug?: string;
+  minPlanPid?: number;
   domainName?: string;
   promoCode?: string;
   specs?: {

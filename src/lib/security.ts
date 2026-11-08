@@ -342,7 +342,7 @@ const DANGEROUS_COMMAND_PATTERNS = [
   /\b(?:nc|netcat)\s+.*-e\s+/i,
   /\/dev\/tcp\/[0-9.]+\/[0-9]+/i,
   />\s*\/dev\/sd[a-z]/i,
-  /\bcat\s+\/etc\/(?:shadow|master\.passwd)/i,
+  /\bcat\s+\/etc\/(?:shadow|passwd|master\.passwd)/i,
   /\buserdel\b/i,
   /\binit\s+[06]\b/i,
   /\bshutdown\b/i,
@@ -373,4 +373,76 @@ export function validateCronCommand(command: string): CronValidationResult {
 
   return { valid: true };
 }
+
+// ------------------------------------------------------------------------------
+// 8. CONTAINER FILE MANAGER PATH TRAVERSAL SANITIZER
+// ------------------------------------------------------------------------------
+export interface FilePathValidationResult {
+  valid: boolean;
+  normalizedPath: string;
+  fileName: string;
+  error?: string;
+}
+
+export function normalizeAndValidateFilePath(rawPath: string): FilePathValidationResult {
+  if (!rawPath || typeof rawPath !== 'string' || !rawPath.trim()) {
+    return {
+      valid: false,
+      normalizedPath: '',
+      fileName: '',
+      error: 'File path is required.',
+    };
+  }
+
+  const trimmed = rawPath.trim();
+
+  // Block null bytes, backslashes, or traversal sequences
+  if (
+    trimmed.includes('\0') ||
+    trimmed.includes('\\') ||
+    trimmed.includes('..') ||
+    trimmed.includes('//') ||
+    /^\/(?:etc|proc|sys|root|var\/run|dev|boot)(?:\/|$)/i.test(trimmed)
+  ) {
+    return {
+      valid: false,
+      normalizedPath: '',
+      fileName: '',
+      error: 'Security Alert: Path traversal or restricted system directory access blocked by container sandbox.',
+    };
+  }
+
+  const withLeadingSlash = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  const cleanSegments = withLeadingSlash.split('/').filter(Boolean);
+
+  if (cleanSegments.length === 0) {
+    return {
+      valid: false,
+      normalizedPath: '/',
+      fileName: '',
+      error: 'Cannot modify container root directory directly.',
+    };
+  }
+
+  for (const seg of cleanSegments) {
+    if (seg === '.' || seg === '..' || !/^[a-zA-Z0-9._\-]+$/.test(seg)) {
+      return {
+        valid: false,
+        normalizedPath: '',
+        fileName: '',
+        error: `Invalid path segment "${seg}". Only alphanumeric characters, dots, underscores, and hyphens are allowed.`,
+      };
+    }
+  }
+
+  const normalizedPath = `/${cleanSegments.join('/')}`;
+  const fileName = cleanSegments[cleanSegments.length - 1];
+
+  return {
+    valid: true,
+    normalizedPath,
+    fileName,
+  };
+}
+
 

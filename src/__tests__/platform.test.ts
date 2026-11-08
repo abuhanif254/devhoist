@@ -4,6 +4,7 @@ import {
   calculateDomainProfitBreakdown,
   validatePricingPlanChange,
   calculateSafeRefundBreakdown,
+  calculatePlanUpgradeProRata,
 } from '@/lib/profitEngine';
 import { TEAM_ROLE_PRESETS } from '@/app/api/team/route';
 import {
@@ -16,7 +17,7 @@ import {
   verifySecurityPin,
 } from '@/lib/totpEngine';
 import { validateDnsRecord } from '@/lib/dnsEngine';
-import { validateCronCommand } from '@/lib/security';
+import { validateCronCommand, normalizeAndValidateFilePath } from '@/lib/security';
 import { sanitizeRedirect, isDisposableEmail } from '@/lib/authSecurity';
 import { scanDomainForPhishing } from '@/lib/abuseShieldEngine';
 import {
@@ -667,3 +668,65 @@ describe('Suite 8: Free-Domain Refund Loss Protection & Team RBAC Enforcement', 
     expect(auditorScopes).not.toContain('git:deploy');
   });
 });
+
+// ==============================================================================
+// SUITE 9: CLOUD WORKSPACE EXPANSION (FILE SANDBOX, JAILED SSH & AUTO-SCALER)
+// ==============================================================================
+describe('Suite 9: Cloud Workspace Expansion (Path Traversal Sanitizer & Auto-Scaler Math)', () => {
+  it('blocks path traversal (..), null bytes, backslashes, and system directories in File Manager', () => {
+    const maliciousPaths = [
+      '../../etc/passwd',
+      '/public_html/../../etc/shadow',
+      '/etc/passwd',
+      '/proc/self/environ',
+      '/public_html/shell.php\0.jpg',
+      '\\Windows\\System32\\cmd.exe',
+    ];
+
+    maliciousPaths.forEach((p) => {
+      const check = normalizeAndValidateFilePath(p);
+      expect(check.valid).toBe(false);
+      expect(check.error).toBeDefined();
+    });
+  });
+
+  it('normalizes and permits safe container file paths inside /public_html and /logs', () => {
+    const safeCheck = normalizeAndValidateFilePath('/public_html/next.config.mjs');
+    expect(safeCheck.valid).toBe(true);
+    expect(safeCheck.normalizedPath).toBe('/public_html/next.config.mjs');
+    expect(safeCheck.fileName).toBe('next.config.mjs');
+
+    const htaccessCheck = normalizeAndValidateFilePath('public_html/.htaccess');
+    expect(htaccessCheck.valid).toBe(true);
+    expect(htaccessCheck.normalizedPath).toBe('/public_html/.htaccess');
+    expect(htaccessCheck.fileName).toBe('.htaccess');
+  });
+
+  it('calculates profit-protected pro-rata auto-scaler upgrades and enforces customer budget caps', () => {
+    // DevPro (499 BDT) -> Business Max (999 BDT) with 18 days left in 30-day cycle
+    // Difference = 500 BDT/mo => (500 / 30) * 18 = 300 BDT pro-rata
+    const allowedScale = calculatePlanUpgradeProRata({
+      currentPlanMonthlyBDT: 499,
+      targetPlanMonthlyBDT: 999,
+      remainingDaysInCycle: 18,
+      customerMaxBudgetCapBDT: 1200,
+      walletBalanceBDT: 1500,
+    });
+
+    expect(allowedScale.proRataChargeBDT).toBe(300);
+    expect(allowedScale.isWithinBudgetCap).toBe(true);
+    expect(allowedScale.hasSufficientWalletBalance).toBe(true);
+
+    // When customer sets a strict 800 BDT/mo cap, auto-scaling to 999 BDT/mo is blocked
+    const cappedScale = calculatePlanUpgradeProRata({
+      currentPlanMonthlyBDT: 499,
+      targetPlanMonthlyBDT: 999,
+      remainingDaysInCycle: 18,
+      customerMaxBudgetCapBDT: 800,
+      walletBalanceBDT: 1500,
+    });
+
+    expect(cappedScale.isWithinBudgetCap).toBe(false);
+  });
+});
+

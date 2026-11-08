@@ -43,6 +43,9 @@ import {
   UNIVERSAL_MARKETPLACE_STACKS,
   MarketplaceStackBlueprint,
 } from '@/lib/stackProvisioner';
+import CloudWorkspaceExpansionStudio, {
+  WorkspaceExpansionTab,
+} from '@/components/hosting/CloudWorkspaceExpansionStudio';
 
 interface HostingProjectControlStudioProps {
   serviceId: string;
@@ -65,8 +68,14 @@ export default function HostingProjectControlStudio({
 
   // Navigation SubTab
   const [currentTab, setCurrentTab] = useState<
-    'settings_env' | 'deployments' | 'databases' | 'backups_cron' | 'stack_installer'
+    | 'settings_env'
+    | 'deployments'
+    | 'databases'
+    | 'backups_cron'
+    | 'stack_installer'
+    | 'cloud_workspace'
   >('deployments');
+  const [workspaceSubTab, setWorkspaceSubTab] = useState<WorkspaceExpansionTab>('files');
   const [selectedInstallSlug, setSelectedInstallSlug] = useState<string>('nextjs-15-standalone');
   const [isInstallingStack, setIsInstallingStack] = useState<boolean>(false);
   const [lastProvisionResult, setLastProvisionResult] = useState<any | null>(null);
@@ -75,7 +84,10 @@ export default function HostingProjectControlStudio({
   useEffect(() => {
     if (activeTab === 'git') setCurrentTab('deployments');
     else if (activeTab === 'databases') setCurrentTab('databases');
-    else if (activeTab === 'backups') setCurrentTab('backups_cron');
+    else if (activeTab === 'domains_staging') {
+      setCurrentTab('cloud_workspace');
+      setWorkspaceSubTab('previews');
+    } else if (activeTab === 'backups') setCurrentTab('backups_cron');
     else if (activeTab === 'cron_logs') setCurrentTab('backups_cron');
   }, [activeTab]);
 
@@ -670,7 +682,38 @@ export default function HostingProjectControlStudio({
           <Sparkles className="w-3.5 h-3.5" />
           <span>1-Click Stack Installer (16)</span>
         </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setCurrentTab('cloud_workspace');
+            setWorkspaceSubTab('files');
+          }}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold transition-all cursor-pointer ${
+            currentTab === 'cloud_workspace'
+              ? 'bg-emerald-600 text-white shadow-xs'
+              : 'text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10'
+          }`}
+        >
+          <Terminal className="w-3.5 h-3.5" />
+          <span>Cloud IDE, Web SSH, PR Previews, Email &amp; Auto-Scaler</span>
+        </button>
       </div>
+
+      {/* =======================================================================
+          TAB: CLOUD WORKSPACE EXPANSION (FILE IDE, WEB SSH/SQL, PR PREVIEWS, EMAIL, AUTO-SCALER)
+         ======================================================================= */}
+      {currentTab === 'cloud_workspace' && (
+        <CloudWorkspaceExpansionStudio
+          activeSubTab={workspaceSubTab}
+          onSelectSubTab={setWorkspaceSubTab}
+          serviceId={serviceId}
+          domain={serviceDomain}
+          username={cpanelUser}
+          onRequireSudo={(reason, callback) => requireSudo(callback, reason)}
+          onNotify={showToast}
+        />
+      )}
 
       {/* =======================================================================
           TAB 1: DEPLOYMENTS & LIVE ROLLBACK RELEASES

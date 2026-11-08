@@ -353,3 +353,107 @@ export function calculateSafeRefundBreakdown({
     formulaSummary,
   };
 }
+
+export interface PlanUpgradeProRataBreakdown {
+  currentPlanSlug: string;
+  targetPlanSlug: string;
+  currentMonthlyBDT: number;
+  targetMonthlyBDT: number;
+  currentPlanMonthlyBDT: number;
+  targetPlanMonthlyBDT: number;
+  daysRemainingInCycle: number;
+  remainingDaysInCycle: number;
+  proRataUpgradeChargeBDT: number;
+  proRataChargeBDT: number;
+  incrementalServerCostBDT: number;
+  lockedOwnerNetProfitBDT: number;
+  maxMonthlyBudgetCapBDT: number;
+  customerMaxBudgetCapBDT: number;
+  withinBudgetCap: boolean;
+  isWithinBudgetCap: boolean;
+  walletCoversUpgrade: boolean;
+  hasSufficientWalletBalance: boolean;
+  canAutoScaleNow: boolean;
+  reason: string;
+}
+
+/**
+ * Deterministic Profit-Protected Pro-Rata Auto-Scaler Calculation
+ * Ensures that when a container auto-scales from Starter -> Developer Pro -> Business Max,
+ * the pro-rata difference covers both incremental server cost and locked owner net profit.
+ */
+export function calculatePlanUpgradeProRata({
+  currentPlanSlug = 'developer-pro',
+  targetPlanSlug = 'business-max',
+  currentMonthlyBDT,
+  targetMonthlyBDT,
+  currentPlanMonthlyBDT,
+  targetPlanMonthlyBDT,
+  daysRemainingInCycle,
+  remainingDaysInCycle,
+  maxMonthlyBudgetCapBDT,
+  customerMaxBudgetCapBDT,
+  walletBalanceBDT = 1200,
+}: {
+  currentPlanSlug?: string;
+  targetPlanSlug?: string;
+  currentMonthlyBDT?: number;
+  targetMonthlyBDT?: number;
+  currentPlanMonthlyBDT?: number;
+  targetPlanMonthlyBDT?: number;
+  daysRemainingInCycle?: number;
+  remainingDaysInCycle?: number;
+  maxMonthlyBudgetCapBDT?: number;
+  customerMaxBudgetCapBDT?: number;
+  walletBalanceBDT?: number;
+}): PlanUpgradeProRataBreakdown {
+  const resolvedCurrentMonthly = currentPlanMonthlyBDT ?? currentMonthlyBDT ?? 499;
+  const resolvedTargetMonthly = targetPlanMonthlyBDT ?? targetMonthlyBDT ?? 999;
+  const resolvedDays = remainingDaysInCycle ?? daysRemainingInCycle ?? 18;
+  const resolvedBudgetCap = customerMaxBudgetCapBDT ?? maxMonthlyBudgetCapBDT ?? 1500;
+
+  const safeDays = Math.max(1, Math.min(30, resolvedDays));
+  const monthlyDiff = Math.max(0, resolvedTargetMonthly - resolvedCurrentMonthly);
+  const rawProRata = Math.ceil((monthlyDiff * safeDays) / 30);
+
+  // Guarantee minimum floor covering incremental server hardware + owner profit
+  const incrementalServerCostBDT = Math.round(rawProRata * 0.25);
+  const lockedOwnerNetProfitBDT = Math.max(50, rawProRata - incrementalServerCostBDT);
+  const proRataUpgradeChargeBDT = Math.max(
+    incrementalServerCostBDT + lockedOwnerNetProfitBDT,
+    rawProRata
+  );
+
+  const withinBudgetCap = resolvedTargetMonthly <= resolvedBudgetCap;
+  const walletCoversUpgrade = walletBalanceBDT >= proRataUpgradeChargeBDT;
+  const canAutoScaleNow = withinBudgetCap && walletCoversUpgrade && monthlyDiff > 0;
+
+  const reason = !withinBudgetCap
+    ? `Target plan (৳${resolvedTargetMonthly}/mo) exceeds customer budget cap (৳${resolvedBudgetCap}/mo).`
+    : !walletCoversUpgrade
+    ? `Prepaid Wallet balance (৳${walletBalanceBDT}) is below pro-rata upgrade charge (৳${proRataUpgradeChargeBDT}).`
+    : `Auto-scale approved: ৳${proRataUpgradeChargeBDT} pro-rata (${safeDays} days remaining) deducted from Prepaid Wallet. Owner profit ৳${lockedOwnerNetProfitBDT} locked.`;
+
+  return {
+    currentPlanSlug,
+    targetPlanSlug,
+    currentMonthlyBDT: resolvedCurrentMonthly,
+    targetMonthlyBDT: resolvedTargetMonthly,
+    currentPlanMonthlyBDT: resolvedCurrentMonthly,
+    targetPlanMonthlyBDT: resolvedTargetMonthly,
+    daysRemainingInCycle: safeDays,
+    remainingDaysInCycle: safeDays,
+    proRataUpgradeChargeBDT,
+    proRataChargeBDT: proRataUpgradeChargeBDT,
+    incrementalServerCostBDT,
+    lockedOwnerNetProfitBDT,
+    maxMonthlyBudgetCapBDT: resolvedBudgetCap,
+    customerMaxBudgetCapBDT: resolvedBudgetCap,
+    withinBudgetCap,
+    isWithinBudgetCap: withinBudgetCap,
+    walletCoversUpgrade,
+    hasSufficientWalletBalance: walletCoversUpgrade,
+    canAutoScaleNow,
+    reason,
+  };
+}

@@ -3,7 +3,9 @@ import {
   calculateOrderProfitBreakdown,
   calculateDomainProfitBreakdown,
   validatePricingPlanChange,
+  calculateSafeRefundBreakdown,
 } from '@/lib/profitEngine';
+import { TEAM_ROLE_PRESETS } from '@/app/api/team/route';
 import {
   generateBase32Secret,
   generateTotpToken,
@@ -609,5 +611,59 @@ describe('Suite 7: Universal Multi-Stack Provisioning Engine (16 Stacks)', () =>
       { domain: 'app.devhost.cloud' }
     );
     expect(siteUrl).toBe('https://app.devhost.cloud');
+  });
+});
+
+// ==============================================================================
+// SUITE 8: FREE-DOMAIN REFUND LOSS PROTECTION & TEAM RBAC ENFORCEMENT
+// ==============================================================================
+describe('Suite 8: Free-Domain Refund Loss Protection & Team RBAC Enforcement', () => {
+  it('deducts non-refundable 1st-year free domain fee (.com = 1350 BDT, .xyz = 290 BDT) from 30-day refunds', () => {
+    const comRefund = calculateSafeRefundBreakdown({
+      invoiceTotalBDT: 4320,
+      freeDomainClaimed: true,
+      bundledDomainName: 'mystartup.com',
+      affiliateCommissionBDT: 864,
+      daysSincePurchase: 14,
+    });
+
+    expect(comRefund.nonRefundableDomainFeeBDT).toBe(1350);
+    expect(comRefund.maxSafeRefundableAmountBDT).toBe(4320 - 1350); // 2970 BDT
+    expect(comRefund.affiliateCommissionClawbackBDT).toBe(864);
+    expect(comRefund.customerRetainsDomainOwnership).toBe(true);
+
+    const xyzRefund = calculateSafeRefundBreakdown({
+      invoiceTotalBDT: 1920,
+      freeDomainClaimed: true,
+      bundledDomainName: 'myblog.xyz',
+      affiliateCommissionBDT: 384,
+      daysSincePurchase: 10,
+    });
+
+    expect(xyzRefund.nonRefundableDomainFeeBDT).toBe(290);
+    expect(xyzRefund.maxSafeRefundableAmountBDT).toBe(1920 - 290); // 1630 BDT
+  });
+
+  it('blocks refunds after 30 days elapsed', () => {
+    const expiredRefund = calculateSafeRefundBreakdown({
+      invoiceTotalBDT: 4320,
+      freeDomainClaimed: false,
+      daysSincePurchase: 45,
+    });
+
+    expect(expiredRefund.isWithin30DayWindow).toBe(false);
+    expect(expiredRefund.maxSafeRefundableAmountBDT).toBe(0);
+  });
+
+  it('enforces least-privilege scopes on DevOps Deployer and Read-Only Auditor team roles', () => {
+    const devopsScopes = TEAM_ROLE_PRESETS.devops_deployer.scopes;
+    expect(devopsScopes).toContain('git:deploy');
+    expect(devopsScopes).toContain('env:write');
+    expect(devopsScopes).not.toContain('billing:write');
+    expect(devopsScopes).not.toContain('team:manage');
+
+    const auditorScopes = TEAM_ROLE_PRESETS.readonly_auditor.scopes;
+    expect(auditorScopes).toContain('logs:read');
+    expect(auditorScopes).not.toContain('git:deploy');
   });
 });

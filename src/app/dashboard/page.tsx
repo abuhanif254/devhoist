@@ -93,6 +93,7 @@ import DnsZoneManager from '@/components/domains/DnsZoneManager';
 import DomainTransferTracker from '@/components/domains/DomainTransferTracker';
 import HostingAddonManager from '@/components/domains/HostingAddonManager';
 import HostingProjectControlStudio from '@/components/hosting/HostingProjectControlStudio';
+import TeamRbacManager from '@/components/security/TeamRbacManager';
 import SelfHealingUptimeCard from '@/components/dashboard/SelfHealingUptimeCard';
 import LogDoctorModal from '@/components/dashboard/LogDoctorModal';
 import AgencyHandoverView from '@/components/dashboard/AgencyHandoverView';
@@ -2454,10 +2455,16 @@ export default function CustomerDashboardPage() {
           )}
 
           {/* =========================================================================
-              MODULE 7: SECURITY & SSH KEYS
+              MODULE 7: SECURITY, TEAM RBAC & SSH KEYS
              ========================================================================= */}
           {activeTab === 'security' && (
             <div className="space-y-6 animate-in fade-in duration-150">
+              {/* Granular Organization Team RBAC Manager */}
+              <TeamRbacManager
+                ownerUserId={currentUser?.id}
+                availableServices={services.map((s) => ({ id: s.id, domain: s.domain }))}
+              />
+
               {/* SSH Keys */}
               <div className="p-5 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] space-y-4">
                 <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">

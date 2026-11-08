@@ -4,6 +4,7 @@ import Header from '@/components/layout/Header';
 import Footer from '@/components/layout/Footer';
 import BrowserPingTester from '@/components/status/BrowserPingTester';
 import UptimeHistoryGraph from '@/components/status/UptimeHistoryGraph';
+import NetworkLookingGlassStudio from '@/components/status/NetworkLookingGlassStudio';
 import FaqAccordion from '@/components/common/FaqAccordion';
 import { COMPLETE_FAQ_LIST } from '@/config/faqData';
 
@@ -66,7 +67,12 @@ export default function ServerStatusPage() {
             </div>
           </section>
 
-          {/* 1. Live Browser-to-Datacenter Ping Tester */}
+          {/* 1. Interactive Network Looking Glass, Latency Radar & SLA Credit Studio */}
+          <section className="px-4 sm:px-6 lg:px-8 pt-16 pb-16 border-b border-slate-200 dark:border-white/[0.07] relative">
+            <NetworkLookingGlassStudio />
+          </section>
+
+          {/* 2. Live Browser-to-Datacenter Ping Tester */}
           <section className="px-4 sm:px-6 lg:px-8 pt-20 pb-16 border-b border-slate-200 dark:border-white/[0.07] relative">
             <BrowserPingTester />
           </section>

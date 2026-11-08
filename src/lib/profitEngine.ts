@@ -258,3 +258,98 @@ export function validatePricingPlanChange({
     safeAffiliatePoolBDT: safePool,
   };
 }
+
+export interface SafeRefundBreakdown {
+  invoiceTotalBDT: number;
+  freeDomainClaimed: boolean;
+  bundledDomainName?: string;
+  bundledDomainTLD?: string;
+  nonRefundableDomainFeeBDT: number;
+  nonRefundableGatewayFeeBDT: number;
+  maxSafeRefundableAmountBDT: number;
+  affiliateCommissionClawbackBDT: number;
+  customerRetainsDomainOwnership: boolean;
+  isWithin30DayWindow: boolean;
+  daysSincePurchase: number;
+  formulaSummary: string;
+}
+
+export const STANDARD_DOMAIN_RETAIL_PRICES_BDT: Record<string, number> = {
+  '.com': 1350,
+  '.net': 1450,
+  '.org': 1390,
+  '.io': 4900,
+  '.xyz': 290,
+  '.shop': 290,
+  '.store': 350,
+};
+
+/**
+ * Free-Domain & Gateway Refund Loss-Protection Formula
+ * Guarantees the company never loses money on non-refundable registry domain costs
+ * when issuing a 30-day hosting refund on an Annual Plan that included a Free Domain.
+ */
+export function calculateSafeRefundBreakdown({
+  invoiceTotalBDT,
+  freeDomainClaimed = false,
+  bundledDomainName,
+  bundledDomainTLD,
+  freeDomainRetailPriceBDT,
+  affiliateCommissionBDT = 0,
+  nonRefundableGatewayFeeBDT = 0,
+  daysSincePurchase = 5,
+}: {
+  invoiceTotalBDT: number;
+  freeDomainClaimed?: boolean;
+  bundledDomainName?: string;
+  bundledDomainTLD?: string;
+  freeDomainRetailPriceBDT?: number;
+  affiliateCommissionBDT?: number;
+  nonRefundableGatewayFeeBDT?: number;
+  daysSincePurchase?: number;
+}): SafeRefundBreakdown {
+  const safeInvoiceTotal = Math.max(0, invoiceTotalBDT);
+  const isWithin30DayWindow = daysSincePurchase <= 30;
+
+  let detectedTld = bundledDomainTLD || '';
+  if (!detectedTld && bundledDomainName && bundledDomainName.includes('.')) {
+    detectedTld = `.${bundledDomainName.split('.').pop()!.toLowerCase()}`;
+  }
+  if (!detectedTld) {
+    detectedTld = '.com';
+  }
+
+  const resolvedDomainFee = freeDomainClaimed
+    ? freeDomainRetailPriceBDT ??
+      STANDARD_DOMAIN_RETAIL_PRICES_BDT[detectedTld] ??
+      1350
+    : 0;
+
+  const safeGatewayFee = Math.max(0, nonRefundableGatewayFeeBDT);
+  const maxSafeRefundableAmountBDT = isWithin30DayWindow
+    ? Math.max(0, safeInvoiceTotal - resolvedDomainFee - safeGatewayFee)
+    : 0;
+
+  const affiliateCommissionClawbackBDT = Math.max(0, affiliateCommissionBDT);
+
+  const formulaSummary = !isWithin30DayWindow
+    ? `Order is outside the 30-day money-back window (${daysSincePurchase} days elapsed). Refundable: ৳0.`
+    : freeDomainClaimed
+    ? `Invoice Paid (৳${safeInvoiceTotal}) - Non-Refundable 1st-Year Free Domain ${detectedTld} Fee (৳${resolvedDomainFee}) = Safe Refundable Hosting Balance (৳${maxSafeRefundableAmountBDT}). Customer keeps 100% ownership of ${bundledDomainName || `the ${detectedTld} domain`}.`
+    : `Full 30-Day Hosting Refund Eligible: ৳${maxSafeRefundableAmountBDT} (No bundled domain deduction).`;
+
+  return {
+    invoiceTotalBDT: safeInvoiceTotal,
+    freeDomainClaimed,
+    bundledDomainName,
+    bundledDomainTLD: detectedTld,
+    nonRefundableDomainFeeBDT: resolvedDomainFee,
+    nonRefundableGatewayFeeBDT: safeGatewayFee,
+    maxSafeRefundableAmountBDT,
+    affiliateCommissionClawbackBDT,
+    customerRetainsDomainOwnership: freeDomainClaimed,
+    isWithin30DayWindow,
+    daysSincePurchase,
+    formulaSummary,
+  };
+}

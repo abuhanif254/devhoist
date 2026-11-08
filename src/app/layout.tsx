@@ -8,6 +8,7 @@ import { SudoGateProvider } from '@/components/security/SudoGateModal';
 import CommandPalette from '@/components/common/CommandPalette';
 import StackBuilderDrawer from '@/components/checkout/StackBuilderDrawer';
 import FloatingConversionDock from '@/components/common/FloatingConversionDock';
+import AICloudConcierge from '@/components/AICloudConcierge';
 import AnalyticsProvider from '@/components/AnalyticsProvider';
 
 const plusJakartaSans = Plus_Jakarta_Sans({
@@ -127,7 +128,6 @@ export default function RootLayout({
             __html: `
               (function() {
                 try {
-                  // Purge all legacy dark mode keys so Light Mode is guaranteed as default
                   localStorage.removeItem('devhost-theme');
                   localStorage.removeItem('devhost-theme-v2');
                   localStorage.removeItem('devhost-theme-v3');
@@ -158,11 +158,12 @@ export default function RootLayout({
             <PortalProvider>
               <SudoGateProvider>
                 <AnalyticsProvider>
-                {children}
-                <CommandPalette />
-                <StackBuilderDrawer />
-                <FloatingConversionDock />
-              </AnalyticsProvider>
+                  {children}
+                  <CommandPalette />
+                  <StackBuilderDrawer />
+                  <FloatingConversionDock />
+                  <AICloudConcierge />
+                </AnalyticsProvider>
               </SudoGateProvider>
             </PortalProvider>
           </BillingProvider>

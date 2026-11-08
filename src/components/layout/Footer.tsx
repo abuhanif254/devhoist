@@ -88,7 +88,7 @@ export default function Footer() {
               <li>
                 <Link href="/marketplace" className="text-slate-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-zinc-100 transition-colors flex items-center gap-1.5">
                   <span>1-Click App Marketplace</span>
-                  <span className="text-[9px] font-mono px-1 rounded bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 border border-slate-200 dark:border-white/10">12 Stacks</span>
+                  <span className="text-[9px] font-mono px-1 rounded bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 border border-slate-200 dark:border-white/10">16 Stacks</span>
                 </Link>
               </li>
               <li>
@@ -212,18 +212,28 @@ export default function Footer() {
                 </Link>
               </li>
               <li>
-                <Link href="/terms" className="text-slate-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-zinc-100 transition-colors">
-                  Terms of Service & SLA
+                <Link href="/legal?doc=terms-of-service" className="text-slate-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-zinc-100 transition-colors">
+                  Terms of Service &amp; Delivery
                 </Link>
               </li>
               <li>
-                <Link href="/privacy" className="text-slate-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-zinc-100 transition-colors">
-                  Privacy Policy
+                <Link href="/legal?doc=privacy-policy" className="text-slate-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-zinc-100 transition-colors">
+                  Privacy &amp; Encryption Policy
                 </Link>
               </li>
               <li>
-                <Link href="/refund-policy" className="text-emerald-700 dark:text-emerald-400 hover:underline transition-colors font-medium">
-                  30-Day Refund Policy
+                <Link href="/legal?doc=refund-and-cancellation" className="text-emerald-700 dark:text-emerald-400 hover:underline transition-colors font-medium">
+                  30-Day Refund &amp; Domain Rule
+                </Link>
+              </li>
+              <li>
+                <Link href="/legal?doc=service-level-agreement" className="text-slate-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-zinc-100 transition-colors">
+                  99.99% Uptime SLA Credits
+                </Link>
+              </li>
+              <li>
+                <Link href="/abuse" className="text-rose-600 dark:text-rose-400 hover:underline transition-colors font-medium">
+                  Report Abuse / DMCA Desk
                 </Link>
               </li>
             </ul>

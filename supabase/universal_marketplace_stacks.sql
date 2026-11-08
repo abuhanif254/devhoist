@@ -3,6 +3,24 @@
 -- 16 Production Stack Blueprints with Authentic Server Bridges & CI/CD Pipelines
 -- =============================================================================
 
+-- 0. ENSURE SECURITY-DEFINER ADMIN HELPER FUNCTION EXISTS (Zero RLS Recursion)
+CREATE OR REPLACE FUNCTION public.is_admin_user()
+RETURNS boolean
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+STABLE
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.profiles
+    WHERE id = auth.uid()
+      AND role = 'admin'
+  );
+$$;
+
+GRANT EXECUTE ON FUNCTION public.is_admin_user() TO anon, authenticated, service_role;
+
 CREATE TABLE IF NOT EXISTS public.catalog_marketplace_stacks (
     slug text PRIMARY KEY,
     name text NOT NULL,

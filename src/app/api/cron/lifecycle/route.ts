@@ -7,6 +7,7 @@ import {
   renderAffiliateEmail,
 } from '@/lib/emailEngine';
 import { sendTelegramAlert } from '@/lib/adminNotifier';
+import { verifyCronOrAdmin } from '@/lib/authGuard';
 
 
 export async function GET(req: NextRequest) {
@@ -18,21 +19,9 @@ export async function POST(req: NextRequest) {
 }
 
 async function handleLifecycleCron(req: NextRequest) {
-  const authHeader = req.headers.get('authorization');
-  const secretParam = req.nextUrl.searchParams.get('secret');
-  const expectedSecret = process.env.CRON_SECRET || 'devhost_cron_secret_key';
-
-  // Security authorization check (allow query param in dev/manual admin test)
-  const isAuthorized =
-    authHeader === `Bearer ${expectedSecret}` ||
-    secretParam === expectedSecret ||
-    req.headers.get('x-admin-trigger') === 'true';
-
-  if (!isAuthorized) {
-    return NextResponse.json(
-      { error: 'Unauthorized. Invalid CRON_SECRET authorization header or parameter.' },
-      { status: 401 }
-    );
+  const cronAuth = await verifyCronOrAdmin(req);
+  if (!cronAuth.ok) {
+    return cronAuth.response;
   }
 
   const logs: string[] = [];

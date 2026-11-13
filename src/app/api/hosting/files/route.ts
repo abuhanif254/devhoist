@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServiceSupabase } from '@/lib/supabase';
 import { normalizeAndValidateFilePath, logSecurityAudit } from '@/lib/security';
+import { requireServiceAccess } from '@/lib/authGuard';
 
 export { normalizeAndValidateFilePath };
 
@@ -118,8 +119,11 @@ function getDefaultFilesForService(serviceId: string, domain = 'app.devhost.clou
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const serviceId = searchParams.get('serviceId') || 'srv-default';
+    const serviceId = searchParams.get('serviceId') || '';
     const domain = searchParams.get('domain') || 'app.devhost.cloud';
+
+    const access = await requireServiceAccess(req, serviceId, 'services:read');
+    if (!access.ok) return access.response;
 
     const supabaseAdmin = getServiceSupabase();
     if (supabaseAdmin) {
@@ -181,11 +185,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const access = await requireServiceAccess(req, serviceId, 'services:write');
+    if (!access.ok) return access.response;
+    const actorUserId = access.user.id;
+
     // Strict Path Traversal Sanitizer
     const pathCheck = normalizeAndValidateFilePath(filePath);
     if (!pathCheck.valid) {
       await logSecurityAudit({
-        actorId: userId,
+        actorId: actorUserId,
         actorRole: 'client',
         actionType: 'FILE_PATH_TRAVERSAL_BLOCKED',
         targetResource: `${serviceId}:${filePath}`,

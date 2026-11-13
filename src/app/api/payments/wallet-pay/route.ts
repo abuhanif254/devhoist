@@ -1,13 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
 import { executeZeroTouchProvisioning } from '@/lib/zeroTouchProvisioner';
+import { requireUser } from '@/lib/authGuard';
 
 
 export async function POST(req: NextRequest) {
   try {
+    const auth = await requireUser(req);
+    if (!auth.ok) return auth.response;
+
     const body = await req.json();
     const {
-      userId,
       invoiceNumber,
       amount,
       domain,
@@ -19,14 +22,25 @@ export async function POST(req: NextRequest) {
       appStack,
     } = body;
 
-    if (!userId || !invoiceNumber) {
+    const userId =
+      auth.role === 'admin' && typeof body.userId === 'string' && body.userId.trim()
+        ? body.userId.trim()
+        : auth.user.id;
+
+    if (!invoiceNumber || typeof invoiceNumber !== 'string') {
       return NextResponse.json(
-        { success: false, error: 'User ID and Invoice Number are required.' },
+        { success: false, error: 'Invoice Number is required.' },
         { status: 400 }
       );
     }
 
-    const payAmount = Number(amount) || 0;
+    const clientAmount = Number(amount);
+    if (!Number.isFinite(clientAmount) || clientAmount <= 0) {
+      return NextResponse.json(
+        { success: false, error: 'Payment amount must be a positive number.' },
+        { status: 400 }
+      );
+    }
 
     if (!isSupabaseConfigured()) {
       return NextResponse.json(
@@ -40,7 +54,53 @@ export async function POST(req: NextRequest) {
 
     const db = getServiceSupabase();
 
-    // 1. Fetch User Profile & Strict Balance Verification
+    // 1. Fetch & Verify Invoice Ownership and Total Before Any Balance Debit
+    const { data: inv, error: invErr } = await db
+      .from('invoices')
+      .select('id, user_id, total_bdt, status, billing_cycle, free_domain_bundle_applied, bundled_domain_name')
+      .eq('invoice_number', invoiceNumber)
+      .maybeSingle();
+
+    if (invErr || !inv) {
+      return NextResponse.json(
+        { success: false, error: 'Invoice not found.' },
+        { status: 404 }
+      );
+    }
+
+    if (inv.user_id !== userId && auth.role !== 'admin') {
+      return NextResponse.json(
+        { success: false, error: 'You do not have permission to pay this invoice.' },
+        { status: 403 }
+      );
+    }
+
+    if (inv.status === 'paid' || inv.status === 'refunded' || inv.status === 'cancelled') {
+      return NextResponse.json(
+        { success: false, error: `Invoice is already marked as '${inv.status}'.` },
+        { status: 409 }
+      );
+    }
+
+    const payAmount = Number(inv.total_bdt);
+    if (!Number.isFinite(payAmount) || payAmount <= 0) {
+      return NextResponse.json(
+        { success: false, error: 'Invalid invoice total on server.' },
+        { status: 400 }
+      );
+    }
+
+    if (Math.abs(clientAmount - payAmount) > 0.01) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Amount mismatch: expected ৳${payAmount.toLocaleString()} for invoice ${invoiceNumber}.`,
+        },
+        { status: 400 }
+      );
+    }
+
+    // 2. Fetch User Profile & Strict Balance Verification
     const { data: profile, error: profErr } = await db
       .from('profiles')
       .select('id, full_name, email, wallet_balance_bdt')
@@ -67,23 +127,26 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 2. Atomically Deduct Balance from User Profile
-    const newBalance = currentBalance - payAmount;
-    const { error: updateBalErr } = await db
+    // 3. Optimistic Guarded Balance Deduction (requires wallet_balance_bdt >= payAmount in DB)
+    const newBalance = Math.round((currentBalance - payAmount) * 100) / 100;
+    const { data: updatedProf, error: updateBalErr } = await db
       .from('profiles')
       .update({ wallet_balance_bdt: newBalance })
-      .eq('id', userId);
+      .eq('id', userId)
+      .gte('wallet_balance_bdt', payAmount)
+      .select('wallet_balance_bdt')
+      .maybeSingle();
 
-    if (updateBalErr) {
+    if (updateBalErr || !updatedProf) {
       return NextResponse.json(
-        { success: false, error: 'Failed to update wallet balance in database.' },
-        { status: 500 }
+        { success: false, error: 'Concurrent balance conflict or insufficient funds during debit.' },
+        { status: 409 }
       );
     }
 
     const trxId = `WLT-${Date.now().toString(36).toUpperCase()}`;
 
-    // 3. Record Transaction Entry
+    // 4. Record Transaction Entry
     await db.from('transactions').insert({
       trx_id: trxId,
       invoice_number: invoiceNumber,
@@ -99,19 +162,10 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // 4. Fetch invoice record if available for ID
-    let dbInvoiceId: string | undefined;
-    const { data: inv } = await db
-      .from('invoices')
-      .select('id')
-      .eq('invoice_number', invoiceNumber)
-      .single();
-    if (inv) {
-      dbInvoiceId = inv.id;
-    }
+    const dbInvoiceId: string = inv.id;
 
     // 5. Run Full 5-Step Zero-Touch Autonomous Provisioning Pipeline
-    const effectiveDomain = domain || bundledDomainName || 'my-app.com';
+    const effectiveDomain = domain || inv.bundled_domain_name || bundledDomainName || 'my-app.com';
     const provisionResult = await executeZeroTouchProvisioning({
       invoiceId: dbInvoiceId,
       invoiceNumber,
@@ -124,9 +178,9 @@ export async function POST(req: NextRequest) {
       gateway: 'wallet',
       trxId,
       amountBDT: payAmount,
-      billingCycle: billingCycle || 'monthly',
-      freeDomainBundleApplied: Boolean(freeDomainBundleApplied),
-      bundledDomainName: bundledDomainName || effectiveDomain,
+      billingCycle: inv.billing_cycle || billingCycle || 'monthly',
+      freeDomainBundleApplied: Boolean(inv.free_domain_bundle_applied ?? freeDomainBundleApplied),
+      bundledDomainName: inv.bundled_domain_name || bundledDomainName || effectiveDomain,
       appStack: appStack || 'nextjs_git',
     });
 

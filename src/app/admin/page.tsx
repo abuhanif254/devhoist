@@ -204,14 +204,18 @@ export default function AdminCommandCenterPage() {
   const [lifecycleCronResults, setLifecycleCronResults] = useState<any | null>(null);
   const [cronSubTab, setCronSubTab] = useState<'lifecycle' | 'email_outbox' | 'telegram' | 'export'>('lifecycle');
 
-  // Trigger 6-Task Autonomous Lifecycle Cron
+  // Trigger 6-Task Autonomous Lifecycle Cron (authenticated Admin session cookie)
   const handleRunAutonomousLifecycle = async () => {
     setLifecycleCronRunning(true);
     try {
-      const res = await fetch('/api/cron/lifecycle?secret=devhost_cron_secret_key', {
-        headers: { 'x-admin-trigger': 'true' }
+      const res = await fetch('/api/cron/lifecycle', {
+        method: 'POST',
       });
       const data = await res.json();
+      if (!res.ok) {
+        window.alert(data?.message || data?.error || 'Cron execution rejected');
+        return;
+      }
       setLifecycleCronResults(data);
       setEmailOutboxLogs(getEmailOutboxLogs());
       setTelegramLogs(getTelegramOutbox());

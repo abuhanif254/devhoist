@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
 import { triggerAutoWafRule, getSecurityLockdown, updateCmsConfig } from '@/lib/wafEngine';
+import { requireAdmin, verifySudoToken } from '@/lib/authGuard';
 
 
 async function logAdminAudit(
@@ -29,8 +30,11 @@ async function logAdminAudit(
 /**
  * GET: Lists active WAF rules, fraud alerts, and security audit logs
  */
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
+    const adminAuth = await requireAdmin(req);
+    if (!adminAuth.ok) return adminAuth.response;
+
     const lockdown = await getSecurityLockdown();
 
     if (!isSupabaseConfigured()) {
@@ -97,8 +101,21 @@ export async function GET() {
  */
 export async function POST(req: NextRequest) {
   try {
+    const adminAuth = await requireAdmin(req);
+    if (!adminAuth.ok) return adminAuth.response;
+
     const body = await req.json();
-    const { action, sudoVerified } = body;
+    const { action } = body;
+
+    if (action === 'toggle_lockdown' || action === 'add_rule' || action === 'ban_entity') {
+      const sudoValid = await verifySudoToken(req, adminAuth.user.id);
+      if (!sudoValid) {
+        return NextResponse.json(
+          { success: false, requireSudo: true, error: 'Admin Sudo elevation required for WAF & lockdown rules.' },
+          { status: 403 }
+        );
+      }
+    }
 
     const ip = req.headers.get('cf-connecting-ip') || req.headers.get('x-forwarded-for') || '127.0.0.1';
 
@@ -145,7 +162,7 @@ export async function POST(req: NextRequest) {
       await logAdminAudit(
         'WAF_RULE_CREATED',
         `${ruleType}:${targetValue}`,
-        { ruleAction, reason, expiresAt, sudoVerified },
+        { ruleAction, reason, expiresAt, adminId: adminAuth.user.id },
         'high',
         ip
       );
@@ -177,6 +194,9 @@ export async function POST(req: NextRequest) {
  */
 export async function DELETE(req: NextRequest) {
   try {
+    const adminAuth = await requireAdmin(req);
+    if (!adminAuth.ok) return adminAuth.response;
+
     const { searchParams } = new URL(req.url);
     const ruleId = searchParams.get('id');
     const targetValue = searchParams.get('targetValue');

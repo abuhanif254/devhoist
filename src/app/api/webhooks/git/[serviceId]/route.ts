@@ -16,6 +16,12 @@ export async function POST(
     }
 
     if (!isSupabaseConfigured()) {
+      if (process.env.NODE_ENV === 'production') {
+        return NextResponse.json(
+          { success: false, error: 'Database configuration missing in production.' },
+          { status: 503 }
+        );
+      }
       return NextResponse.json({ success: true, message: 'Offline mode: Webhook acknowledged.' });
     }
 
@@ -30,6 +36,13 @@ export async function POST(
 
     if (settingsError || !settings) {
       return NextResponse.json({ success: false, error: 'Project configuration not found for this service.' }, { status: 404 });
+    }
+
+    if (!settings.webhook_secret_token || typeof settings.webhook_secret_token !== 'string') {
+      return NextResponse.json(
+        { success: false, error: 'Webhook secret token not configured for this service.' },
+        { status: 401 }
+      );
     }
 
     // 2. Cryptographic HMAC Signature Verification

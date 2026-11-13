@@ -5,13 +5,17 @@ import {
   ServiceDiagnosticInput,
 } from '@/lib/logDoctorEngine';
 import { getServiceSupabase, isSupabaseConfigured } from '@/lib/supabase';
+import { requireServiceAccess } from '@/lib/authGuard';
 
 
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
-    const serviceId = searchParams.get('serviceId') || 'srv_default';
+    const serviceId = searchParams.get('serviceId') || '';
     const domain = searchParams.get('domain') || 'ecommerce-live.com';
+
+    const access = await requireServiceAccess(request, serviceId, 'logs:read');
+    if (!access.ok) return access.response;
 
     let diagnosticInput: ServiceDiagnosticInput = {
       serviceId,
@@ -63,8 +67,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'fixActionCode is required' }, { status: 400 });
     }
 
+    const access = await requireServiceAccess(request, serviceId, 'services:write');
+    if (!access.ok) return access.response;
+
     const defaultInput: ServiceDiagnosticInput = {
-      serviceId: serviceId || 'srv_default',
+      serviceId: access.serviceId,
       domain: serviceData?.domain || 'ecommerce-live.com',
       serverIp: serviceData?.serverIp || '103.151.102.45',
       dnsARecordIp: serviceData?.dnsARecordIp || '103.151.102.45',
@@ -76,11 +83,11 @@ export async function POST(request: NextRequest) {
       hasDatabasesWithoutEnvUrl: serviceData?.hasDatabasesWithoutEnvUrl ?? false,
       ramUsedMB: serviceData?.ramUsedMB || 420,
       ramLimitMB: serviceData?.ramLimitMB || 2048,
-      userId: serviceData?.userId,
+      userId: access.user.id,
     };
 
     const autoFixResult = await executeLogDoctorAutoFix(
-      serviceId || defaultInput.serviceId,
+      access.serviceId,
       fixActionCode,
       defaultInput
     );

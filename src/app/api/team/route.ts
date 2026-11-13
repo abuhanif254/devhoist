@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServiceSupabase } from '@/lib/supabase';
+import { requireUser } from '@/lib/authGuard';
 
 export type TeamRoleId =
     | 'full_admin'
@@ -60,8 +61,13 @@ export const TEAM_ROLE_PRESETS: Record<
 
 export async function GET(request: NextRequest) {
     try {
+        const auth = await requireUser(request);
+        if (!auth.ok) return auth.response;
+
         const { searchParams } = new URL(request.url);
-        const ownerUserId = searchParams.get('ownerUserId');
+        const requestedOwnerId = searchParams.get('ownerUserId');
+        const ownerUserId =
+            auth.role === 'admin' && requestedOwnerId ? requestedOwnerId : auth.user.id;
         const supabaseAdmin = getServiceSupabase();
 
         if (supabaseAdmin && ownerUserId) {
@@ -95,17 +101,24 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
     try {
+        const auth = await requireUser(request);
+        if (!auth.ok) return auth.response;
+
         const body = await request.json();
         const supabaseAdmin = getServiceSupabase();
         const { action } = body;
 
         if (action === 'invite') {
             const {
-                ownerUserId,
                 memberEmail,
                 teamRole = 'devops_deployer',
                 allowedServiceIds = [],
             } = body;
+
+            const ownerUserId =
+                auth.role === 'admin' && typeof body.ownerUserId === 'string' && body.ownerUserId.trim()
+                    ? body.ownerUserId.trim()
+                    : auth.user.id;
 
             if (!memberEmail || !memberEmail.includes('@')) {
                 return NextResponse.json(
@@ -120,7 +133,7 @@ export async function POST(request: NextRequest) {
 
             const newRecord = {
                 id: crypto.randomUUID(),
-                owner_user_id: ownerUserId || '00000000-0000-0000-0000-000000000000',
+                owner_user_id: ownerUserId,
                 member_email: String(memberEmail).toLowerCase().trim(),
                 team_role: teamRole,
                 allowed_scopes: rolePreset.scopes,
@@ -155,6 +168,16 @@ export async function POST(request: NextRequest) {
         if (action === 'revoke') {
             const { memberId } = body;
             if (supabaseAdmin && memberId) {
+                const { data: existingMember } = await supabaseAdmin
+                    .from('organization_team_members')
+                    .select('owner_user_id')
+                    .eq('id', memberId)
+                    .maybeSingle();
+
+                if (existingMember && existingMember.owner_user_id !== auth.user.id && auth.role !== 'admin') {
+                    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+                }
+
                 await supabaseAdmin
                     .from('organization_team_members')
                     .delete()

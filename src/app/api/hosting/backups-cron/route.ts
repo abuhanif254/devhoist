@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
 import { validateShellCommand, describeCronExpression } from '@/lib/projectEngine';
+import { requireServiceAccess, verifySudoToken } from '@/lib/authGuard';
 
 
 async function logAudit(
@@ -41,6 +42,9 @@ export async function GET(request: NextRequest) {
     if (!serviceId) {
       return NextResponse.json({ success: false, error: 'Service ID is required.' }, { status: 400 });
     }
+
+    const access = await requireServiceAccess(request, serviceId, 'services:read');
+    if (!access.ok) return access.response;
 
     if (isSupabaseConfigured()) {
       const db = getServiceSupabase();
@@ -124,7 +128,6 @@ export async function POST(request: NextRequest) {
     const {
       action,
       serviceId,
-      userId,
       label,
       scope = 'full_account',
       snapshotId,
@@ -132,10 +135,32 @@ export async function POST(request: NextRequest) {
       command,
       cronId,
       isActive,
-      sudoVerified,
     } = body;
 
     const db = isSupabaseConfigured() ? getServiceSupabase() : null;
+
+    let resolvedServiceId = serviceId;
+    if (!resolvedServiceId && db) {
+      if (snapshotId) {
+        const { data: bkOwner } = await db
+          .from('hosting_backups')
+          .select('service_id')
+          .eq('id', snapshotId)
+          .maybeSingle();
+        resolvedServiceId = bkOwner?.service_id;
+      } else if (cronId) {
+        const { data: cronOwner } = await db
+          .from('hosting_cron_jobs')
+          .select('service_id')
+          .eq('id', cronId)
+          .maybeSingle();
+        resolvedServiceId = cronOwner?.service_id;
+      }
+    }
+
+    const access = await requireServiceAccess(request, resolvedServiceId, 'services:write');
+    if (!access.ok) return access.response;
+    const userId = access.user.id;
 
     // 1. CREATE JETBACKUP SNAPSHOT
     if (action === 'create_snapshot') {
@@ -151,8 +176,8 @@ export async function POST(request: NextRequest) {
         const { data, error } = await db
           .from('hosting_backups')
           .insert({
-            service_id: serviceId,
-            user_id: userId || '00000000-0000-0000-0000-000000000001',
+            service_id: access.serviceId,
+            user_id: userId,
             snapshot_label: snapshotLabel,
             backup_type: 'manual_snapshot',
             scope,
@@ -182,7 +207,8 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ success: false, error: 'Snapshot ID required.' }, { status: 400 });
       }
 
-      if (!sudoVerified) {
+      const sudoValid = await verifySudoToken(request, userId);
+      if (!sudoValid) {
         return NextResponse.json({
           success: false,
           error: '2FA Sudo Step-Up Verification required to restore server filesystem from snapshot.',
@@ -196,7 +222,8 @@ export async function POST(request: NextRequest) {
           .update({
             last_restored_at: new Date().toISOString(),
           })
-          .eq('id', snapshotId);
+          .eq('id', snapshotId)
+          .eq('service_id', access.serviceId);
       }
 
       await logAudit(userId, 'BACKUP_RESTORE_EXECUTED', `backup:${snapshotId}`, {}, ip, 'critical');
@@ -231,8 +258,8 @@ export async function POST(request: NextRequest) {
         const { data, error } = await db
           .from('hosting_cron_jobs')
           .insert({
-            service_id: serviceId,
-            user_id: userId || '00000000-0000-0000-0000-000000000001',
+            service_id: access.serviceId,
+            user_id: userId,
             job_label: label || 'Scheduled Job',
             cron_expression: cronExpression.trim(),
             command: command.trim(),
@@ -321,18 +348,28 @@ export async function DELETE(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
     const itemType = searchParams.get('itemType');
-    const userId = searchParams.get('userId');
+    let serviceId = searchParams.get('serviceId');
 
     if (!id || !itemType) {
       return NextResponse.json({ success: false, error: 'ID and itemType (backup or cron) required.' }, { status: 400 });
     }
 
-    if (isSupabaseConfigured()) {
-      const db = getServiceSupabase();
+    const db = isSupabaseConfigured() ? getServiceSupabase() : null;
+    if (!serviceId && db) {
+      const table = itemType === 'backup' ? 'hosting_backups' : 'hosting_cron_jobs';
+      const { data: ownerRow } = await db.from(table).select('service_id').eq('id', id).maybeSingle();
+      serviceId = ownerRow?.service_id || null;
+    }
+
+    const access = await requireServiceAccess(request, serviceId, 'services:write');
+    if (!access.ok) return access.response;
+    const userId = access.user.id;
+
+    if (db) {
       if (itemType === 'backup') {
-        await db.from('hosting_backups').delete().eq('id', id);
+        await db.from('hosting_backups').delete().eq('id', id).eq('service_id', access.serviceId);
       } else {
-        await db.from('hosting_cron_jobs').delete().eq('id', id);
+        await db.from('hosting_cron_jobs').delete().eq('id', id).eq('service_id', access.serviceId);
       }
     }
 

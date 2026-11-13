@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServiceSupabase } from '@/lib/supabase';
 import { calculatePlanUpgradeProRata } from '@/lib/profitEngine';
+import { requireServiceAccess } from '@/lib/authGuard';
 
 export interface AutoscalingRuleRecord {
   id: string;
@@ -34,7 +35,11 @@ function getDefaultAutoscalerRules(serviceId: string): AutoscalingRuleRecord {
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const serviceId = searchParams.get('serviceId') || 'srv-default';
+    const serviceId = searchParams.get('serviceId') || '';
+
+    const access = await requireServiceAccess(req, serviceId, 'services:read');
+    if (!access.ok) return access.response;
+
     const currentMonthlyBDT = Number(searchParams.get('currentMonthlyBDT')) || 499;
     const targetMonthlyBDT = Number(searchParams.get('targetMonthlyBDT')) || 999;
     const remainingDays = Number(searchParams.get('remainingDays')) || 18;
@@ -88,7 +93,6 @@ export async function POST(req: NextRequest) {
     const {
       action,
       serviceId,
-      userId,
       domain = 'app.devhost.cloud',
       autoscaleEnabled,
       ramThresholdPercent = 85,
@@ -125,6 +129,10 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+
+    const access = await requireServiceAccess(req, serviceId, 'services:write');
+    if (!access.ok) return access.response;
+    const userId = access.user.id;
 
     const supabaseAdmin = getServiceSupabase();
     const now = new Date().toISOString();

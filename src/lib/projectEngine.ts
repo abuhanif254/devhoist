@@ -11,7 +11,14 @@ const MASTER_ENV_SALT = 'devhost_env_vault_aes_gcm_2026_salt';
 
 async function getEnvVaultKey(): Promise<CryptoKey> {
   const enc = new TextEncoder();
-  const rawSecret = (typeof process !== 'undefined' && process.env?.DEVHOST_ENV_ENCRYPTION_KEY) || 'devhost-super-secure-env-vault-master-key-32b!';
+  const configuredSecret =
+    (typeof process !== 'undefined' && process.env?.DEVHOST_ENV_ENCRYPTION_KEY?.trim()) || '';
+
+  if (!configuredSecret && typeof process !== 'undefined' && process.env?.NODE_ENV === 'production') {
+    throw new Error('DEVHOST_ENV_ENCRYPTION_KEY is required in production.');
+  }
+
+  const rawSecret = configuredSecret || 'devhost-super-secure-env-vault-master-key-32b!';
   const keyMaterial = await crypto.subtle.importKey(
     'raw',
     enc.encode(rawSecret),
@@ -59,6 +66,9 @@ export async function encryptEnvValue(plaintext: string): Promise<string> {
     }
     return btoa(binary);
   } catch (err) {
+    if (typeof process !== 'undefined' && process.env?.NODE_ENV === 'production') {
+      throw err instanceof Error ? err : new Error('AES-256-GCM encryption failed.');
+    }
     return `ENC_${Buffer.from(plaintext).toString('base64')}`;
   }
 }
@@ -69,6 +79,9 @@ export async function encryptEnvValue(plaintext: string): Promise<string> {
 export async function decryptEnvValue(encryptedBase64: string): Promise<string> {
   try {
     if (encryptedBase64.startsWith('ENC_')) {
+      if (typeof process !== 'undefined' && process.env?.NODE_ENV === 'production') {
+        throw new Error('Refusing unencrypted ENC_ payload in production.');
+      }
       return Buffer.from(encryptedBase64.replace('ENC_', ''), 'base64').toString('utf-8');
     }
 

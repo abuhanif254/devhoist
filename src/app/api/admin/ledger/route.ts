@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
+import { requireAdmin, verifySudoToken } from '@/lib/authGuard';
 
 
 async function logLedgerAudit(
@@ -30,6 +31,9 @@ async function logLedgerAudit(
  */
 export async function GET(req: NextRequest) {
   try {
+    const adminAuth = await requireAdmin(req);
+    if (!adminAuth.ok) return adminAuth.response;
+
     const { searchParams } = new URL(req.url);
     const limit = parseInt(searchParams.get('limit') || '100', 10);
 
@@ -166,8 +170,11 @@ export async function GET(req: NextRequest) {
  */
 export async function POST(req: NextRequest) {
   try {
+    const adminAuth = await requireAdmin(req);
+    if (!adminAuth.ok) return adminAuth.response;
+
     const body = await req.json();
-    const { action, sudoVerified } = body;
+    const { action } = body;
     const ip = req.headers.get('cf-connecting-ip') || req.headers.get('x-forwarded-for') || '127.0.0.1';
 
     // 1. Process Sudo-Guarded Refund with Commission Clawback
@@ -178,8 +185,12 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ success: false, error: 'invoiceId and refundAmountBdt are required.' }, { status: 400 });
       }
 
-      if (!sudoVerified) {
-        return NextResponse.json({ success: false, error: 'Admin Sudo elevation is required to process refunds.' }, { status: 403 });
+      const sudoValid = await verifySudoToken(req, adminAuth.user.id);
+      if (!sudoValid) {
+        return NextResponse.json(
+          { success: false, requireSudo: true, error: 'Admin Sudo elevation is required to process refunds.' },
+          { status: 403 }
+        );
       }
 
       if (isSupabaseConfigured()) {
@@ -235,7 +246,7 @@ export async function POST(req: NextRequest) {
       await logLedgerAudit(
         'REFUND_PROCESSED',
         `invoice:${invoiceId}`,
-        { refundAmountBdt, reason, sudoVerified },
+        { refundAmountBdt, reason, adminId: adminAuth.user.id },
         'critical',
         ip
       );

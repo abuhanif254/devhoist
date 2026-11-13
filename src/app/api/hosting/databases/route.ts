@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
 import { encryptEnvValue, getMaskedPreview } from '@/lib/projectEngine';
+import { requireServiceAccess, verifySudoToken } from '@/lib/authGuard';
 
 
 async function logAudit(
@@ -40,6 +41,9 @@ export async function GET(request: NextRequest) {
     if (!serviceId) {
       return NextResponse.json({ success: false, error: 'Service ID is required.' }, { status: 400 });
     }
+
+    const access = await requireServiceAccess(request, serviceId, 'services:read');
+    if (!access.ok) return access.response;
 
     if (isSupabaseConfigured()) {
       const db = getServiceSupabase();
@@ -93,7 +97,6 @@ export async function POST(request: NextRequest) {
     const {
       action,
       serviceId,
-      userId,
       cpanelUser,
       dbEngine = 'MySQL 8.0',
       dbSuffix,
@@ -101,10 +104,23 @@ export async function POST(request: NextRequest) {
       remoteIps,
       databaseId,
       connectionString,
-      sudoVerified,
     } = body;
 
     const db = isSupabaseConfigured() ? getServiceSupabase() : null;
+
+    let resolvedServiceId = serviceId;
+    if (!resolvedServiceId && databaseId && db) {
+      const { data: dbOwner } = await db
+        .from('hosting_databases')
+        .select('service_id')
+        .eq('id', databaseId)
+        .maybeSingle();
+      resolvedServiceId = dbOwner?.service_id;
+    }
+
+    const access = await requireServiceAccess(request, resolvedServiceId, 'services:write');
+    if (!access.ok) return access.response;
+    const userId = access.user.id;
 
     // 1. CREATE DATABASE & USER
     if (action === 'create_database') {
@@ -129,8 +145,8 @@ export async function POST(request: NextRequest) {
         const { data, error } = await db
           .from('hosting_databases')
           .insert({
-            service_id: serviceId,
-            user_id: userId || '00000000-0000-0000-0000-000000000001',
+            service_id: access.serviceId,
+            user_id: userId,
             db_engine: dbEngine,
             db_name: fullDbName,
             db_username: fullDbUser,
@@ -177,8 +193,8 @@ export async function POST(request: NextRequest) {
         const { error } = await db
           .from('project_env_variables')
           .upsert({
-            service_id: serviceId,
-            user_id: userId || '00000000-0000-0000-0000-000000000001',
+            service_id: access.serviceId,
+            user_id: userId,
             env_key: 'DATABASE_URL',
             encrypted_value: encrypted,
             masked_preview: masked,
@@ -208,7 +224,8 @@ export async function POST(request: NextRequest) {
         const { error } = await db
           .from('hosting_databases')
           .update({ remote_access_ips: remoteIps })
-          .eq('id', databaseId);
+          .eq('id', databaseId)
+          .eq('service_id', access.serviceId);
 
         if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
       }
@@ -227,7 +244,8 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ success: false, error: 'Database ID is required.' }, { status: 400 });
       }
 
-      if (!sudoVerified) {
+      const sudoValid = await verifySudoToken(request, userId);
+      if (!sudoValid) {
         return NextResponse.json({
           success: false,
           error: '2FA Sudo Step-Up Verification required to drop a production database.',
@@ -236,7 +254,11 @@ export async function POST(request: NextRequest) {
       }
 
       if (db) {
-        const { error } = await db.from('hosting_databases').delete().eq('id', databaseId);
+        const { error } = await db
+          .from('hosting_databases')
+          .delete()
+          .eq('id', databaseId)
+          .eq('service_id', access.serviceId);
         if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
       }
 

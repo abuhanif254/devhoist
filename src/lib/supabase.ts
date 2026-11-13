@@ -43,21 +43,23 @@ export const supabase: SupabaseClient = createClient(supabaseUrl, supabaseAnonKe
 
 const AUTH_COOKIE_MAX_AGE = 60 * 60 * 24 * 7; // 7 days
 
-/**
- * Mirrors the client-side session state into lightweight, NON-SECRET cookies so the Edge
- * middleware can see "a session exists" (no tokens are ever written to these cookies).
- * Pass `null` on logout to expire both cookies immediately.
- */
+export const hasServiceRoleKey = (): boolean => Boolean(supabaseServiceKey);
+
+// Mirrors the client-side session state into lightweight, NON-SECRET cookies so the Edge
+// middleware can see "a session exists" (no tokens are ever written to these cookies).
+// Pass `null` on logout to expire both cookies immediately.
 export function syncAuthCookie(session: Session | null, role?: string): void {
   if (typeof document === 'undefined') return;
   try {
+    const isHttps = typeof window !== 'undefined' && window.location?.protocol === 'https:';
+    const secureFlag = isHttps ? '; Secure' : '';
     if (session?.access_token) {
       const safeRole = role === 'admin' ? 'admin' : 'client';
-      document.cookie = `devhost_auth_active=1; path=/; max-age=${AUTH_COOKIE_MAX_AGE}; SameSite=Lax`;
-      document.cookie = `devhost_user_role=${safeRole}; path=/; max-age=${AUTH_COOKIE_MAX_AGE}; SameSite=Lax`;
+      document.cookie = `devhost_auth_active=1; path=/; max-age=${AUTH_COOKIE_MAX_AGE}; SameSite=Lax${secureFlag}`;
+      document.cookie = `devhost_user_role=${safeRole}; path=/; max-age=${AUTH_COOKIE_MAX_AGE}; SameSite=Lax${secureFlag}`;
     } else {
-      document.cookie = 'devhost_auth_active=; path=/; max-age=0; SameSite=Lax';
-      document.cookie = 'devhost_user_role=; path=/; max-age=0; SameSite=Lax';
+      document.cookie = `devhost_auth_active=; path=/; max-age=0; SameSite=Lax${secureFlag}`;
+      document.cookie = `devhost_user_role=; path=/; max-age=0; SameSite=Lax${secureFlag}`;
     }
   } catch {
     // Cookie writes must never break authentication

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
 import { notifyManualPaymentVerification } from '@/lib/adminNotifier';
+import { requireUser } from '@/lib/authGuard';
 
 
 const BD_PHONE_REGEX = /^01[3-9]\d{8}$/;
@@ -8,16 +9,27 @@ const TRX_ID_REGEX = /^[A-Z0-9]{8,12}$/;
 
 export async function POST(req: NextRequest) {
   try {
+    const auth = await requireUser(req);
+    if (!auth.ok) return auth.response;
+
     const body = await req.json();
     const {
       invoiceNumber,
       senderNumber,
       trxId,
       gateway = 'bKash',
-      customerName = 'Valued Customer',
-      userId,
+      customerName,
       amount,
     } = body;
+
+    const resolvedUserId =
+      auth.role === 'admin' && typeof body.userId === 'string' && body.userId.trim()
+        ? body.userId.trim()
+        : auth.user.id;
+    const resolvedCustomerName =
+      typeof customerName === 'string' && customerName.trim()
+        ? customerName.trim()
+        : auth.profile.full_name;
 
     if (!invoiceNumber) {
       return NextResponse.json(
@@ -50,7 +62,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    let invoiceAmount = Number(amount) || 0;
+    let invoiceAmount = Number(amount) > 0 ? Number(amount) : 0;
 
     if (isSupabaseConfigured()) {
       const db = getServiceSupabase();
@@ -72,27 +84,46 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      // 4. Update Invoice Status to 'verifying_trxid'
+      // 4. Verify Invoice Ownership and Update Status to 'verifying_trxid'
       const { data: invData } = await db
         .from('invoices')
         .select('*')
         .eq('invoice_number', invoiceNumber)
         .maybeSingle();
 
-      if (invData) {
-        invoiceAmount = Number(invData.total_bdt) || invoiceAmount;
-        await db
-          .from('invoices')
-          .update({
-            status: 'verifying_trxid',
-            trx_id: cleanTrx,
-            payment_method: gateway,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('invoice_number', invoiceNumber);
+      if (!invData) {
+        return NextResponse.json(
+          { success: false, error: 'Invoice not found.' },
+          { status: 404 }
+        );
       }
 
-      // 5. Update associated hosting service status to 'pending_approval' (NEVER auto-active!)
+      if (invData.user_id !== resolvedUserId && auth.role !== 'admin') {
+        return NextResponse.json(
+          { success: false, error: 'You do not have permission to submit payment proof for this invoice.' },
+          { status: 403 }
+        );
+      }
+
+      if (invData.status === 'paid' || invData.status === 'refunded') {
+        return NextResponse.json(
+          { success: false, error: `Invoice is already '${invData.status}'.` },
+          { status: 409 }
+        );
+      }
+
+      invoiceAmount = Number(invData.total_bdt) || invoiceAmount;
+      await db
+        .from('invoices')
+        .update({
+          status: 'verifying_trxid',
+          trx_id: cleanTrx,
+          payment_method: gateway,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('invoice_number', invoiceNumber);
+
+      // 5. Update associated hosting service status to 'pending' (NEVER auto-active!)
       await db
         .from('hosting_services')
         .update({ status: 'pending' })
@@ -102,14 +133,14 @@ export async function POST(req: NextRequest) {
       await db.from('transactions').insert({
         trx_id: cleanTrx,
         invoice_number: invoiceNumber,
-        user_id: userId || invData?.user_id || null,
+        user_id: invData.user_id || resolvedUserId,
         amount_bdt: invoiceAmount,
         gateway: gateway.toLowerCase(),
         status: 'pending_verification',
         raw_payload: {
           senderNumber: cleanSender,
           submittedAt: new Date().toISOString(),
-          customerName,
+          customerName: resolvedCustomerName,
         },
       });
     }
@@ -117,7 +148,7 @@ export async function POST(req: NextRequest) {
     // 7. Instant Founder Telegram Alert Notification
     try {
       await notifyManualPaymentVerification({
-        customerName,
+        customerName: resolvedCustomerName,
         invoiceId: invoiceNumber,
         amountBDT: invoiceAmount || 450,
         trxId: cleanTrx,

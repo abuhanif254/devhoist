@@ -9,6 +9,7 @@ import {
   getDevHostServerPreset,
 } from '@/lib/dnsEngine';
 import { DnsRecord } from '@/context/PortalContext';
+import { requireDomainAccess } from '@/lib/authGuard';
 
 
 // Helper to log actions into security_audit_logs
@@ -48,6 +49,9 @@ export async function GET(request: NextRequest) {
     if (!domainId) {
       return NextResponse.json({ success: false, error: 'Domain ID is required' }, { status: 400 });
     }
+
+    const access = await requireDomainAccess(request, { domainId });
+    if (!access.ok) return access.response;
 
     if (isSupabaseConfigured()) {
       const db = getServiceSupabase();
@@ -104,11 +108,15 @@ export async function POST(request: NextRequest) {
   try {
     const ip = request.headers.get('x-forwarded-for') || '127.0.0.1';
     const body = await request.json();
-    const { action, domainId, domainName, userId, record, presetType, bindText, serverIp } = body;
+    const { action, domainId, domainName, record, presetType, bindText, serverIp } = body;
 
     if (!domainId) {
       return NextResponse.json({ success: false, error: 'Domain ID is required.' }, { status: 400 });
     }
+
+    const access = await requireDomainAccess(request, { domainId, domainName });
+    if (!access.ok) return access.response;
+    const userId = access.user.id;
 
     const db = isSupabaseConfigured() ? getServiceSupabase() : null;
 
@@ -314,11 +322,15 @@ export async function PUT(request: NextRequest) {
   try {
     const ip = request.headers.get('x-forwarded-for') || '127.0.0.1';
     const body = await request.json();
-    const { recordId, domainId, userId, record } = body;
+    const { recordId, domainId, record } = body;
 
     if (!recordId || !domainId || !record) {
       return NextResponse.json({ success: false, error: 'Record ID, domain ID and record data required.' }, { status: 400 });
     }
+
+    const access = await requireDomainAccess(request, { domainId });
+    if (!access.ok) return access.response;
+    const userId = access.user.id;
 
     const db = isSupabaseConfigured() ? getServiceSupabase() : null;
 
@@ -355,7 +367,8 @@ export async function PUT(request: NextRequest) {
           comment: record.comment || null,
           updated_at: new Date().toISOString(),
         })
-        .eq('id', recordId);
+        .eq('id', recordId)
+        .eq('domain_id', domainId);
 
       if (error) {
         return NextResponse.json({ success: false, error: error.message }, { status: 500 });
@@ -386,16 +399,29 @@ export async function DELETE(request: NextRequest) {
     const ip = request.headers.get('x-forwarded-for') || '127.0.0.1';
     const { searchParams } = new URL(request.url);
     const recordId = searchParams.get('recordId');
-    const domainId = searchParams.get('domainId');
-    const userId = searchParams.get('userId');
+    let domainId = searchParams.get('domainId');
 
     if (!recordId) {
       return NextResponse.json({ success: false, error: 'Record ID is required.' }, { status: 400 });
     }
 
-    if (isSupabaseConfigured()) {
-      const db = getServiceSupabase();
-      const { error } = await db.from('domain_dns_records').delete().eq('id', recordId);
+    const db = isSupabaseConfigured() ? getServiceSupabase() : null;
+    if (!domainId && db) {
+      const { data: recOwner } = await db
+        .from('domain_dns_records')
+        .select('domain_id')
+        .eq('id', recordId)
+        .maybeSingle();
+      domainId = recOwner?.domain_id || null;
+    }
+
+    const access = await requireDomainAccess(request, { domainId });
+    if (!access.ok) return access.response;
+    const userId = access.user.id;
+
+    if (db) {
+      const delQuery = db.from('domain_dns_records').delete().eq('id', recordId);
+      const { error } = access.domainId ? await delQuery.eq('domain_id', access.domainId) : await delQuery;
       if (error) {
         return NextResponse.json({ success: false, error: error.message }, { status: 500 });
       }

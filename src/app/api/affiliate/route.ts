@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { checkRateLimit } from '@/lib/edgeRateLimit';
 import { getServiceSupabase, isSupabaseConfigured } from '@/lib/supabase';
 import { createFraudAlert, logSecurityAudit } from '@/lib/security';
+import { requireUser, verifyCronOrAdmin } from '@/lib/authGuard';
 
 export async function POST(request: Request) {
   const rateLimit = checkRateLimit(request, 40, 60 * 1000);
@@ -76,9 +77,12 @@ export async function POST(request: Request) {
     }
 
     // --------------------------------------------------------------------------
-    // 2. RECORD CONVERSION WITH 4-SIGNAL ANTI-SELF-REFERRAL SHIELD
+    // 2. RECORD CONVERSION WITH 4-SIGNAL ANTI-SELF-REFERRAL SHIELD (Internal/Cron/Admin Only)
     // --------------------------------------------------------------------------
     if (action === 'record_conversion') {
+      const cronAuth = await verifyCronOrAdmin(request);
+      if (!cronAuth.ok) return cronAuth.response;
+
       const {
         referralCode,
         buyerEmail,
@@ -238,9 +242,12 @@ export async function POST(request: Request) {
     }
 
     // --------------------------------------------------------------------------
-    // 3. MATURE 35-DAY COMMISSIONS (CRON TRIGGER)
+    // 3. MATURE 35-DAY COMMISSIONS (CRON TRIGGER / ADMIN ONLY)
     // --------------------------------------------------------------------------
     if (action === 'mature_commissions') {
+      const cronAuth = await verifyCronOrAdmin(request);
+      if (!cronAuth.ok) return cronAuth.response;
+
       let maturedCount = 0;
       if (isSupabaseConfigured()) {
         const supabase = getServiceSupabase();
@@ -261,7 +268,11 @@ export async function POST(request: Request) {
     // 4. REQUEST PAYOUT (bKash / Nagad / Bank Transfer, min ৳1,000)
     // --------------------------------------------------------------------------
     if (action === 'request_payout') {
-      const { affiliateUserId, amountBDT, payoutMethod, accountDetails } = body;
+      const auth = await requireUser(request);
+      if (!auth.ok) return auth.response;
+
+      const { amountBDT, payoutMethod, accountDetails } = body;
+      const affiliateUserId = auth.user.id;
 
       const numAmount = Number(amountBDT);
       if (isNaN(numAmount) || numAmount < 1000) {
@@ -297,10 +308,29 @@ export async function POST(request: Request) {
           );
         }
 
-        if (Number(affProfile.available_balance_bdt) < numAmount) {
+        const currentAvail = Number(affProfile.available_balance_bdt) || 0;
+        if (currentAvail < numAmount) {
           return NextResponse.json(
             { error: 'Insufficient Balance', message: `Available balance is only ৳${affProfile.available_balance_bdt} BDT.` },
             { status: 400 }
+          );
+        }
+
+        // Guarded Balance Deduction BEFORE creating payout row (prevents concurrent payout double-spend)
+        const { data: deductedProfile, error: deductErr } = await supabase
+          .from('affiliate_profiles')
+          .update({
+            available_balance_bdt: Math.round((currentAvail - numAmount) * 100) / 100,
+          })
+          .eq('user_id', affiliateUserId)
+          .gte('available_balance_bdt', numAmount)
+          .select('available_balance_bdt')
+          .maybeSingle();
+
+        if (deductErr || !deductedProfile) {
+          return NextResponse.json(
+            { error: 'Concurrent Payout Conflict', message: 'Insufficient available balance for withdrawal.' },
+            { status: 409 }
           );
         }
 
@@ -320,14 +350,6 @@ export async function POST(request: Request) {
         if (pError) {
           throw pError;
         }
-
-        // Deduct from available balance
-        await supabase
-          .from('affiliate_profiles')
-          .update({
-            available_balance_bdt: Number(affProfile.available_balance_bdt) - numAmount,
-          })
-          .eq('user_id', affiliateUserId);
 
         // Audit log
         await logSecurityAudit({
@@ -354,9 +376,12 @@ export async function POST(request: Request) {
     }
 
     // --------------------------------------------------------------------------
-    // 5. INVOICE REFUND CLAWBACK (Cancels commission on 30-day moneyback refund)
+    // 5. INVOICE REFUND CLAWBACK (Admin/Cron Only)
     // --------------------------------------------------------------------------
     if (action === 'clawback_refund') {
+      const cronAuth = await verifyCronOrAdmin(request);
+      if (!cronAuth.ok) return cronAuth.response;
+
       const { invoiceId } = body;
       if (!invoiceId) {
         return NextResponse.json({ error: 'invoiceId required' }, { status: 400 });

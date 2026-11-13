@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { checkRateLimit } from '@/lib/edgeRateLimit';
+import { isSafeExternalHttpUrl } from '@/lib/authGuard';
 
 // Whitelist of valid DNS record types
 const VALID_DNS_TYPES = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS'];
@@ -194,6 +195,13 @@ export async function GET(req: NextRequest) {
         parsed = new URL(rawUrl);
       } catch {
         return NextResponse.json({ error: 'Invalid URL structure' }, { status: 400 });
+      }
+
+      if (!isSafeExternalHttpUrl(parsed.toString())) {
+        return NextResponse.json(
+          { error: 'Target URL is blocked by SSRF security policy (private, loopback, or metadata addresses are forbidden).' },
+          { status: 400 }
+        );
       }
 
       const startTime = Date.now();

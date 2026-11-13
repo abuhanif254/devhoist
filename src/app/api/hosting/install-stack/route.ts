@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServiceSupabase } from '@/lib/supabase';
+import { requireAdmin, requireServiceAccess } from '@/lib/authGuard';
 import {
     fetchMarketplaceStacksFromDbOrFallback,
     getStackBlueprintBySlug,
@@ -48,6 +49,9 @@ export async function POST(request: NextRequest) {
 
         // Action 1: Admin Upsert Stack Blueprint
         if (body.action === 'upsert_blueprint') {
+            const adminAuth = await requireAdmin(request);
+            if (!adminAuth.ok) return adminAuth.response;
+
             const stackData = body.blueprint;
             if (!stackData?.slug || !stackData?.name) {
                 return NextResponse.json(
@@ -95,6 +99,9 @@ export async function POST(request: NextRequest) {
             );
         }
 
+        const access = await requireServiceAccess(request, serviceId, 'services:write');
+        if (!access.ok) return access.response;
+
         // Look up the hosting service to verify ownership and hardware resources
         const serviceRow = supabaseAdmin
             ? (
@@ -106,7 +113,7 @@ export async function POST(request: NextRequest) {
               ).data
             : null;
 
-        const resolvedUserId = bodyUserId || serviceRow?.user_id || '00000000-0000-0000-0000-000000000000';
+        const resolvedUserId = serviceRow?.user_id || access.user.id;
         const resolvedDomain = bodyDomain || serviceRow?.domain || 'app.devhost.cloud';
         const resolvedCpanelUser = bodyCpanelUser || serviceRow?.cpanel_username || 'dvhst';
 

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
 import { encryptEppCode, decryptEppCode } from '@/lib/dnsEngine';
+import { requireUser, requireDomainAccess, verifySudoToken } from '@/lib/authGuard';
 
 
 async function logAudit(
@@ -39,7 +40,6 @@ export async function POST(request: NextRequest) {
       action,
       domainId,
       domainName,
-      userId,
       nameservers,
       childHostname,
       childIpv4,
@@ -54,10 +54,55 @@ export async function POST(request: NextRequest) {
       eppCode,
       transferId,
       transferStep,
-      sudoVerified,
     } = body;
 
     const db = isSupabaseConfigured() ? getServiceSupabase() : null;
+
+    let userId: string;
+    let resolvedDomainId = domainId as string | undefined;
+
+    if (action === 'initiate_transfer') {
+      const auth = await requireUser(request);
+      if (!auth.ok) return auth.response;
+      userId = auth.user.id;
+    } else if (action === 'update_transfer_step') {
+      const auth = await requireUser(request);
+      if (!auth.ok) return auth.response;
+      if (db && transferId) {
+        const { data: trf } = await db
+          .from('domain_transfers')
+          .select('user_id')
+          .eq('id', transferId)
+          .maybeSingle();
+        if (!trf || (trf.user_id !== auth.user.id && auth.role !== 'admin')) {
+          return NextResponse.json({ success: false, error: 'Forbidden transfer access.' }, { status: 403 });
+        }
+      }
+      userId = auth.user.id;
+    } else {
+      if (!resolvedDomainId && db) {
+        if (action === 'delete_child_nameserver' && childId) {
+          const { data: childRow } = await db
+            .from('domain_child_nameservers')
+            .select('domain_id')
+            .eq('id', childId)
+            .maybeSingle();
+          resolvedDomainId = childRow?.domain_id;
+        } else if (action === 'delete_url_forward' && forwardId) {
+          const { data: fwdRow } = await db
+            .from('domain_url_forwards')
+            .select('domain_id')
+            .eq('id', forwardId)
+            .maybeSingle();
+          resolvedDomainId = fwdRow?.domain_id;
+        }
+      }
+
+      const access = await requireDomainAccess(request, { domainId: resolvedDomainId, domainName });
+      if (!access.ok) return access.response;
+      userId = access.user.id;
+      resolvedDomainId = access.domainId || resolvedDomainId;
+    }
 
     // 1. UPDATE NAMESERVERS (Sudo Protected if switching away from DevHost)
     if (action === 'update_nameservers') {
@@ -98,7 +143,7 @@ export async function POST(request: NextRequest) {
           .from('domain_child_nameservers')
           .insert({
             domain_id: domainId,
-            user_id: userId || '00000000-0000-0000-0000-000000000001',
+            user_id: userId,
             hostname: childHostname.trim().toLowerCase(),
             ipv4_address: childIpv4.trim(),
             ipv6_address: childIpv6?.trim() || null,
@@ -143,7 +188,7 @@ export async function POST(request: NextRequest) {
           .from('domain_url_forwards')
           .insert({
             domain_id: domainId,
-            user_id: userId || '00000000-0000-0000-0000-000000000001',
+            user_id: userId,
             source_prefix: forwardSource || '@',
             destination_url: forwardTarget.trim(),
             redirect_type: Number(forwardType) === 302 ? 302 : 301,
@@ -181,7 +226,7 @@ export async function POST(request: NextRequest) {
     if (action === 'toggle_registrar_lock') {
       if (!domainId) return NextResponse.json({ success: false, error: 'Domain ID is required.' }, { status: 400 });
 
-      if (lockState === false && !sudoVerified) {
+      if (lockState === false && !(await verifySudoToken(request, userId))) {
         return NextResponse.json({
           success: false,
           error: 'Sudo Step-Up Verification required to unlock domain registrar protection.',
@@ -239,7 +284,7 @@ export async function POST(request: NextRequest) {
     if (action === 'reveal_epp_code') {
       if (!domainId) return NextResponse.json({ success: false, error: 'Domain ID is required.' }, { status: 400 });
 
-      if (!sudoVerified) {
+      if (!(await verifySudoToken(request, userId))) {
         return NextResponse.json({
           success: false,
           error: '2FA Sudo Step-Up Verification required to reveal transfer authorization code.',
@@ -283,7 +328,7 @@ export async function POST(request: NextRequest) {
         const { data, error } = await db
           .from('domain_transfers')
           .insert({
-            user_id: userId || '00000000-0000-0000-0000-000000000001',
+            user_id: userId,
             domain_name: cleanDomain,
             tld,
             epp_code_encrypted: encryptedEpp,

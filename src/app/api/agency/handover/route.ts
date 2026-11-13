@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServiceSupabase, isSupabaseConfigured } from '@/lib/supabase';
+import { requireUser, requireServiceAccess } from '@/lib/authGuard';
 
 
 // Mock in-memory store for local sandbox testing if Supabase is offline
@@ -59,13 +60,17 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // List handovers for developer
-    if (isSupabaseConfigured() && devUserId) {
+    // List handovers for authenticated developer only
+    const auth = await requireUser(request);
+    if (!auth.ok) return auth.response;
+
+    const targetDevId = auth.role === 'admin' && devUserId ? devUserId : auth.user.id;
+    if (isSupabaseConfigured()) {
       const db = getServiceSupabase();
       const { data } = await db
         .from('agency_handover_transfers')
         .select('*')
-        .eq('developer_user_id', devUserId)
+        .eq('developer_user_id', targetDevId)
         .order('created_at', { ascending: false });
 
       return NextResponse.json({ success: true, handovers: data || [] });
@@ -73,7 +78,9 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      handovers: Array.from(inMemoryHandovers.values()),
+      handovers: Array.from(inMemoryHandovers.values()).filter(
+        (h) => h.developer_user_id === targetDevId || auth.role === 'admin'
+      ),
     });
   } catch (error: any) {
     console.error('[Handover GET Error]', error);
@@ -83,9 +90,11 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = await requireUser(request);
+    if (!auth.ok) return auth.response;
+
     const body = await request.json();
     const {
-      developerUserId,
       developerName,
       serviceId,
       clientName,
@@ -96,6 +105,13 @@ export async function POST(request: NextRequest) {
       developerSetupFeeBDT = 0,
       hostingPriceBDT = 4320,
     } = body;
+
+    if (serviceId) {
+      const srvAccess = await requireServiceAccess(request, serviceId, 'services:write');
+      if (!srvAccess.ok) return srvAccess.response;
+    }
+
+    const developerUserId = auth.user.id;
 
     if (!clientName || !clientEmail || !projectTitle) {
       return NextResponse.json(
@@ -168,26 +184,50 @@ export async function POST(request: NextRequest) {
 
 export async function PUT(request: NextRequest) {
   try {
+    const auth = await requireUser(request);
+    if (!auth.ok) return auth.response;
+
     const body = await request.json();
-    const { handoverToken, clientUserId, paymentMethod, trxId } = body;
+    const { handoverToken, trxId } = body;
+    const clientUserId = auth.user.id;
 
     if (!handoverToken) {
       return NextResponse.json({ error: 'Handover token is required' }, { status: 400 });
     }
 
     if (isSupabaseConfigured()) {
-      try {
-        const db = getServiceSupabase();
-        await db
-          .from('agency_handover_transfers')
-          .update({
-            status: 'claimed_and_paid',
-            claimed_by_user_id: clientUserId || null,
-          })
-          .eq('handover_token', handoverToken);
-      } catch (err) {
-        console.warn('[Handover Claim DB Warning]', err);
+      const db = getServiceSupabase();
+      const { data: existingHo } = await db
+        .from('agency_handover_transfers')
+        .select('id, status, client_email')
+        .eq('handover_token', handoverToken)
+        .maybeSingle();
+
+      if (existingHo?.status === 'claimed_and_paid') {
+        return NextResponse.json(
+          { error: 'Handover token has already been claimed.' },
+          { status: 409 }
+        );
       }
+
+      if (
+        existingHo?.client_email &&
+        existingHo.client_email.toLowerCase() !== auth.profile.email &&
+        auth.role !== 'admin'
+      ) {
+        return NextResponse.json(
+          { error: 'Forbidden: This handover invitation belongs to a different client email address.' },
+          { status: 403 }
+        );
+      }
+
+      await db
+        .from('agency_handover_transfers')
+        .update({
+          status: 'claimed_and_paid',
+          claimed_by_user_id: clientUserId,
+        })
+        .eq('handover_token', handoverToken);
     }
 
     const cached = inMemoryHandovers.get(handoverToken);

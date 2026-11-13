@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { checkRateLimit } from '@/lib/edgeRateLimit';
 import { getServiceSupabase, isSupabaseConfigured } from '@/lib/supabase';
+import { requireUser, requireDomainAccess } from '@/lib/authGuard';
 
 export async function POST(request: Request) {
   const rateLimit = checkRateLimit(request, 30, 60 * 1000);
@@ -20,6 +21,17 @@ export async function POST(request: Request) {
         { error: 'Bad Request', message: 'action and domain are required' },
         { status: 400 }
       );
+    }
+
+    let ownerUserId: string;
+    if (action === 'register') {
+      const auth = await requireUser(request);
+      if (!auth.ok) return auth.response;
+      ownerUserId = auth.user.id;
+    } else {
+      const access = await requireDomainAccess(request, { domainName: String(domain) });
+      if (!access.ok) return access.response;
+      ownerUserId = access.user.id;
     }
 
     // Registrar credentials (ResellerClub / Namecheap / Cloudflare)
@@ -120,6 +132,7 @@ export async function POST(request: Request) {
       if (isSupabaseConfigured()) {
         const supabase = getServiceSupabase();
         await supabase.from('domains').insert({
+          user_id: ownerUserId,
           domain_name: domain,
           tld: domain.includes('.') ? `.${domain.split('.').slice(1).join('.')}` : '.com',
           status: 'Active',

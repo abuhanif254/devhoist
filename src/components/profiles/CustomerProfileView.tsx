@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   User,
   Building,
@@ -102,6 +102,22 @@ export default function CustomerProfileView() {
   const [wizardError, setWizardError] = useState('');
   const [sudoPinInput, setSudoPinInput] = useState('');
   const [sudoPinSuccess, setSudoPinSuccess] = useState(false);
+
+  // Sync authoritative server 2FA status on mount
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/auth/2fa')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!cancelled && data?.success) {
+          setTotpEnabled(Boolean(data.totpEnabled));
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Handle Profile Save
   const handleSaveProfile = () => {
@@ -790,8 +806,22 @@ ${wizardBackupCodes.map((c, i) => `${i + 1}. ${c}`).join('\n')}
               type="button"
               onClick={() => {
                 if (totpEnabled) {
-                  requireSudo(() => {
-                    setTotpEnabled(false);
+                  requireSudo(async () => {
+                    try {
+                      const res = await fetch('/api/auth/2fa', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ action: 'disable' }),
+                      });
+                      if (res.ok) {
+                        setTotpEnabled(false);
+                      } else {
+                        const data = await res.json().catch(() => ({}));
+                        alert(data.error || 'Failed to disable 2FA on server.');
+                      }
+                    } catch {
+                      alert('Network error disabling 2FA.');
+                    }
                   }, 'Disable 2-Step Verification');
                 } else {
                   handleStart2FaSetup();
@@ -825,19 +855,37 @@ ${wizardBackupCodes.map((c, i) => `${i + 1}. ${c}`).join('\n')}
               <input
                 type="password"
                 maxLength={6}
-                placeholder="Enter 6-Digit PIN (e.g. 123456)"
+                placeholder="Enter 6-Digit PIN"
                 value={sudoPinInput}
                 onChange={(e) => setSudoPinInput(e.target.value)}
                 className="w-64 px-3 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white font-bold tracking-widest text-center"
               />
               <button
                 type="button"
-                onClick={() => {
-                  if (/^\d{6}$/.test(sudoPinInput)) {
-                    setSudoPinSuccess(true);
-                    setTimeout(() => setSudoPinSuccess(false), 3000);
-                  } else {
+                onClick={async () => {
+                  if (!/^\d{6}$/.test(sudoPinInput)) {
                     alert('Sudo PIN must be exactly 6 digits.');
+                    return;
+                  }
+                  try {
+                    const res = await fetch('/api/auth/2fa', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        action: 'update_sudo_pin',
+                        sudoPin: sudoPinInput,
+                      }),
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (res.ok && data.success) {
+                      setSudoPinInput('');
+                      setSudoPinSuccess(true);
+                      setTimeout(() => setSudoPinSuccess(false), 3000);
+                    } else {
+                      alert(data.error || 'Failed to update Sudo PIN.');
+                    }
+                  } catch {
+                    alert('Unable to save Sudo PIN to server.');
                   }
                 }}
                 className="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-800 dark:text-zinc-200 font-bold cursor-pointer"

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabase, getServiceSupabase, isSupabaseConfigured } from '@/lib/supabase';
+import { AUTH_TOKEN_COOKIE, SUDO_TOKEN_COOKIE } from '@/lib/authGuard';
 
 export async function POST(request: NextRequest) {
   try {
@@ -89,7 +90,11 @@ export async function POST(request: NextRequest) {
         .eq('id', userId);
     }
 
-    return NextResponse.json({
+    const isSecureCookie =
+      request.nextUrl.protocol === 'https:' ||
+      request.headers.get('x-forwarded-proto') === 'https';
+
+    const response = NextResponse.json({
       success: true,
       user: {
         id: userId,
@@ -97,6 +102,16 @@ export async function POST(request: NextRequest) {
         role: existingProfile?.role || 'client',
       },
     });
+
+    response.cookies.set(AUTH_TOKEN_COOKIE, token, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: isSecureCookie,
+      path: '/',
+      maxAge: 60 * 60 * 24 * 7,
+    });
+
+    return response;
   } catch (err: any) {
     console.error('[Sync Session Fatal Error]:', err);
     return NextResponse.json(
@@ -104,4 +119,22 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+export async function DELETE(request: NextRequest) {
+  const isSecureCookie =
+    request.nextUrl.protocol === 'https:' ||
+    request.headers.get('x-forwarded-proto') === 'https';
+
+  const response = NextResponse.json({ success: true });
+  const clearOpts = {
+    httpOnly: true,
+    sameSite: 'lax' as const,
+    secure: isSecureCookie,
+    path: '/',
+    maxAge: 0,
+  };
+  response.cookies.set(AUTH_TOKEN_COOKIE, '', clearOpts);
+  response.cookies.set(SUDO_TOKEN_COOKIE, '', clearOpts);
+  return response;
 }

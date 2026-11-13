@@ -115,20 +115,31 @@ export default function LoginPage() {
       setAuthUserId(userId);
       resetClientFailedAttempts();
 
-      // 2. Check if 2FA TOTP is required for this user
-      try {
-        const check2faRes = await fetch(`/api/auth/2fa?userId=${userId}&email=${encodeURIComponent(email.trim().toLowerCase())}`);
-        if (check2faRes.ok) {
-          const check2faData = await check2faRes.json();
-          if (check2faData.enabled) {
-            setRequire2FA(true);
-            setShow2FAScreen(true);
-            setIsSubmitting(false);
-            return;
+      // 2. Check if 2FA TOTP is required for this user (authenticated via Bearer token)
+      const accessToken = authData.session?.access_token || '';
+      if (accessToken) {
+        try {
+          const check2faRes = await fetch('/api/auth/2fa', {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+          if (check2faRes.ok) {
+            const check2faData = await check2faRes.json();
+            if (check2faData.enabled) {
+              setRequire2FA(true);
+              setShow2FAScreen(true);
+              setIsSubmitting(false);
+              return;
+            }
           }
+        } catch (twoFaErr) {
+          console.warn('2FA verification check warning:', twoFaErr);
         }
-      } catch (twoFaErr) {
-        console.warn('2FA verification check warning:', twoFaErr);
+
+        // Sync HttpOnly API session cookie before navigating
+        await fetch('/api/auth/sync-session', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${accessToken}` },
+        }).catch(() => {});
       }
 
       // 3. Query User Role from public.profiles
@@ -229,19 +240,34 @@ export default function LoginPage() {
     }
 
     try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData?.session?.access_token || '';
+      if (!accessToken) {
+        setTotpError('Your login session expired. Please sign in again.');
+        setIsVerifyingTotp(false);
+        return;
+      }
+
       const res = await fetch('/api/auth/2fa', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
         body: JSON.stringify({
           action: 'verify',
-          email: email.trim().toLowerCase(),
-          code: enteredCode,
+          token: useBackupCode ? undefined : enteredCode,
+          backupCode: useBackupCode ? enteredCode : undefined,
         }),
       });
       const data = await res.json();
       if (res.ok && data.success) {
+        await fetch('/api/auth/sync-session', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${accessToken}` },
+        }).catch(() => {});
+
         // Query user role to route properly
-        const { data: sessionData } = await supabase.auth.getSession();
         const userId = sessionData?.session?.user?.id;
         let userRole = 'client';
         if (userId) {

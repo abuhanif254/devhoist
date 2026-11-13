@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
+import { requireServiceAccess } from '@/lib/authGuard';
 
 
 async function logAudit(
@@ -38,6 +39,9 @@ export async function GET(request: NextRequest) {
     if (!serviceId) {
       return NextResponse.json({ success: false, error: 'Service ID is required' }, { status: 400 });
     }
+
+    const access = await requireServiceAccess(request, serviceId, 'domains:read');
+    if (!access.ok) return access.response;
 
     if (isSupabaseConfigured()) {
       const db = getServiceSupabase();
@@ -119,7 +123,6 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const {
       serviceId,
-      userId,
       domainType = 'addon_domain',
       hostname,
       documentRoot,
@@ -130,6 +133,10 @@ export async function POST(request: NextRequest) {
     if (!serviceId || !hostname) {
       return NextResponse.json({ success: false, error: 'Service ID and hostname are required.' }, { status: 400 });
     }
+
+    const access = await requireServiceAccess(request, serviceId, 'services:write');
+    if (!access.ok) return access.response;
+    const userId = access.user.id;
 
     const cleanHost = hostname.trim().toLowerCase();
     const db = isSupabaseConfigured() ? getServiceSupabase() : null;
@@ -185,7 +192,7 @@ export async function POST(request: NextRequest) {
         .from('hosting_addon_domains')
         .insert({
           service_id: serviceId,
-          user_id: userId || '00000000-0000-0000-0000-000000000001',
+          user_id: userId,
           domain_type: domainType,
           hostname: cleanHost,
           document_root: defaultDocRoot,
@@ -235,16 +242,32 @@ export async function DELETE(request: NextRequest) {
     const ip = request.headers.get('x-forwarded-for') || '127.0.0.1';
     const { searchParams } = new URL(request.url);
     const domainId = searchParams.get('id');
-    const serviceId = searchParams.get('serviceId');
-    const userId = searchParams.get('userId');
+    let serviceId = searchParams.get('serviceId');
 
     if (!domainId) {
       return NextResponse.json({ success: false, error: 'Domain mapping ID is required.' }, { status: 400 });
     }
 
-    if (isSupabaseConfigured()) {
-      const db = getServiceSupabase();
-      const { error } = await db.from('hosting_addon_domains').delete().eq('id', domainId);
+    const db = isSupabaseConfigured() ? getServiceSupabase() : null;
+    if (!serviceId && db) {
+      const { data: domainRow } = await db
+        .from('hosting_addon_domains')
+        .select('service_id')
+        .eq('id', domainId)
+        .maybeSingle();
+      serviceId = domainRow?.service_id || null;
+    }
+
+    const access = await requireServiceAccess(request, serviceId, 'services:write');
+    if (!access.ok) return access.response;
+    const userId = access.user.id;
+
+    if (db) {
+      const { error } = await db
+        .from('hosting_addon_domains')
+        .delete()
+        .eq('id', domainId)
+        .eq('service_id', access.serviceId);
       if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
     }
 

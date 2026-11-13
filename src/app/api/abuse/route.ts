@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServiceSupabase } from '@/lib/supabase';
 import { scanDomainForPhishing, quarantineAbuseDomain } from '@/lib/abuseShieldEngine';
 import { sendTelegramAlert } from '@/lib/adminNotifier';
+import { requireAdmin } from '@/lib/authGuard';
 
 export const DEFAULT_LEGAL_DOCUMENTS = [
     {
@@ -232,7 +233,10 @@ export async function GET(request: NextRequest) {
             return NextResponse.json({ success: true, documents: DEFAULT_LEGAL_DOCUMENTS });
         }
 
-        // Otherwise list abuse reports
+        // Otherwise list abuse reports (Admin only)
+        const adminAuth = await requireAdmin(request);
+        if (!adminAuth.ok) return adminAuth.response;
+
         if (supabaseAdmin) {
             const { data } = await supabaseAdmin
                 .from('public_abuse_reports')
@@ -258,6 +262,9 @@ export async function POST(request: NextRequest) {
 
         // Action A: Admin updates a legal document
         if (body.action === 'update_legal_doc') {
+            const adminAuth = await requireAdmin(request);
+            if (!adminAuth.ok) return adminAuth.response;
+
             if (!supabaseAdmin) {
                 return NextResponse.json({ success: true, document: body.document });
             }
@@ -278,6 +285,9 @@ export async function POST(request: NextRequest) {
 
         // Action B: Admin updates an abuse report status
         if (body.action === 'update_abuse_status') {
+            const adminAuth = await requireAdmin(request);
+            if (!adminAuth.ok) return adminAuth.response;
+
             const { reportId, status, adminResolutionNote } = body;
             if (supabaseAdmin && reportId) {
                 await supabaseAdmin

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServiceSupabase } from '@/lib/supabase';
 import { validateCronCommand, logSecurityAudit } from '@/lib/security';
+import { requireServiceAccess } from '@/lib/authGuard';
 
 export interface SqlTableSchema {
   tableName: string;
@@ -412,7 +413,10 @@ function executeSqlRunnerQuery(rawQuery: string): {
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const serviceId = searchParams.get('serviceId') || 'srv-default';
+    const serviceId = searchParams.get('serviceId') || '';
+
+    const access = await requireServiceAccess(req, serviceId, 'logs:read');
+    if (!access.ok) return access.response;
 
     const supabaseAdmin = getServiceSupabase();
     let logs: unknown[] = [];
@@ -446,7 +450,6 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const {
       serviceId,
-      userId,
       domain = 'app.devhost.cloud',
       username = 'dev_container',
       consoleType,
@@ -466,6 +469,10 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+
+    const access = await requireServiceAccess(req, serviceId, 'services:write');
+    if (!access.ok) return access.response;
+    const userId = access.user.id;
 
     const supabaseAdmin = getServiceSupabase();
 

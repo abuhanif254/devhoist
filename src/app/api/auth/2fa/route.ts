@@ -2,56 +2,52 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   generateBase32Secret,
   generateTotpUri,
-  generateTotpToken,
   verifyTotpCode,
   generateBackupCodes,
   verifyBackupCode,
   hashSecurityPin,
   verifySecurityPin,
   generateQrCodeSvg,
-  sha256Hex,
 } from '@/lib/totpEngine';
-import { getServiceSupabase, isSupabaseConfigured } from '@/lib/supabase';
+import { getServiceSupabase } from '@/lib/supabase';
+import {
+  requireUser,
+  signSudoToken,
+  verifySudoToken,
+  SUDO_TOKEN_COOKIE,
+  isSafeExternalHttpUrl,
+} from '@/lib/authGuard';
 
+function isSecureRequest(req: NextRequest): boolean {
+  return (
+    req.nextUrl.protocol === 'https:' ||
+    req.headers.get('x-forwarded-proto') === 'https'
+  );
+}
 
+/**
+ * GET /api/auth/2fa
+ * Returns 2FA and Sudo configuration state strictly for the authenticated session user.
+ */
 export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
-    const userId = searchParams.get('userId');
-    const email = searchParams.get('email');
-
-    if (!userId && !email) {
-      return NextResponse.json({ enabled: false }, { status: 200 });
-    }
-
-    if (!isSupabaseConfigured()) {
-      return NextResponse.json({ enabled: false }, { status: 200 });
-    }
+    const auth = await requireUser(req);
+    if (!auth.ok) return auth.response;
 
     const db = getServiceSupabase();
-    let queryUserId = userId;
-
-    if (!queryUserId && email) {
-      const { data: userProfile } = await db
-        .from('profiles')
-        .select('id')
-        .eq('email', email.trim().toLowerCase())
-        .maybeSingle();
-      queryUserId = userProfile?.id;
-    }
-
-    if (!queryUserId) {
-      return NextResponse.json({ enabled: false }, { status: 200 });
-    }
-
     const { data: creds, error } = await db
       .from('user_security_credentials')
       .select('totp_enabled, totp_secret_base32, backup_recovery_hashes, sudo_security_pin_hash')
-      .eq('user_id', queryUserId)
+      .eq('user_id', auth.user.id)
       .maybeSingle();
 
     if (error || !creds) {
-      return NextResponse.json({ enabled: false }, { status: 200 });
+      return NextResponse.json({
+        enabled: false,
+        hasSecret: false,
+        hasBackupCodes: false,
+        hasSudoPin: false,
+      });
     }
 
     return NextResponse.json({
@@ -61,20 +57,27 @@ export async function GET(req: NextRequest) {
       hasSudoPin: Boolean(creds.sudo_security_pin_hash),
     });
   } catch (err: any) {
-    return NextResponse.json({ enabled: false, error: err?.message }, { status: 200 });
+    return NextResponse.json(
+      { enabled: false, error: err?.message || 'Unable to check 2FA status' },
+      { status: 500 }
+    );
   }
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
+    const auth = await requireUser(req);
+    if (!auth.ok) return auth.response;
+
+    const body = await req.json().catch(() => ({}));
     const { action } = body;
+    const db = getServiceSupabase();
 
     // -------------------------------------------------------------------------
     // ACTION 1: SETUP 2FA (Generate Secret, OTP URI, SVG QR Code & Recovery Codes)
     // -------------------------------------------------------------------------
     if (action === 'setup') {
-      const email = body.email || 'client@devhostcloud.com';
+      const email = auth.profile.email || 'client@devhostcloud.com';
       const secretBase32 = generateBase32Secret(20);
       const otpauthUri = generateTotpUri(email, secretBase32);
       const qrCodeSvg = await generateQrCodeSvg(otpauthUri);
@@ -91,10 +94,10 @@ export async function POST(req: NextRequest) {
     }
 
     // -------------------------------------------------------------------------
-    // ACTION 2: ENABLE 2FA (Confirm initial code & activate in database)
+    // ACTION 2: ENABLE 2FA (Confirm initial code & activate for authenticated user)
     // -------------------------------------------------------------------------
     if (action === 'enable') {
-      const { secretBase32, token, backupHashes, sudoPin, userId } = body;
+      const { secretBase32, token, backupHashes, sudoPin } = body;
 
       if (!secretBase32 || !token) {
         return NextResponse.json(
@@ -103,90 +106,170 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      // Verify the code against the newly generated secret
-      const isValid = await verifyTotpCode(secretBase32, token);
+      const isValid = await verifyTotpCode(secretBase32, String(token));
       if (!isValid) {
         return NextResponse.json(
-          { error: 'Invalid 6-digit verification code. Please check your authenticator clock and try again.' },
+          {
+            error:
+              'Invalid 6-digit verification code. Please check your authenticator clock and try again.',
+          },
           { status: 422 }
         );
       }
 
-      let pinHash = null;
-      if (sudoPin && /^\d{6}$/.test(sudoPin)) {
-        pinHash = await hashSecurityPin(sudoPin);
+      const updatePayload: Record<string, unknown> = {
+        user_id: auth.user.id,
+        totp_enabled: true,
+        totp_secret_base32: secretBase32,
+        backup_recovery_hashes: Array.isArray(backupHashes) ? backupHashes : [],
+        last_sudo_verified_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      if (sudoPin && /^\d{6}$/.test(String(sudoPin))) {
+        updatePayload.sudo_security_pin_hash = await hashSecurityPin(String(sudoPin));
       }
 
-      // Update in Supabase if configured and userId provided
-      if (isSupabaseConfigured() && userId) {
-        const db = getServiceSupabase();
-        try {
-          await db
-            .from('user_security_credentials')
-            .upsert({
-              user_id: userId,
-              totp_enabled: true,
-              totp_secret_base32: secretBase32,
-              backup_recovery_hashes: backupHashes || [],
-              sudo_security_pin_hash: pinHash,
-              last_sudo_verified_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            });
-        } catch (err: any) {
-          console.warn('[2FA Enable DB Error]:', err);
-        }
+      const { error: upsertErr } = await db
+        .from('user_security_credentials')
+        .upsert(updatePayload, { onConflict: 'user_id' });
+
+      if (upsertErr) {
+        return NextResponse.json(
+          { error: 'Failed to store 2FA credentials in database.' },
+          { status: 500 }
+        );
       }
 
-      return NextResponse.json({
+      const sudoToken = await signSudoToken(auth.user.id, 900);
+      const res = NextResponse.json({
         success: true,
         message: 'Two-Step Verification (TOTP) successfully activated.',
         totpEnabled: true,
       });
+
+      res.cookies.set(SUDO_TOKEN_COOKIE, sudoToken, {
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: isSecureRequest(req),
+        path: '/',
+        maxAge: 900,
+      });
+
+      return res;
     }
 
     // -------------------------------------------------------------------------
-    // ACTION 3: VERIFY 2FA (Login Challenge or Sudo Verification)
+    // ACTION 3: UPDATE MASTER 6-DIGIT SUDO PIN (Server-persisted SHA-256 hash)
+    // -------------------------------------------------------------------------
+    if (action === 'update_sudo_pin') {
+      const sudoPin = String(body.sudoPin || '').trim();
+      if (!/^\d{6}$/.test(sudoPin)) {
+        return NextResponse.json(
+          { error: 'Master Sudo PIN must be exactly 6 numeric digits.' },
+          { status: 400 }
+        );
+      }
+
+      const { data: existingCreds } = await db
+        .from('user_security_credentials')
+        .select('sudo_security_pin_hash, totp_enabled')
+        .eq('user_id', auth.user.id)
+        .maybeSingle();
+
+      // Changing an existing Sudo PIN (or when TOTP is enabled) requires an active Sudo session
+      if (existingCreds?.sudo_security_pin_hash || existingCreds?.totp_enabled) {
+        const hasValidSudo = await verifySudoToken(req, auth.user.id);
+        if (!hasValidSudo) {
+          return NextResponse.json(
+            { error: 'Verify your current 2FA or Sudo PIN before updating your Master Sudo PIN.' },
+            { status: 403 }
+          );
+        }
+      }
+
+      const pinHash = await hashSecurityPin(sudoPin);
+      const { error: upsertErr } = await db
+        .from('user_security_credentials')
+        .upsert(
+          {
+            user_id: auth.user.id,
+            sudo_security_pin_hash: pinHash,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'user_id' }
+        );
+
+      if (upsertErr) {
+        return NextResponse.json(
+          { error: 'Failed to persist Sudo Security PIN.' },
+          { status: 500 }
+        );
+      }
+
+      return NextResponse.json({
+        success: true,
+        message: 'Master 6-digit Sudo Security PIN updated securely.',
+      });
+    }
+
+    // -------------------------------------------------------------------------
+    // ACTION 4: VERIFY 2FA OR SUDO STEP-UP (Strictly server-stored secrets only)
     // -------------------------------------------------------------------------
     if (action === 'verify' || action === 'verify_sudo') {
-      const { token, secretBase32, backupCode, sudoPin, storedPinHash, storedBackupHashes, userId } = body;
+      const tokenInput = body.token || body.code;
+      const sudoPinInput = body.sudoPin;
+      const backupCodeInput = body.backupCode;
+
+      const { data: creds, error: credsErr } = await db
+        .from('user_security_credentials')
+        .select('totp_enabled, totp_secret_base32, backup_recovery_hashes, sudo_security_pin_hash')
+        .eq('user_id', auth.user.id)
+        .maybeSingle();
+
+      if (credsErr || !creds) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'No 2FA or Sudo credentials configured for your account.',
+          },
+          { status: 404 }
+        );
+      }
 
       let verified = false;
       let verificationMethod = '';
-      let remainingHashes = storedBackupHashes || [];
+      let remainingHashes: string[] = Array.isArray(creds.backup_recovery_hashes)
+        ? creds.backup_recovery_hashes
+        : [];
 
-      // Method 1: TOTP Code
-      if (token && secretBase32) {
-        verified = await verifyTotpCode(secretBase32, token);
+      // Method 1: Authenticator TOTP Code
+      if (tokenInput && creds.totp_secret_base32) {
+        verified = await verifyTotpCode(creds.totp_secret_base32, String(tokenInput));
         if (verified) verificationMethod = 'totp';
       }
 
-      // Method 2: Sudo PIN
-      if (!verified && sudoPin && storedPinHash) {
-        verified = await verifySecurityPin(sudoPin, storedPinHash);
+      // Method 2: Server-stored Master Sudo PIN
+      if (!verified && sudoPinInput && creds.sudo_security_pin_hash) {
+        verified = await verifySecurityPin(String(sudoPinInput), creds.sudo_security_pin_hash);
         if (verified) verificationMethod = 'sudo_pin';
       }
 
-      // Method 3: Backup Recovery Code
-      if (!verified && backupCode && storedBackupHashes && storedBackupHashes.length > 0) {
-        const backupResult = await verifyBackupCode(backupCode, storedBackupHashes);
+      // Method 3: One-Time Emergency Backup Recovery Code
+      if (!verified && backupCodeInput && remainingHashes.length > 0) {
+        const backupResult = await verifyBackupCode(String(backupCodeInput), remainingHashes);
         if (backupResult.valid) {
           verified = true;
           verificationMethod = 'backup_code';
           remainingHashes = backupResult.remainingHashedCodes;
 
-          // Update consumed backup code in Supabase
-          if (isSupabaseConfigured() && userId) {
-            const db = getServiceSupabase();
-            try {
-              await db
-                .from('user_security_credentials')
-                .update({
-                  backup_recovery_hashes: remainingHashes,
-                  updated_at: new Date().toISOString(),
-                })
-                .eq('user_id', userId);
-            } catch {}
-          }
+          await db
+            .from('user_security_credentials')
+            .update({
+              backup_recovery_hashes: remainingHashes,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('user_id', auth.user.id);
         }
       }
 
@@ -200,63 +283,86 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      // Update last sudo verified time
-      if (isSupabaseConfigured() && userId) {
-        const db = getServiceSupabase();
-        try {
-          await db
-            .from('user_security_credentials')
-            .update({
-              last_sudo_verified_at: new Date().toISOString(),
-            })
-            .eq('user_id', userId);
-        } catch {}
-      }
+      await db
+        .from('user_security_credentials')
+        .update({
+          last_sudo_verified_at: new Date().toISOString(),
+        })
+        .eq('user_id', auth.user.id);
 
       const sudoExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+      const sudoToken = await signSudoToken(auth.user.id, 900);
 
-      return NextResponse.json({
+      const response = NextResponse.json({
         success: true,
         verificationMethod,
         sudoExpiresAt,
         remainingBackupCodesCount: remainingHashes.length,
       });
+
+      response.cookies.set(SUDO_TOKEN_COOKIE, sudoToken, {
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: isSecureRequest(req),
+        path: '/',
+        maxAge: 900,
+      });
+
+      return response;
     }
 
     // -------------------------------------------------------------------------
-    // ACTION 4: DISABLE 2FA
+    // ACTION 5: REVOKE SUDO SESSION COOKIE
+    // -------------------------------------------------------------------------
+    if (action === 'revoke_sudo') {
+      const response = NextResponse.json({ success: true });
+      response.cookies.set(SUDO_TOKEN_COOKIE, '', {
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: isSecureRequest(req),
+        path: '/',
+        maxAge: 0,
+      });
+      return response;
+    }
+
+    // -------------------------------------------------------------------------
+    // ACTION 6: DISABLE 2FA (Requires active verified Sudo cookie OR valid TOTP/PIN)
     // -------------------------------------------------------------------------
     if (action === 'disable') {
-      const { userId, sudoPin, storedPinHash, token, secretBase32 } = body;
+      const hasActiveSudo = await verifySudoToken(req, auth.user.id);
+      let authorized = hasActiveSudo;
 
-      let authorized = false;
-      if (token && secretBase32) {
-        authorized = await verifyTotpCode(secretBase32, token);
-      }
-      if (!authorized && sudoPin && storedPinHash) {
-        authorized = await verifySecurityPin(sudoPin, storedPinHash);
+      if (!authorized) {
+        const { data: creds } = await db
+          .from('user_security_credentials')
+          .select('totp_secret_base32, sudo_security_pin_hash')
+          .eq('user_id', auth.user.id)
+          .maybeSingle();
+
+        if (body.token && creds?.totp_secret_base32) {
+          authorized = await verifyTotpCode(creds.totp_secret_base32, String(body.token));
+        }
+        if (!authorized && body.sudoPin && creds?.sudo_security_pin_hash) {
+          authorized = await verifySecurityPin(String(body.sudoPin), creds.sudo_security_pin_hash);
+        }
       }
 
       if (!authorized) {
         return NextResponse.json(
-          { error: 'Security authorization required to disable 2FA' },
+          { error: 'Sudo verification or valid 2FA/PIN required to disable 2FA.' },
           { status: 403 }
         );
       }
 
-      if (isSupabaseConfigured() && userId) {
-        const db = getServiceSupabase();
-        try {
-          await db
-            .from('user_security_credentials')
-            .update({
-              totp_enabled: false,
-              totp_secret_base32: null,
-              updated_at: new Date().toISOString(),
-            })
-            .eq('user_id', userId);
-        } catch {}
-      }
+      await db
+        .from('user_security_credentials')
+        .update({
+          totp_enabled: false,
+          totp_secret_base32: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('user_id', auth.user.id);
 
       return NextResponse.json({
         success: true,
@@ -265,28 +371,38 @@ export async function POST(req: NextRequest) {
     }
 
     // -------------------------------------------------------------------------
-    // ACTION 5: TEST S2S CONVERSION POSTBACK WEBHOOK (Affiliate Partner Tools)
+    // ACTION 7: TEST S2S CONVERSION POSTBACK WEBHOOK (SSRF-Hardened)
     // -------------------------------------------------------------------------
     if (action === 'test_postback') {
       const { webhookUrl, subId = 'fb_campaign_devhost', payoutAmount = 450 } = body;
 
-      if (!webhookUrl || !webhookUrl.startsWith('http')) {
+      if (!webhookUrl || !isSafeExternalHttpUrl(String(webhookUrl))) {
         return NextResponse.json(
-          { error: 'A valid HTTP/HTTPS Webhook URL is required' },
+          {
+            error:
+              'A valid public HTTP/HTTPS Webhook URL is required (private/local addresses are blocked).',
+          },
           { status: 400 }
         );
       }
 
-      // Format test URL by replacing macro placeholders
-      const parsedUrl = webhookUrl
-        .replace(/{subid}/gi, encodeURIComponent(subId))
-        .replace(/{payout}/gi, encodeURIComponent(payoutAmount.toString()))
+      const parsedUrl = String(webhookUrl)
+        .replace(/{subid}/gi, encodeURIComponent(String(subId)))
+        .replace(/{payout}/gi, encodeURIComponent(String(payoutAmount)))
         .replace(/{order_id}/gi, 'TEST_ORDER_9918');
+
+      if (!isSafeExternalHttpUrl(parsedUrl)) {
+        return NextResponse.json(
+          { error: 'Invalid postback destination.' },
+          { status: 400 }
+        );
+      }
 
       const startTime = Date.now();
       try {
         const pingRes = await fetch(parsedUrl, {
           method: 'GET',
+          redirect: 'manual',
           headers: {
             'User-Agent': 'DevHostCloud-Affiliate-Postback/2.0',
             'X-DevHost-Event': 'conversion_test_ping',

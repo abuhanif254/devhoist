@@ -12,9 +12,13 @@ import {
   renderSecurityThreatEmail,
   EmailTemplateId,
 } from '@/lib/emailEngine';
+import { requireAdmin } from '@/lib/authGuard';
 
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const adminAuth = await requireAdmin(req);
+  if (!adminAuth.ok) return adminAuth.response;
+
   const outbox = getEmailOutboxLogs();
   return NextResponse.json({
     success: true,
@@ -25,6 +29,9 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
+    const adminAuth = await requireAdmin(req);
+    if (!adminAuth.ok) return adminAuth.response;
+
     const body = await req.json();
     const { to, template, data } = body as {
       to: string;

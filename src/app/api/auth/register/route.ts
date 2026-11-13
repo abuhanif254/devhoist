@@ -1,8 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, getServiceSupabase, supabase } from '@/lib/supabase';
+import { checkRateLimit } from '@/lib/edgeRateLimit';
 
 
 export async function POST(req: NextRequest) {
+  const rateLimit = checkRateLimit(req, 10, 60 * 1000);
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      { error: `Too many registration attempts. Please try again in ${rateLimit.reset} seconds.` },
+      { status: 429, headers: { 'Retry-After': String(rateLimit.reset) } }
+    );
+  }
+
   try {
     let body: any;
     try {

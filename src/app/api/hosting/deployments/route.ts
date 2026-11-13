@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
+import { requireServiceAccess } from '@/lib/authGuard';
 
 
 async function logAudit(
@@ -39,6 +40,9 @@ export async function GET(request: NextRequest) {
     if (!serviceId) {
       return NextResponse.json({ success: false, error: 'Service ID is required.' }, { status: 400 });
     }
+
+    const access = await requireServiceAccess(request, serviceId, 'services:read');
+    if (!access.ok) return access.response;
 
     if (isSupabaseConfigured()) {
       const db = getServiceSupabase();
@@ -112,6 +116,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'Service ID is required.' }, { status: 400 });
     }
 
+    const access = await requireServiceAccess(request, serviceId, 'git:deploy');
+    if (!access.ok) return access.response;
+    const resolvedUserId = access.user.id;
+
     const db = isSupabaseConfigured() ? getServiceSupabase() : null;
 
     // 1. MANUAL TRIGGER BUILD
@@ -139,7 +147,7 @@ export async function POST(request: NextRequest) {
           .from('project_deployments')
           .insert({
             service_id: serviceId,
-            user_id: userId || '00000000-0000-0000-0000-000000000001',
+            user_id: resolvedUserId,
             commit_sha: commitSha,
             commit_message: commitMessage || 'Manual production deploy via dashboard',
             branch: 'main',

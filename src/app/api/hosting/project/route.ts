@@ -7,6 +7,7 @@ import {
   parseDotEnvFile,
   validateShellCommand,
 } from '@/lib/projectEngine';
+import { requireServiceAccess, verifySudoToken } from '@/lib/authGuard';
 
 
 async function logAudit(
@@ -46,6 +47,9 @@ export async function GET(request: NextRequest) {
     if (!serviceId) {
       return NextResponse.json({ success: false, error: 'Service ID is required.' }, { status: 400 });
     }
+
+    const access = await requireServiceAccess(request, serviceId, 'services:read');
+    if (!access.ok) return access.response;
 
     if (isSupabaseConfigured()) {
       const db = getServiceSupabase();
@@ -122,11 +126,15 @@ export async function PUT(request: NextRequest) {
   try {
     const ip = request.headers.get('x-forwarded-for') || '127.0.0.1';
     const body = await request.json();
-    const { serviceId, userId, settings } = body;
+    const { serviceId, settings } = body;
 
     if (!serviceId || !settings) {
       return NextResponse.json({ success: false, error: 'Service ID and settings required.' }, { status: 400 });
     }
+
+    const access = await requireServiceAccess(request, serviceId, 'services:write');
+    if (!access.ok) return access.response;
+    const userId = access.user.id;
 
     // Security Firewall: Sanitize build and install commands
     if (settings.build_command) {
@@ -157,7 +165,7 @@ export async function PUT(request: NextRequest) {
         .from('hosting_project_settings')
         .upsert({
           service_id: serviceId,
-          user_id: userId || '00000000-0000-0000-0000-000000000001',
+          user_id: userId,
           ...settings,
           updated_at: new Date().toISOString(),
         });
@@ -194,17 +202,30 @@ export async function POST(request: NextRequest) {
     const {
       action,
       serviceId,
-      userId,
       key,
       value,
       targetEnvironment = 'all',
       isSecret = true,
       rawEnvText,
       envId,
-      sudoVerified,
     } = body;
 
     const db = isSupabaseConfigured() ? getServiceSupabase() : null;
+
+    let resolvedServiceId = serviceId;
+    if (!resolvedServiceId && action === 'reveal_secret' && envId && db) {
+      const { data: envOwner } = await db
+        .from('project_env_variables')
+        .select('service_id')
+        .eq('id', envId)
+        .maybeSingle();
+      resolvedServiceId = envOwner?.service_id;
+    }
+
+    const requiredScope = action === 'regenerate_webhook_token' ? 'services:write' : 'env:write';
+    const access = await requireServiceAccess(request, resolvedServiceId, requiredScope);
+    if (!access.ok) return access.response;
+    const userId = access.user.id;
 
     // 1. ADD SINGLE ENV VARIABLE
     if (action === 'add_env') {
@@ -230,7 +251,7 @@ export async function POST(request: NextRequest) {
           .from('project_env_variables')
           .upsert({
             service_id: serviceId,
-            user_id: userId || '00000000-0000-0000-0000-000000000001',
+            user_id: userId,
             env_key: cleanKey,
             encrypted_value: encrypted,
             masked_preview: masked,
@@ -275,7 +296,7 @@ export async function POST(request: NextRequest) {
           const mask = getMaskedPreview(item.value);
           rows.push({
             service_id: serviceId,
-            user_id: userId || '00000000-0000-0000-0000-000000000001',
+            user_id: userId,
             env_key: item.key,
             encrypted_value: enc,
             masked_preview: mask,
@@ -307,7 +328,8 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ success: false, error: 'Environment variable ID is required.' }, { status: 400 });
       }
 
-      if (!sudoVerified) {
+      const sudoValid = await verifySudoToken(request, userId);
+      if (!sudoValid) {
         return NextResponse.json({
           success: false,
           error: '2FA Sudo Step-Up Verification required to decrypt secret environment variables.',
@@ -321,6 +343,7 @@ export async function POST(request: NextRequest) {
           .from('project_env_variables')
           .select('encrypted_value, env_key')
           .eq('id', envId)
+          .eq('service_id', access.serviceId)
           .single();
 
         if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
@@ -381,16 +404,32 @@ export async function DELETE(request: NextRequest) {
     const ip = request.headers.get('x-forwarded-for') || '127.0.0.1';
     const { searchParams } = new URL(request.url);
     const envId = searchParams.get('envId');
-    const serviceId = searchParams.get('serviceId');
-    const userId = searchParams.get('userId');
+    let serviceId = searchParams.get('serviceId');
 
     if (!envId) {
       return NextResponse.json({ success: false, error: 'Environment variable ID required.' }, { status: 400 });
     }
 
-    if (isSupabaseConfigured()) {
-      const db = getServiceSupabase();
-      const { error } = await db.from('project_env_variables').delete().eq('id', envId);
+    const db = isSupabaseConfigured() ? getServiceSupabase() : null;
+    if (!serviceId && db) {
+      const { data: envRow } = await db
+        .from('project_env_variables')
+        .select('service_id')
+        .eq('id', envId)
+        .maybeSingle();
+      serviceId = envRow?.service_id || null;
+    }
+
+    const access = await requireServiceAccess(request, serviceId, 'env:write');
+    if (!access.ok) return access.response;
+    const userId = access.user.id;
+
+    if (db) {
+      const { error } = await db
+        .from('project_env_variables')
+        .delete()
+        .eq('id', envId)
+        .eq('service_id', access.serviceId);
       if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
     }
 

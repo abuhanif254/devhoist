@@ -80,6 +80,11 @@ export function SudoGateProvider({ children }: { children: React.ReactNode }) {
 
   const revokeSudo = () => {
     setSudoExpiresAt(null);
+    fetch('/api/auth/2fa', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'revoke_sudo' }),
+    }).catch(() => {});
   };
 
   const handleVerify = async (e?: React.FormEvent) => {
@@ -88,54 +93,31 @@ export function SudoGateProvider({ children }: { children: React.ReactNode }) {
     setIsVerifying(true);
 
     try {
-      // In local demo or when testing with default PIN:
-      // Accepts master PIN '123456' or demo TOTP or calls /api/auth/2fa
       const cleanInput = codeValue.trim();
 
-      let isSuccess = false;
-
-      // Direct check for demo/dev speed
-      if (activeTab === 'pin' && cleanInput === '123456') {
-        isSuccess = true;
-      } else if (cleanInput.length >= 6) {
-        // Call backend /api/auth/2fa
-        try {
-          const res = await fetch('/api/auth/2fa', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              action: 'verify_sudo',
-              token: activeTab === 'totp' ? cleanInput : undefined,
-              sudoPin: activeTab === 'pin' ? cleanInput : undefined,
-              backupCode: activeTab === 'backup' ? cleanInput : undefined,
-            }),
-          });
-          const data = await res.json();
-          if (res.ok && data.success) {
-            isSuccess = true;
-          } else {
-            // Allow fallback check in offline / seed mode
-            if (cleanInput === '123456' || cleanInput.length === 6) {
-              isSuccess = true;
-            } else {
-              setErrorMessage(data.error || 'Verification failed. Incorrect code or PIN.');
-            }
-          }
-        } catch {
-          // Offline fallback for testing
-          if (cleanInput === '123456' || cleanInput.length === 6) {
-            isSuccess = true;
-          } else {
-            setErrorMessage('Unable to reach authentication server.');
-          }
-        }
-      } else {
-        setErrorMessage('Please enter a valid 6-digit code or recovery code.');
+      if (cleanInput.length < 6) {
+        setErrorMessage('Please enter a valid 6-digit code, PIN, or recovery code.');
+        return;
       }
 
-      if (isSuccess) {
+      const res = await fetch('/api/auth/2fa', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'verify_sudo',
+          token: activeTab === 'totp' ? cleanInput : undefined,
+          sudoPin: activeTab === 'pin' ? cleanInput : undefined,
+          backupCode: activeTab === 'backup' ? cleanInput : undefined,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (res.ok && data.success) {
         setSuccessAnimation(true);
-        elevateSudoManually();
+        const expiresAtMs = data.sudoExpiresAt
+          ? new Date(data.sudoExpiresAt).getTime()
+          : Date.now() + SUDO_SESSION_TTL_MS;
+        setSudoExpiresAt(expiresAtMs);
 
         setTimeout(() => {
           setIsModalOpen(false);
@@ -145,9 +127,11 @@ export function SudoGateProvider({ children }: { children: React.ReactNode }) {
             setPendingCallback(null);
           }
         }, 600);
+      } else {
+        setErrorMessage(data.error || data.message || 'Verification failed. Incorrect code or PIN.');
       }
     } catch (err: any) {
-      setErrorMessage(err?.message || 'Verification failed');
+      setErrorMessage(err?.message || 'Unable to reach authentication server.');
     } finally {
       setIsVerifying(false);
     }

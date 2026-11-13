@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
 import { renderHostingProvisionedEmail } from '@/lib/emailEngine';
+import { requireAdmin } from '@/lib/authGuard';
 
 
 const CONFIG_KEY = 'live_integrations';
@@ -45,8 +46,11 @@ async function getLiveIntegrationsConfig(): Promise<LiveIntegrationsConfig> {
   return DEFAULT_CONFIG;
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
+    const adminAuth = await requireAdmin(req);
+    if (!adminAuth.ok) return adminAuth.response;
+
     const config = await getLiveIntegrationsConfig();
 
     return NextResponse.json({
@@ -68,6 +72,9 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
+    const adminAuth = await requireAdmin(req);
+    if (!adminAuth.ok) return adminAuth.response;
+
     const body = await req.json().catch(() => ({}));
     const { action } = body;
 

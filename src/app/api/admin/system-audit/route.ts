@@ -4,6 +4,7 @@ import { generateTotpToken, verifyTotpCode } from '@/lib/totpEngine';
 import { encryptEnvValue, decryptEnvValue, validateShellCommand } from '@/lib/projectEngine';
 import { validateDnsRecord } from '@/lib/dnsEngine';
 import { getActiveWafRules, getSecurityLockdown } from '@/lib/wafEngine';
+import { requireAdmin } from '@/lib/authGuard';
 
 
 export interface AuditCheckResult {
@@ -17,6 +18,9 @@ export interface AuditCheckResult {
 }
 
 export async function GET(req: NextRequest) {
+  const adminAuth = await requireAdmin(req);
+  if (!adminAuth.ok) return adminAuth.response;
+
   const startTime = Date.now();
   const checks: AuditCheckResult[] = [];
 

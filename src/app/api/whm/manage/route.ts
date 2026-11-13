@@ -3,9 +3,13 @@ import { whmClient, WhmPackageParams } from '@/lib/whmClient';
 import { checkRateLimit } from '@/lib/edgeRateLimit';
 import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
 import { executeZeroTouchProvisioning } from '@/lib/zeroTouchProvisioner';
+import { requireAdmin } from '@/lib/authGuard';
 
 
 export async function POST(request: Request) {
+  const adminAuth = await requireAdmin(request);
+  if (!adminAuth.ok) return adminAuth.response;
+
   // Rate limit admin API
   const rateLimit = checkRateLimit(request, 30, 60 * 1000);
   if (!rateLimit.allowed) {

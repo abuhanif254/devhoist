@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServiceSupabase } from '@/lib/supabase';
+import { requireServiceAccess } from '@/lib/authGuard';
 
 export interface EmailAccountRecord {
   id: string;
@@ -101,8 +102,11 @@ function buildDeliverabilityHealth(domain: string, allVerified = true): EmailDel
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const serviceId = searchParams.get('serviceId') || 'srv-default';
+    const serviceId = searchParams.get('serviceId') || '';
     const domain = searchParams.get('domain') || 'app.devhost.cloud';
+
+    const access = await requireServiceAccess(req, serviceId, 'services:read');
+    if (!access.ok) return access.response;
 
     const supabaseAdmin = getServiceSupabase();
     if (supabaseAdmin) {
@@ -157,7 +161,6 @@ export async function POST(req: NextRequest) {
     const {
       action,
       serviceId,
-      userId,
       domain = 'app.devhost.cloud',
       mailboxId,
       localPart,
@@ -193,6 +196,10 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+
+    const access = await requireServiceAccess(req, serviceId, 'services:write');
+    if (!access.ok) return access.response;
+    const userId = access.user.id;
 
     const supabaseAdmin = getServiceSupabase();
     const now = new Date().toISOString();

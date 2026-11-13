@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { checkRateLimit } from '@/lib/edgeRateLimit';
 import { getServiceSupabase, isSupabaseConfigured } from '@/lib/supabase';
+import { requireUser, isSafeExternalHttpUrl } from '@/lib/authGuard';
 
 export async function POST(request: Request) {
   const rateLimit = checkRateLimit(request, 20, 60 * 1000);
@@ -11,6 +12,9 @@ export async function POST(request: Request) {
     );
   }
 
+  const auth = await requireUser(request);
+  if (!auth.ok) return auth.response;
+
   try {
     const body = await request.json().catch(() => ({}));
     const {
@@ -18,13 +22,33 @@ export async function POST(request: Request) {
       currency = 'BDT',
       method = 'bkash',
       items = [],
-      customerEmail = 'developer@devhost.net',
-      customerName = 'Cloud Developer',
+      customerEmail,
+      customerName,
       domain = '',
       planId = '',
     } = body;
 
-    const numericAmount = Math.max(10, Number(amount) || 200);
+    const rawAmount = Number(amount);
+    if (!Number.isFinite(rawAmount) || rawAmount < 10 || rawAmount > 10000000) {
+      return NextResponse.json(
+        { error: 'Invalid Amount', message: 'Payment amount must be a valid number between 10 and 10,000,000 BDT.' },
+        { status: 400 }
+      );
+    }
+
+    const numericAmount = Math.round(rawAmount * 100) / 100;
+    const resolvedUserId =
+      auth.role === 'admin' && typeof body.userId === 'string' && body.userId.trim()
+        ? body.userId.trim()
+        : auth.user.id;
+    const resolvedEmail =
+      auth.role === 'admin' && typeof customerEmail === 'string' && customerEmail.trim()
+        ? customerEmail.trim()
+        : auth.profile.email;
+    const resolvedName =
+      typeof customerName === 'string' && customerName.trim()
+        ? customerName.trim()
+        : auth.profile.full_name;
     const invoiceNumber = `INV-${new Date().getFullYear()}-${Math.floor(100000 + Math.random() * 900000)}`;
 
     // 1. Try to record invoice in Supabase if configured
@@ -36,8 +60,8 @@ export async function POST(request: Request) {
           .from('invoices')
           .insert({
             invoice_number: invoiceNumber,
-            user_id: body.userId || '00000000-0000-0000-0000-000000000000',
-            items: items.length > 0 ? items : [{ description: `Hosting Provisioning (${domain || 'Cloud VPS'})`, cycle: 'Monthly', amount: numericAmount }],
+            user_id: resolvedUserId,
+            items: Array.isArray(items) && items.length > 0 ? items : [{ description: `Hosting Provisioning (${domain || 'Cloud VPS'})`, cycle: 'Monthly', amount: numericAmount }],
             subtotal_bdt: numericAmount,
             discount_bdt: 0,
             total_bdt: numericAmount,
@@ -65,7 +89,8 @@ export async function POST(request: Request) {
     const bkashKey = process.env.BKASH_APP_KEY || '';
     const stripeKey = process.env.STRIPE_SECRET_KEY || '';
 
-    const origin = request.headers.get('origin') || 'https://devhoist.pages.dev';
+    const rawOrigin = request.headers.get('origin') || '';
+    const origin = isSafeExternalHttpUrl(rawOrigin) ? rawOrigin : 'https://devhoist.pages.dev';
 
     // A. UddoktaPay Live Gateway Adapter (Supports bKash, Nagad, Rocket, Upay)
     if (uddoktaKey && !uddoktaKey.includes('your-uddoktapay-key')) {
@@ -77,8 +102,8 @@ export async function POST(request: Request) {
             'RT-UDDOKTAPAY-API-KEY': uddoktaKey,
           },
           body: JSON.stringify({
-            full_name: customerName,
-            email: customerEmail,
+            full_name: resolvedName,
+            email: resolvedEmail,
             amount: String(numericAmount),
             metadata: {
               invoice_number: invoiceNumber,

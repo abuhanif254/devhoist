@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
+import { requireAdmin, verifySudoToken } from '@/lib/authGuard';
 
 
 async function logNodeAudit(
@@ -28,8 +29,11 @@ async function logNodeAudit(
 /**
  * GET: Fetch WHM Server Nodes & Customer CRM Data with Quotas
  */
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
+    const adminAuth = await requireAdmin(req);
+    if (!adminAuth.ok) return adminAuth.response;
+
     if (!isSupabaseConfigured()) {
       return NextResponse.json({
         success: true,
@@ -120,13 +124,20 @@ export async function GET() {
  */
 export async function POST(req: NextRequest) {
   try {
+    const adminAuth = await requireAdmin(req);
+    if (!adminAuth.ok) return adminAuth.response;
+
+    const sudoValid = await verifySudoToken(req, adminAuth.user.id);
     const body = await req.json();
-    const { action, nodeData, sudoVerified } = body;
+    const { action, nodeData } = body;
     const ip = req.headers.get('cf-connecting-ip') || req.headers.get('x-forwarded-for') || '127.0.0.1';
 
     if (action === 'save_node') {
-      if (!sudoVerified) {
-        return NextResponse.json({ success: false, error: 'Admin Sudo elevation required to modify server cluster nodes.' }, { status: 403 });
+      if (!sudoValid) {
+        return NextResponse.json(
+          { success: false, requireSudo: true, error: 'Admin Sudo elevation required to modify server cluster nodes.' },
+          { status: 403 }
+        );
       }
 
       const {
@@ -196,12 +207,19 @@ export async function POST(req: NextRequest) {
  */
 export async function PUT(req: NextRequest) {
   try {
+    const adminAuth = await requireAdmin(req);
+    if (!adminAuth.ok) return adminAuth.response;
+
+    const sudoValid = await verifySudoToken(req, adminAuth.user.id);
     const body = await req.json();
-    const { action, sudoVerified } = body;
+    const { action } = body;
     const ip = req.headers.get('cf-connecting-ip') || req.headers.get('x-forwarded-for') || '127.0.0.1';
 
-    if (!sudoVerified) {
-      return NextResponse.json({ success: false, error: 'Admin Sudo elevation required for CRM God-Mode overrides.' }, { status: 403 });
+    if (!sudoValid) {
+      return NextResponse.json(
+        { success: false, requireSudo: true, error: 'Admin Sudo elevation required for CRM God-Mode overrides.' },
+        { status: 403 }
+      );
     }
 
     // 1. Custom Quota Override

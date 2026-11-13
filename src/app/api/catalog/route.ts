@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabase, getServiceSupabase, isSupabaseConfigured } from '@/lib/supabase';
 import { validatePricingPlanChange } from '@/lib/profitEngine';
+import { requireAdmin } from '@/lib/authGuard';
 
 
 // Default Production Fallback & Seeding Datasets
@@ -391,6 +392,9 @@ export async function GET() {
  */
 export async function PUT(req: NextRequest) {
   try {
+    const adminAuth = await requireAdmin(req);
+    if (!adminAuth.ok) return adminAuth.response;
+
     const body = await req.json();
     const { entityType, data } = body as {
       entityType: 'plan' | 'tld' | 'promo' | 'setting';

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
 import { EXACT_DOCS_ARTICLES } from '@/config/docsData';
 import { COMPLETE_FAQ_LIST } from '@/config/faqData';
+import { requireAdmin, verifySudoToken } from '@/lib/authGuard';
 
 
 async function logDocsAudit(
@@ -216,7 +217,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { action, article_id, vote, articleData, faqData, seoRouteData, sudoVerified } = body;
+    const { action, article_id, vote, articleData, faqData, seoRouteData } = body;
     const ip = req.headers.get('cf-connecting-ip') || req.headers.get('x-forwarded-for') || '127.0.0.1';
 
     // 1. Live Helpfulness Voting
@@ -261,12 +262,20 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true });
     }
 
+    // All remaining docs/FAQ/SEO mutations require verified Admin session + cryptographic Sudo token
+    const adminAuth = await requireAdmin(req);
+    if (!adminAuth.ok) return adminAuth.response;
+
+    const sudoValid = await verifySudoToken(req, adminAuth.user.id);
+    if (!sudoValid) {
+      return NextResponse.json(
+        { success: false, requireSudo: true, error: 'Admin Sudo elevation required to modify docs, FAQs, or SEO routes.' },
+        { status: 403 }
+      );
+    }
+
     // 3. Save / Upsert Article (Admin Sudo Protected)
     if (action === 'save_article') {
-      if (!sudoVerified) {
-        return NextResponse.json({ success: false, error: 'Admin Sudo elevation required to edit docs articles.' }, { status: 403 });
-      }
-
       if (!articleData || !articleData.slug || !articleData.title_en) {
         return NextResponse.json({ success: false, error: 'articleData with slug and title_en is required' }, { status: 400 });
       }
@@ -304,10 +313,6 @@ export async function POST(req: NextRequest) {
 
     // 4. Save / Upsert FAQ (Admin Sudo Protected)
     if (action === 'save_faq') {
-      if (!sudoVerified) {
-        return NextResponse.json({ success: false, error: 'Admin Sudo elevation required to edit FAQs.' }, { status: 403 });
-      }
-
       if (!faqData || !faqData.question_en || !faqData.answer_en) {
         return NextResponse.json({ success: false, error: 'faqData with question_en and answer_en is required' }, { status: 400 });
       }
@@ -337,10 +342,6 @@ export async function POST(req: NextRequest) {
 
     // 5. Save / Upsert Dynamic SEO Route (Admin Sudo Protected)
     if (action === 'save_seo_route') {
-      if (!sudoVerified) {
-        return NextResponse.json({ success: false, error: 'Admin Sudo elevation required to edit SEO routes.' }, { status: 403 });
-      }
-
       if (!seoRouteData || !seoRouteData.route_path || !seoRouteData.meta_title) {
         return NextResponse.json({ success: false, error: 'seoRouteData with route_path and meta_title is required' }, { status: 400 });
       }
@@ -386,6 +387,17 @@ export async function POST(req: NextRequest) {
  */
 export async function DELETE(req: NextRequest) {
   try {
+    const adminAuth = await requireAdmin(req);
+    if (!adminAuth.ok) return adminAuth.response;
+
+    const sudoValid = await verifySudoToken(req, adminAuth.user.id);
+    if (!sudoValid) {
+      return NextResponse.json(
+        { success: false, requireSudo: true, error: 'Admin Sudo elevation required to delete documentation or SEO entries.' },
+        { status: 403 }
+      );
+    }
+
     const { searchParams } = new URL(req.url);
     const type = searchParams.get('type');
     const id = searchParams.get('id');

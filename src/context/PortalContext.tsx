@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { supabase, isSupabaseConfigured, syncAuthCookie } from '@/lib/supabase';
 import { HOSTING_PACKAGES } from '@/config/hostingData';
 import { TLD_PRICING_LIST } from '@/config/whmcs';
@@ -877,6 +877,7 @@ const STORAGE_KEY = 'devhost-portal-state-v9';
 export function PortalProvider({ children }: { children: React.ReactNode }) {
   const [isClientLoaded, setIsClientLoaded] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
+  const lastSyncedTokenRef = useRef<string | null>(null);
 
   const [activeRole, setActiveRole] = useState<UserRole>('client');
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
@@ -1169,6 +1170,14 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       setWalletBalanceBDT(Number(profile?.wallet_balance_bdt || 0));
       syncAuthCookie(session, role);
 
+      if (session.access_token && lastSyncedTokenRef.current !== session.access_token) {
+        lastSyncedTokenRef.current = session.access_token;
+        fetch('/api/auth/sync-session', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        }).catch(() => {});
+      }
+
       const refCode = profile?.referral_code || session.user.email?.split('@')[0] || 'ref';
       setAffiliate((prev) => ({
         ...prev,
@@ -1198,6 +1207,8 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     if (isSupabaseConfigured()) {
       const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
         if (event === 'SIGNED_OUT' || !session) {
+          lastSyncedTokenRef.current = null;
+          fetch('/api/auth/sync-session', { method: 'DELETE' }).catch(() => {});
           setCurrentUser(null);
           setActiveRole('client');
           setServices([]);
@@ -1286,9 +1297,11 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       if (isSupabaseConfigured()) {
         await supabase.auth.signOut({ scope });
       }
+      await fetch('/api/auth/sync-session', { method: 'DELETE' }).catch(() => {});
     } catch (err) {
       console.error('[PortalContext] SignOut error:', err);
     }
+    lastSyncedTokenRef.current = null;
     setCurrentUser(null);
     setActiveRole('client');
     setServices([]);

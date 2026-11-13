@@ -1,9 +1,81 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServiceSupabase, isSupabaseConfigured } from '@/lib/supabase';
+import { timingSafeEqualStr } from '@/lib/authGuard';
 
 
 // Edge-native in-memory sliding window rate limiter (30 req / min)
 const tokenRateLimitMap = new Map<string, { count: number; resetAt: number }>();
+
+async function sha256HexEdge(value: string): Promise<string> {
+  const bytes = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+interface StoredPatToken {
+  id?: string;
+  token_hash?: string;
+  token?: string;
+  scopes?: string[];
+  revoked?: boolean;
+  status?: string;
+  expires_at?: string;
+}
+
+async function resolveVerifiedPatUser(
+  token: string,
+  requiredScope: string
+): Promise<{ ok: true; userId: string } | { ok: false; status: number; error: string }> {
+  if (!isSupabaseConfigured()) {
+    return { ok: false, status: 503, error: 'Authentication store unavailable.' };
+  }
+
+  const db = getServiceSupabase();
+  const tokenHash = await sha256HexEdge(token);
+
+  const { data: profiles, error } = await db
+    .from('customer_developer_profiles')
+    .select('user_id, personal_api_tokens');
+
+  if (error || !profiles) {
+    return { ok: false, status: 401, error: 'Invalid or unrecognized Personal Access Token.' };
+  }
+
+  for (const prof of profiles) {
+    const tokens = Array.isArray(prof.personal_api_tokens)
+      ? (prof.personal_api_tokens as StoredPatToken[])
+      : [];
+
+    for (const entry of tokens) {
+      if (!entry || entry.revoked === true || entry.status === 'revoked') continue;
+      if (entry.expires_at && new Date(entry.expires_at).getTime() <= Date.now()) continue;
+
+      const hashMatches =
+        typeof entry.token_hash === 'string' &&
+        timingSafeEqualStr(entry.token_hash.toLowerCase(), tokenHash);
+      const rawMatches =
+        typeof entry.token === 'string' &&
+        timingSafeEqualStr(entry.token, token);
+
+      if (!hashMatches && !rawMatches) continue;
+
+      const scopes = Array.isArray(entry.scopes) ? entry.scopes : [];
+      if (scopes.length > 0 && !scopes.includes('*') && !scopes.includes(requiredScope)) {
+        return {
+          ok: false,
+          status: 403,
+          error: `Token missing required scope: '${requiredScope}'.`,
+        };
+      }
+
+      return { ok: true, userId: prof.user_id };
+    }
+  }
+
+  return { ok: false, status: 401, error: 'Invalid, revoked, or expired Personal Access Token.' };
+}
 
 function checkApiRateLimit(tokenKey: string, maxReqs = 30): { allowed: boolean; remaining: number } {
   const now = Date.now();
@@ -65,15 +137,63 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => ({}));
     const action = body.action || 'deploy';
-    const targetDomain = body.domain || 'ecommerce-live.com';
-    const serviceId = body.serviceId || 'srv_production_sg1';
+    const targetDomain = body.domain || '';
+    const serviceId = body.serviceId || '';
+
+    const requiredScope =
+      action === 'dns_record'
+        ? 'dns:write'
+        : action === 'cache_purge'
+        ? 'services:write'
+        : 'git:deploy';
+
+    const patAuth = await resolveVerifiedPatUser(token, requiredScope);
+    if (!patAuth.ok) {
+      return NextResponse.json({ error: patAuth.error }, { status: patAuth.status });
+    }
+
+    const db = getServiceSupabase();
+    if (serviceId) {
+      const { data: srv } = await db
+        .from('hosting_services')
+        .select('id, user_id')
+        .eq('id', serviceId)
+        .maybeSingle();
+      if (!srv || srv.user_id !== patAuth.userId) {
+        return NextResponse.json(
+          { error: 'Forbidden: Token owner does not own requested serviceId.' },
+          { status: 403 }
+        );
+      }
+    } else if (targetDomain) {
+      const cleanHost = String(targetDomain).trim().toLowerCase();
+      const { data: srv } = await db
+        .from('hosting_services')
+        .select('id, user_id')
+        .eq('domain', cleanHost)
+        .eq('user_id', patAuth.userId)
+        .maybeSingle();
+      const { data: dom } = await db
+        .from('domains')
+        .select('id, user_id')
+        .eq('domain_name', cleanHost)
+        .eq('user_id', patAuth.userId)
+        .maybeSingle();
+      if (!srv && !dom) {
+        return NextResponse.json(
+          { error: 'Forbidden: Token owner does not own target domain.' },
+          { status: 403 }
+        );
+      }
+    }
 
     let message = '';
-    let deploymentId = `dep_${Date.now().toString(36)}`;
+    const deploymentId = `dep_${Date.now().toString(36)}`;
+    const resolvedDomain = targetDomain || 'app.devhost.cloud';
 
     switch (action) {
       case 'cache_purge':
-        message = `LiteSpeed Edge Cache & Static Assets successfully purged for ${targetDomain}.`;
+        message = `LiteSpeed Edge Cache & Static Assets successfully purged for ${resolvedDomain}.`;
         break;
 
       case 'dns_record':
@@ -82,7 +202,7 @@ export async function POST(request: NextRequest) {
 
       case 'deploy':
       default:
-        message = `Zero-downtime Git pipeline triggered for ${targetDomain} (branch: ${body.branch || 'main'}). Passenger workers rolling reload scheduled.`;
+        message = `Zero-downtime Git pipeline triggered for ${resolvedDomain} (branch: ${body.branch || 'main'}). Passenger workers rolling reload scheduled.`;
         break;
     }
 
@@ -91,13 +211,12 @@ export async function POST(request: NextRequest) {
     // Log call in developer_api_logs
     if (isSupabaseConfigured()) {
       try {
-        const db = getServiceSupabase();
         await db.from('developer_api_logs').insert({
-          user_id: body.userId || null,
+          user_id: patAuth.userId,
           token_prefix: token.slice(0, 12) + '...',
           endpoint: '/api/v1/deploy',
           method: 'POST',
-          target_domain: targetDomain,
+          target_domain: resolvedDomain,
           status_code: 200,
           ip_address: request.headers.get('cf-connecting-ip') || '127.0.0.1',
           duration_ms: durationMs,
@@ -111,8 +230,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       status: 'success',
       action,
-      domain: targetDomain,
-      serviceId,
+      domain: resolvedDomain,
+      serviceId: serviceId || null,
       deploymentId,
       durationMs,
       message,

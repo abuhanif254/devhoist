@@ -19,6 +19,27 @@ function applySecurityHeaders(response: NextResponse): NextResponse {
   return response;
 }
 
+function isTrustedOrigin(origin: string, host: string): boolean {
+  try {
+    const originUrl = new URL(origin);
+    const originHost = originUrl.host.toLowerCase();
+    const originHostname = originUrl.hostname.toLowerCase();
+    const targetHost = host.toLowerCase();
+
+    if (originHost === targetHost) return true;
+    if (process.env.NODE_ENV !== 'production' && (originHostname === 'localhost' || originHostname === '127.0.0.1')) {
+      return true;
+    }
+
+    const allowedDomains = ['devhoist.pages.dev', 'devhoist.workers.dev', 'devhost.net', 'devhostcloud.com'];
+    return allowedDomains.some(
+      (domain) => originHostname === domain || originHostname.endsWith(`.${domain}`)
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function middleware(request: NextRequest) {
   try {
     const { pathname, searchParams } = request.nextUrl;
@@ -73,22 +94,10 @@ export function middleware(request: NextRequest) {
       const origin = request.headers.get('origin');
       const host = request.headers.get('host');
 
-      if (origin && host) {
-        try {
-          const originUrl = new URL(origin);
-          if (
-            originUrl.host !== host &&
-            !originUrl.host.includes('localhost') &&
-            !originUrl.host.includes('devhoist.pages.dev') &&
-            !originUrl.host.includes('devhost.net')
-          ) {
-            return applySecurityHeaders(
-              NextResponse.json({ error: 'Forbidden', message: 'CSRF Origin mismatch blocked' }, { status: 403 })
-            );
-          }
-        } catch {
-          // Invalid Origin header format - ignore
-        }
+      if (origin && host && !isTrustedOrigin(origin, host)) {
+        return applySecurityHeaders(
+          NextResponse.json({ error: 'Forbidden', message: 'CSRF Origin mismatch blocked' }, { status: 403 })
+        );
       }
     }
 

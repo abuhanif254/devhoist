@@ -348,7 +348,14 @@ const MASTER_EPP_SALT = 'devhost_epp_vault_aes_gcm_2026';
 
 async function getEppVaultKey(): Promise<CryptoKey> {
   const enc = new TextEncoder();
-  const rawSecret = (typeof process !== 'undefined' && process.env?.DEVHOST_EPP_ENCRYPTION_KEY) || 'devhost-super-secret-epp-vault-key-32b!';
+  const configuredSecret =
+    (typeof process !== 'undefined' && process.env?.DEVHOST_EPP_ENCRYPTION_KEY?.trim()) || '';
+
+  if (!configuredSecret && typeof process !== 'undefined' && process.env?.NODE_ENV === 'production') {
+    throw new Error('DEVHOST_EPP_ENCRYPTION_KEY is required in production.');
+  }
+
+  const rawSecret = configuredSecret || 'devhost-super-secret-epp-vault-key-32b!';
   const keyMaterial = await crypto.subtle.importKey(
     'raw',
     enc.encode(rawSecret),
@@ -397,7 +404,10 @@ export async function encryptEppCode(eppCode: string): Promise<string> {
     }
     return btoa(binary);
   } catch (err) {
-    // Fallback reversible token if Web Crypto derivation is blocked in local environment
+    if (typeof process !== 'undefined' && process.env?.NODE_ENV === 'production') {
+      throw err instanceof Error ? err : new Error('AES-256-GCM EPP encryption failed.');
+    }
+    // Fallback reversible token if Web Crypto derivation is blocked in local non-prod environment
     return `ENC_${Buffer.from(eppCode).toString('base64')}`;
   }
 }
@@ -408,6 +418,9 @@ export async function encryptEppCode(eppCode: string): Promise<string> {
 export async function decryptEppCode(encryptedPayload: string): Promise<string> {
   try {
     if (encryptedPayload.startsWith('ENC_')) {
+      if (typeof process !== 'undefined' && process.env?.NODE_ENV === 'production') {
+        throw new Error('Refusing unencrypted ENC_ EPP payload in production.');
+      }
       return Buffer.from(encryptedPayload.replace('ENC_', ''), 'base64').toString('utf-8');
     }
 

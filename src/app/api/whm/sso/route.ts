@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { whmClient } from '@/lib/whmClient';
 import { checkRateLimit } from '@/lib/edgeRateLimit';
+import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
+import { requireUser } from '@/lib/authGuard';
 
 export async function POST(request: Request) {
   // Edge sliding-window rate limit (20 SSO attempts per min)
@@ -12,6 +14,9 @@ export async function POST(request: Request) {
     );
   }
 
+  const auth = await requireUser(request);
+  if (!auth.ok) return auth.response;
+
   try {
     const body = await request.json().catch(() => ({}));
     const { username, service = 'cpaneld' } = body;
@@ -21,6 +26,22 @@ export async function POST(request: Request) {
         { error: 'Bad Request', message: 'cPanel username is required' },
         { status: 400 }
       );
+    }
+
+    if (auth.role !== 'admin' && isSupabaseConfigured()) {
+      const db = getServiceSupabase();
+      const { data: srv } = await db
+        .from('hosting_services')
+        .select('id, user_id')
+        .eq('cpanel_username', username.trim())
+        .maybeSingle();
+
+      if (!srv || srv.user_id !== auth.user.id) {
+        return NextResponse.json(
+          { error: 'Forbidden', message: 'You do not own the requested cPanel hosting account.' },
+          { status: 403 }
+        );
+      }
     }
 
     const ssoService = service === 'webmaild' ? 'webmaild' : 'cpaneld';

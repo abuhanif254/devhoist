@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
 import { updateCmsConfig } from '@/lib/wafEngine';
+import { requireAdmin, verifySudoToken } from '@/lib/authGuard';
+
+const PUBLIC_CMS_KEYS = new Set([
+  'announcement_banner',
+  'hero_cms_content',
+  'currency_settings',
+]);
 
 
 async function logCmsAudit(
@@ -33,6 +40,11 @@ export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const key = searchParams.get('key');
+
+    if (!key || !PUBLIC_CMS_KEYS.has(key)) {
+      const adminAuth = await requireAdmin(req);
+      if (!adminAuth.ok) return adminAuth.response;
+    }
 
     const defaultConfigs: Record<string, any> = {
       currency_settings: {
@@ -120,8 +132,19 @@ export async function GET(req: NextRequest) {
  */
 export async function PUT(req: NextRequest) {
   try {
+    const adminAuth = await requireAdmin(req);
+    if (!adminAuth.ok) return adminAuth.response;
+
+    const sudoValid = await verifySudoToken(req, adminAuth.user.id);
+    if (!sudoValid) {
+      return NextResponse.json(
+        { success: false, requireSudo: true, error: 'Cryptographic 2FA Sudo elevation required to modify platform CMS config.' },
+        { status: 403 }
+      );
+    }
+
     const body = await req.json();
-    const { key, value, sudoVerified } = body;
+    const { key, value } = body;
     const ip = req.headers.get('cf-connecting-ip') || req.headers.get('x-forwarded-for') || '127.0.0.1';
 
     if (!key || value === undefined) {
@@ -136,7 +159,7 @@ export async function PUT(req: NextRequest) {
     await logCmsAudit(
       'CMS_CONFIG_UPDATED',
       `cms_global_config:${key}`,
-      { key, value, sudoVerified },
+      { key, value, adminId: adminAuth.user.id },
       key === 'security_lockdown' ? 'critical' : 'medium',
       ip
     );

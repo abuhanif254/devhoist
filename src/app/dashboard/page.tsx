@@ -322,6 +322,12 @@ export default function CustomerDashboardPage() {
   const [transferDomainInput, setTransferDomainInput] = useState('');
   const [transferEppInput, setTransferEppInput] = useState('');
   const [revealedEpp, setRevealedEpp] = useState(false);
+  const [revealedEppValue, setRevealedEppValue] = useState('');
+  const [isRevealingEpp, setIsRevealingEpp] = useState(false);
+  const [drawerNs1, setDrawerNs1] = useState('ns1.devhost.cloud');
+  const [drawerNs2, setDrawerNs2] = useState('ns2.devhost.cloud');
+  const [isSavingNs, setIsSavingNs] = useState(false);
+  const [nsSaveMessage, setNsSaveMessage] = useState<string | null>(null);
 
   // Child NS State
   const [newChildNsHost, setNewChildNsHost] = useState('');
@@ -1717,10 +1723,19 @@ export default function CustomerDashboardPage() {
                             <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                               dom.status === 'Active'
                                 ? 'bg-emerald-50 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400'
-                                : 'bg-amber-50 dark:bg-amber-950 text-amber-600'
+                                : dom.status === 'Pending' || dom.status === 'Transferring'
+                                ? 'bg-amber-50 dark:bg-amber-950 text-amber-600 dark:text-amber-400'
+                                : 'bg-rose-50 dark:bg-rose-950 text-rose-600'
                             }`}>
-                              {dom.status}
+                              {dom.domain.endsWith('.bd') && dom.status === 'Pending'
+                                ? 'BTCL Manual Pending'
+                                : dom.status}
                             </span>
+                            {dom.registrarProvider && (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-300">
+                                {dom.registrarProvider}
+                              </span>
+                            )}
                           </div>
                           <div className="text-[11px] text-slate-400 mt-1">
                             Expires: {dom.expiryDate} ({dom.daysRemaining} days left) • Nameservers: {dom.nameservers[0]}
@@ -1737,6 +1752,11 @@ export default function CustomerDashboardPage() {
                           type="button"
                           onClick={() => {
                             setSelectedDomainForDrawer(dom);
+                            setDrawerNs1(dom.nameservers[0] || 'ns1.devhost.cloud');
+                            setDrawerNs2(dom.nameservers[1] || 'ns2.devhost.cloud');
+                            setNsSaveMessage(null);
+                            setRevealedEpp(false);
+                            setRevealedEppValue('');
                             setDomainDrawerTab('nameservers');
                           }}
                           className="px-3 py-1.5 rounded-xl bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 font-semibold hover:bg-blue-100 transition-colors cursor-pointer"
@@ -2653,22 +2673,45 @@ export default function CustomerDashboardPage() {
                       <div className="space-y-2">
                         <input
                           type="text"
-                          defaultValue={selectedDomainForDrawer.nameservers[0] || 'ns1.devhost.cloud'}
+                          value={drawerNs1}
+                          onChange={(e) => setDrawerNs1(e.target.value)}
+                          placeholder="ns1.devhost.cloud"
                           className="w-full px-3 py-2 rounded-xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-white/10 text-xs font-mono"
                         />
                         <input
                           type="text"
-                          defaultValue={selectedDomainForDrawer.nameservers[1] || 'ns2.devhost.cloud'}
+                          value={drawerNs2}
+                          onChange={(e) => setDrawerNs2(e.target.value)}
+                          placeholder="ns2.devhost.cloud"
                           className="w-full px-3 py-2 rounded-xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-white/10 text-xs font-mono"
                         />
                       </div>
                       <button
                         type="button"
-                        onClick={() => alert('Nameservers saved! Propagation will complete in 2-4 hours.')}
-                        className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
+                        disabled={isSavingNs}
+                        onClick={async () => {
+                          setIsSavingNs(true);
+                          setNsSaveMessage(null);
+                          const ok = await updateDomainNameservers(selectedDomainForDrawer.id, [
+                            drawerNs1.trim(),
+                            drawerNs2.trim(),
+                          ]);
+                          setIsSavingNs(false);
+                          setNsSaveMessage(
+                            ok
+                              ? 'Nameservers synced to upstream registrar & Cloudflare.'
+                              : 'Nameserver update failed — check registrar configuration or domain status.'
+                          );
+                        }}
+                        className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-semibold cursor-pointer"
                       >
-                        Save Nameservers
+                        {isSavingNs ? 'Syncing to Registrar...' : 'Save Nameservers'}
                       </button>
+                      {nsSaveMessage && (
+                        <p className="text-[11px] font-mono text-slate-600 dark:text-zinc-300 mt-1">
+                          {nsSaveMessage}
+                        </p>
+                      )}
                     </div>
                   </div>
                 )}
@@ -2781,11 +2824,13 @@ export default function CustomerDashboardPage() {
                         onClick={() => {
                           if (selectedDomainForDrawer.registrarLock) {
                             requireSudo(
-                              () => toggleDomainLock(selectedDomainForDrawer.id),
+                              () => {
+                                void toggleDomainLock(selectedDomainForDrawer.id);
+                              },
                               'Unlock Domain Registrar Protection'
                             );
                           } else {
-                            toggleDomainLock(selectedDomainForDrawer.id);
+                            void toggleDomainLock(selectedDomainForDrawer.id);
                           }
                         }}
                         className={`px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer ${
@@ -2803,21 +2848,54 @@ export default function CustomerDashboardPage() {
                         <input
                           type="text"
                           readOnly
-                          value={revealedEpp ? selectedDomainForDrawer.eppCode : '••••••••••••••••'}
+                          value={
+                            revealedEpp
+                              ? revealedEppValue || selectedDomainForDrawer.eppCode
+                              : '••••••••••••••••'
+                          }
                           className="flex-1 px-3 py-2 rounded-xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-white/10 text-xs font-mono"
                         />
                         <button
                           type="button"
+                          disabled={isRevealingEpp}
                           onClick={() => {
                             if (!revealedEpp) {
-                              requireSudo(() => setRevealedEpp(true), 'Reveal Domain EPP / Auth Transfer Code');
+                              requireSudo(async () => {
+                                setIsRevealingEpp(true);
+                                try {
+                                  const res = await fetch('/api/domains/manage', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                      action: 'reveal_epp_code',
+                                      domainId: selectedDomainForDrawer.id,
+                                      domainName: selectedDomainForDrawer.domain,
+                                    }),
+                                  });
+                                  const json = (await res.json().catch(() => ({}))) as {
+                                    success?: boolean;
+                                    eppCode?: string;
+                                    error?: string;
+                                  };
+                                  if (res.ok && json.success && json.eppCode) {
+                                    setRevealedEppValue(json.eppCode);
+                                    setRevealedEpp(true);
+                                  } else {
+                                    alert(json.error || 'Could not retrieve EPP authorization code.');
+                                  }
+                                } catch {
+                                  alert('Failed reaching registrar EPP vault.');
+                                } finally {
+                                  setIsRevealingEpp(false);
+                                }
+                              }, 'Reveal Domain EPP / Auth Transfer Code');
                             } else {
                               setRevealedEpp(false);
                             }
                           }}
-                          className="px-3 py-2 rounded-xl bg-slate-200 dark:bg-zinc-800 text-xs font-semibold cursor-pointer"
+                          className="px-3 py-2 rounded-xl bg-slate-200 dark:bg-zinc-800 text-xs font-semibold cursor-pointer disabled:opacity-50"
                         >
-                          {revealedEpp ? 'Hide' : 'Reveal'}
+                          {isRevealingEpp ? 'Decrypting...' : revealedEpp ? 'Hide' : 'Reveal'}
                         </button>
                       </div>
                     </div>

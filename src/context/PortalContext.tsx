@@ -114,6 +114,8 @@ export interface DnsRecord {
   priority?: number;
   comment?: string;
   isSystemManaged?: boolean;
+  cloudflareRecordId?: string;
+  syncStatus?: string;
 }
 
 export interface ChildNameserver {
@@ -136,13 +138,17 @@ export interface DomainItem {
   domain: string;
   expiryDate: string;
   daysRemaining: number;
-  status: 'Active' | 'Expiring Soon' | 'Grace Period';
+  status: 'Active' | 'Expiring Soon' | 'Grace Period' | 'Pending' | 'Transferring';
   registrarLock: boolean;
   whoisPrivacy: boolean;
   autoRenew: boolean;
   nameservers: string[];
   eppCode: string;
   dnsRecords: DnsRecord[];
+  registrarProvider?: string;
+  registrarOrderId?: string;
+  cloudflareZoneId?: string;
+  cloudflareZoneStatus?: string;
 }
 
 export interface DomainTransferRequest {
@@ -479,23 +485,23 @@ interface PortalContextType {
 
   // Domains & DNS
   domains: DomainItem[];
-  toggleDomainLock: (domainId: string) => void;
-  toggleDomainWhoisPrivacy: (domainId: string) => void;
+  toggleDomainLock: (domainId: string) => Promise<boolean>;
+  toggleDomainWhoisPrivacy: (domainId: string) => Promise<boolean>;
   toggleDomainAutoRenew: (domainId: string) => void;
   bulkToggleAutoRenew: (domainIds: string[], enable: boolean) => void;
-  bulkUpdateNameservers: (domainIds: string[], nameservers: string[]) => void;
-  updateDomainNameservers: (domainId: string, nameservers: string[]) => void;
-  addDnsRecord: (domainId: string, record: Omit<DnsRecord, 'id'>) => void;
-  deleteDnsRecord: (domainId: string, recordId: string) => void;
-  applyDnsPreset: (domainId: string, preset: 'google' | 'zoho' | 'github_vercel') => void;
+  bulkUpdateNameservers: (domainIds: string[], nameservers: string[]) => Promise<boolean>;
+  updateDomainNameservers: (domainId: string, nameservers: string[]) => Promise<boolean>;
+  addDnsRecord: (domainId: string, record: Omit<DnsRecord, 'id'>) => Promise<boolean>;
+  deleteDnsRecord: (domainId: string, recordId: string) => Promise<boolean>;
+  applyDnsPreset: (domainId: string, preset: 'google' | 'zoho' | 'github_vercel') => Promise<boolean>;
 
   // Child Nameservers & Redirects
   childNameservers: ChildNameserver[];
-  createChildNameserver: (domainId: string, hostname: string, ipAddress: string) => void;
-  deleteChildNameserver: (id: string) => void;
+  createChildNameserver: (domainId: string, hostname: string, ipAddress: string) => Promise<boolean>;
+  deleteChildNameserver: (id: string) => Promise<boolean>;
   domainRedirects: DomainRedirect[];
-  createDomainRedirect: (domainId: string, sourcePath: string, targetUrl: string, type: '301' | '302') => void;
-  deleteDomainRedirect: (id: string) => void;
+  createDomainRedirect: (domainId: string, sourcePath: string, targetUrl: string, type: '301' | '302') => Promise<boolean>;
+  deleteDomainRedirect: (id: string) => Promise<boolean>;
 
   // Domain Transfer-In
   domainTransfers: DomainTransferRequest[];
@@ -1844,16 +1850,82 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   // DOMAIN MANAGEMENT
   // ---------------------------------------------------------------------------
 
-  const toggleDomainLock = (domainId: string) => {
-    setDomains((prev) =>
-      prev.map((d) => (d.id === domainId ? { ...d, registrarLock: !d.registrarLock } : d))
-    );
+  const pushDomainNotification = (title: string, desc: string) => {
+    setNotifications((prev) => [
+      {
+        id: `notif_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        title,
+        desc,
+        time: 'Just now',
+        type: 'domain',
+        read: false,
+      },
+      ...prev,
+    ]);
   };
 
-  const toggleDomainWhoisPrivacy = (domainId: string) => {
-    setDomains((prev) =>
-      prev.map((d) => (d.id === domainId ? { ...d, whoisPrivacy: !d.whoisPrivacy } : d))
-    );
+  const toggleDomainLock = async (domainId: string): Promise<boolean> => {
+    const target = domains.find((d) => d.id === domainId);
+    if (!target) return false;
+    const nextLockState = !target.registrarLock;
+
+    try {
+      const res = await fetch('/api/domains/manage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'toggle_registrar_lock',
+          domainId,
+          domainName: target.domain,
+          lockState: nextLockState,
+        }),
+      });
+      const json = (await res.json().catch(() => ({}))) as { success?: boolean; error?: string; message?: string };
+      if (!res.ok || !json.success) {
+        pushDomainNotification('Registrar Lock Update Failed', json.error || 'Unable to update registrar lock.');
+        return false;
+      }
+      setDomains((prev) =>
+        prev.map((d) => (d.id === domainId ? { ...d, registrarLock: nextLockState } : d))
+      );
+      pushDomainNotification('Registrar Lock Updated', json.message || `${target.domain} lock updated.`);
+      return true;
+    } catch {
+      pushDomainNotification('Registrar Lock Failed', 'Network error contacting registrar API.');
+      return false;
+    }
+  };
+
+  const toggleDomainWhoisPrivacy = async (domainId: string): Promise<boolean> => {
+    const target = domains.find((d) => d.id === domainId);
+    if (!target) return false;
+    const nextPrivacyState = !target.whoisPrivacy;
+
+    try {
+      const res = await fetch('/api/domains/manage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'toggle_whois_privacy',
+          domainId,
+          domainName: target.domain,
+          whoisState: nextPrivacyState,
+        }),
+      });
+      const json = (await res.json().catch(() => ({}))) as { success?: boolean; error?: string; message?: string };
+      if (!res.ok || !json.success) {
+        pushDomainNotification('WHOIS Privacy Update Failed', json.error || 'Unable to update WHOIS privacy.');
+        return false;
+      }
+      setDomains((prev) =>
+        prev.map((d) => (d.id === domainId ? { ...d, whoisPrivacy: nextPrivacyState } : d))
+      );
+      pushDomainNotification('WHOIS Privacy Shield Updated', json.message || `${target.domain} WHOIS privacy updated.`);
+      return true;
+    } catch {
+      pushDomainNotification('WHOIS Update Failed', 'Network error contacting registrar API.');
+      return false;
+    }
   };
 
   const toggleDomainAutoRenew = (domainId: string) => {
@@ -1868,39 +1940,131 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     );
   };
 
-  const bulkUpdateNameservers = (domainIds: string[], nameservers: string[]) => {
-    setDomains((prev) =>
-      prev.map((d) => (domainIds.includes(d.id) ? { ...d, nameservers } : d))
-    );
+  const updateDomainNameservers = async (domainId: string, nameservers: string[]): Promise<boolean> => {
+    const target = domains.find((d) => d.id === domainId);
+    const cleanNs = nameservers.map((n) => n.trim().toLowerCase()).filter(Boolean);
+    if (!target || cleanNs.length < 2) return false;
+
+    try {
+      const res = await fetch('/api/domains/manage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'update_nameservers',
+          domainId,
+          domainName: target.domain,
+          nameservers: cleanNs,
+        }),
+      });
+      const json = (await res.json().catch(() => ({}))) as { success?: boolean; error?: string; message?: string };
+      if (!res.ok || !json.success) {
+        pushDomainNotification('Nameserver Update Failed', json.error || 'Registrar rejected nameserver update.');
+        return false;
+      }
+      setDomains((prev) =>
+        prev.map((d) => (d.id === domainId ? { ...d, nameservers: cleanNs } : d))
+      );
+      pushDomainNotification('Nameservers Saved', json.message || `Nameservers updated for ${target.domain}.`);
+      return true;
+    } catch {
+      pushDomainNotification('Nameserver Update Failed', 'Network error contacting registrar API.');
+      return false;
+    }
   };
 
-  const updateDomainNameservers = (domainId: string, nameservers: string[]) => {
-    setDomains((prev) =>
-      prev.map((d) => (d.id === domainId ? { ...d, nameservers } : d))
-    );
+  const bulkUpdateNameservers = async (domainIds: string[], nameservers: string[]): Promise<boolean> => {
+    const results = await Promise.all(domainIds.map((id) => updateDomainNameservers(id, nameservers)));
+    return results.every(Boolean);
   };
 
-  const addDnsRecord = (domainId: string, record: Omit<DnsRecord, 'id'>) => {
-    const newRecord: DnsRecord = {
-      ...record,
-      id: `dns_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-    };
-    setDomains((prev) =>
-      prev.map((d) => (d.id === domainId ? { ...d, dnsRecords: [...d.dnsRecords, newRecord] } : d))
-    );
+  const addDnsRecord = async (domainId: string, record: Omit<DnsRecord, 'id'>): Promise<boolean> => {
+    const target = domains.find((d) => d.id === domainId);
+    try {
+      const res = await fetch('/api/domains/dns', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'add_record',
+          domainId,
+          domainName: target?.domain,
+          record,
+        }),
+      });
+      const json = (await res.json().catch(() => ({}))) as {
+        success?: boolean;
+        error?: string;
+        recordId?: string;
+        cloudflareRecordId?: string;
+      };
+      if (!res.ok || !json.success) {
+        pushDomainNotification('DNS Record Failed', json.error || 'Could not push record to Cloudflare Edge.');
+        return false;
+      }
+      const newRecord: DnsRecord = {
+        ...record,
+        id: json.recordId || `dns_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        cloudflareRecordId: json.cloudflareRecordId,
+        syncStatus: json.cloudflareRecordId ? 'synced' : 'pending',
+      };
+      setDomains((prev) =>
+        prev.map((d) => (d.id === domainId ? { ...d, dnsRecords: [...d.dnsRecords, newRecord] } : d))
+      );
+      return true;
+    } catch {
+      pushDomainNotification('DNS Sync Error', 'Failed communicating with DNS Edge API.');
+      return false;
+    }
   };
 
-  const deleteDnsRecord = (domainId: string, recordId: string) => {
-    setDomains((prev) =>
-      prev.map((d) =>
-        d.id === domainId ? { ...d, dnsRecords: d.dnsRecords.filter((r) => r.id !== recordId) } : d
-      )
-    );
+  const deleteDnsRecord = async (domainId: string, recordId: string): Promise<boolean> => {
+    try {
+      const res = await fetch(
+        `/api/domains/dns?recordId=${encodeURIComponent(recordId)}&domainId=${encodeURIComponent(domainId)}`,
+        { method: 'DELETE' }
+      );
+      const json = (await res.json().catch(() => ({}))) as { success?: boolean; error?: string };
+      if (!res.ok || !json.success) {
+        pushDomainNotification('DNS Delete Failed', json.error || 'Could not remove DNS record.');
+        return false;
+      }
+      setDomains((prev) =>
+        prev.map((d) =>
+          d.id === domainId ? { ...d, dnsRecords: d.dnsRecords.filter((r) => r.id !== recordId) } : d
+        )
+      );
+      return true;
+    } catch {
+      pushDomainNotification('DNS Delete Error', 'Failed communicating with DNS Edge API.');
+      return false;
+    }
   };
 
-  const applyDnsPreset = (domainId: string, preset: 'google' | 'zoho' | 'github_vercel') => {
+  const applyDnsPreset = async (domainId: string, preset: 'google' | 'zoho' | 'github_vercel'): Promise<boolean> => {
     const currentDomain = domains.find((d) => d.id === domainId);
-    if (!currentDomain) return;
+    if (!currentDomain) return false;
+
+    if (preset === 'google' || preset === 'zoho') {
+      try {
+        const res = await fetch('/api/domains/dns', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'apply_preset',
+            domainId,
+            domainName: currentDomain.domain,
+            presetType: preset,
+          }),
+        });
+        if (!res.ok) {
+          const json = (await res.json().catch(() => ({}))) as { error?: string };
+          pushDomainNotification('DNS Preset Failed', json.error || 'Unable to sync preset records.');
+          return false;
+        }
+      } catch {
+        pushDomainNotification('DNS Preset Error', 'Network error pushing DNS preset.');
+        return false;
+      }
+    }
 
     let presetRecords: DnsRecord[] = [];
     if (preset === 'google') {
@@ -1917,89 +2081,197 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         { id: `z_3_${Date.now()}`, type: 'TXT', name: '@', content: 'v=spf1 include:zoho.com ~all', ttl: 3600, proxied: false },
       ];
     } else if (preset === 'github_vercel') {
-      presetRecords = [
-        { id: `gv_1_${Date.now()}`, type: 'A', name: '@', content: '76.76.21.21', ttl: 300, proxied: false },
-        { id: `gv_2_${Date.now()}`, type: 'CNAME', name: 'www', content: 'cname.vercel-dns.com', ttl: 300, proxied: false },
-      ];
+      const okA = await addDnsRecord(domainId, { type: 'A', name: '@', content: '76.76.21.21', ttl: 300, proxied: false });
+      const okC = await addDnsRecord(domainId, { type: 'CNAME', name: 'www', content: 'cname.vercel-dns.com', ttl: 300, proxied: false });
+      return okA && okC;
     }
 
     setDomains((prev) =>
       prev.map((d) => (d.id === domainId ? { ...d, dnsRecords: [...d.dnsRecords, ...presetRecords] } : d))
     );
+    return true;
   };
 
-  const createChildNameserver = (domainId: string, hostname: string, ipAddress: string) => {
-    const newCns: ChildNameserver = {
-      id: `cns_${Date.now()}`,
-      domainId,
-      hostname,
-      ipAddress,
-    };
-    setChildNameservers((prev) => [...prev, newCns]);
+  const createChildNameserver = async (domainId: string, hostname: string, ipAddress: string): Promise<boolean> => {
+    const target = domains.find((d) => d.id === domainId);
+    try {
+      const res = await fetch('/api/domains/manage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'add_child_nameserver',
+          domainId,
+          domainName: target?.domain,
+          childHostname: hostname,
+          childIpv4: ipAddress,
+        }),
+      });
+      const json = (await res.json().catch(() => ({}))) as { success?: boolean; id?: string; error?: string };
+      if (!res.ok || !json.success) {
+        pushDomainNotification('Child NS Failed', json.error || 'Registrar refused child nameserver glue.');
+        return false;
+      }
+      const newCns: ChildNameserver = {
+        id: json.id || `cns_${Date.now()}`,
+        domainId,
+        hostname,
+        ipAddress,
+      };
+      setChildNameservers((prev) => [...prev, newCns]);
+      return true;
+    } catch {
+      pushDomainNotification('Child NS Error', 'Failed communicating with registrar API.');
+      return false;
+    }
   };
 
-  const deleteChildNameserver = (id: string) => {
-    setChildNameservers((prev) => prev.filter((c) => c.id !== id));
+  const deleteChildNameserver = async (id: string): Promise<boolean> => {
+    const target = childNameservers.find((c) => c.id === id);
+    const parentDomain = domains.find((d) => d.id === target?.domainId);
+    try {
+      const res = await fetch('/api/domains/manage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'delete_child_nameserver',
+          domainId: target?.domainId,
+          domainName: parentDomain?.domain,
+          childId: id,
+          childHostname: target?.hostname,
+          childIpv4: target?.ipAddress,
+        }),
+      });
+      const json = (await res.json().catch(() => ({}))) as { success?: boolean; error?: string };
+      if (!res.ok || !json.success) {
+        pushDomainNotification('Child NS Removal Failed', json.error || 'Registrar refused removal.');
+        return false;
+      }
+      setChildNameservers((prev) => prev.filter((c) => c.id !== id));
+      return true;
+    } catch {
+      return false;
+    }
   };
 
-  const createDomainRedirect = (domainId: string, sourcePath: string, targetUrl: string, type: '301' | '302') => {
-    const newRed: DomainRedirect = {
-      id: `red_${Date.now()}`,
-      domainId,
-      sourcePath,
-      targetUrl,
-      type,
-    };
-    setDomainRedirects((prev) => [...prev, newRed]);
+  const createDomainRedirect = async (domainId: string, sourcePath: string, targetUrl: string, type: '301' | '302'): Promise<boolean> => {
+    const target = domains.find((d) => d.id === domainId);
+    try {
+      const res = await fetch('/api/domains/manage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'add_url_forward',
+          domainId,
+          domainName: target?.domain,
+          forwardSource: sourcePath,
+          forwardTarget: targetUrl,
+          forwardType: Number(type),
+        }),
+      });
+      const json = (await res.json().catch(() => ({}))) as { success?: boolean; id?: string; error?: string };
+      if (!res.ok || !json.success) {
+        pushDomainNotification('URL Redirect Failed', json.error || 'Could not create Cloudflare edge redirect.');
+        return false;
+      }
+      const newRed: DomainRedirect = {
+        id: json.id || `red_${Date.now()}`,
+        domainId,
+        sourcePath,
+        targetUrl,
+        type,
+      };
+      setDomainRedirects((prev) => [...prev, newRed]);
+      return true;
+    } catch {
+      return false;
+    }
   };
 
-  const deleteDomainRedirect = (id: string) => {
-    setDomainRedirects((prev) => prev.filter((r) => r.id !== id));
+  const deleteDomainRedirect = async (id: string): Promise<boolean> => {
+    const target = domainRedirects.find((r) => r.id === id);
+    const parentDomain = domains.find((d) => d.id === target?.domainId);
+    try {
+      const res = await fetch('/api/domains/manage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'delete_url_forward',
+          domainId: target?.domainId,
+          domainName: parentDomain?.domain,
+          forwardId: id,
+        }),
+      });
+      const json = (await res.json().catch(() => ({}))) as { success?: boolean; error?: string };
+      if (!res.ok || !json.success) {
+        pushDomainNotification('Redirect Removal Failed', json.error || 'Unable to remove Cloudflare redirect rule.');
+        return false;
+      }
+      setDomainRedirects((prev) => prev.filter((r) => r.id !== id));
+      return true;
+    } catch {
+      return false;
+    }
   };
 
   const initiateDomainTransfer = async (domain: string, eppCode: string): Promise<boolean> => {
-    await new Promise((res) => setTimeout(res, 1200));
-    const newTransfer: DomainTransferRequest = {
-      id: `tr_${Date.now()}`,
-      domain,
-      eppCode,
-      currentStep: 1, // EPP Verified
-      status: 'Processing',
-      requestDate: new Date().toISOString().split('T')[0],
-    };
-    setDomainTransfers((prev) => [newTransfer, ...prev]);
+    try {
+      const res = await fetch('/api/domains/manage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'initiate_transfer',
+          domainName: domain,
+          eppCode,
+        }),
+      });
+      const json = (await res.json().catch(() => ({}))) as {
+        success?: boolean;
+        transferId?: string;
+        currentStep?: number;
+        message?: string;
+        error?: string;
+      };
+      if (!res.ok || !json.success) {
+        pushDomainNotification('Domain Transfer Failed', json.error || 'Registrar rejected transfer request.');
+        return false;
+      }
 
-    // Also add to domains list as pending
-    setDomains((prev) => [
-      ...prev,
-      {
-        id: `dom_${Date.now()}`,
+      const newTransfer: DomainTransferRequest = {
+        id: json.transferId || `tr_${Date.now()}`,
         domain,
-        expiryDate: 'Pending Transfer (+1 Yr)',
-        daysRemaining: 365,
-        status: 'Active',
-        registrarLock: true,
-        whoisPrivacy: true,
-        autoRenew: true,
-        nameservers: ['ns1.devhost.cloud', 'ns2.devhost.cloud'],
         eppCode,
-        dnsRecords: [{ id: `dns_init_${Date.now()}`, type: 'A', name: '@', content: '103.145.22.40', ttl: 300, proxied: true }],
-      },
-    ]);
+        currentStep: (json.currentStep === 2 ? 2 : 1) as 1 | 2 | 3,
+        status: 'Processing',
+        requestDate: new Date().toISOString().split('T')[0],
+      };
+      setDomainTransfers((prev) => [newTransfer, ...prev]);
 
-    setNotifications((prev) => [
-      {
-        id: `notif_${Date.now()}`,
-        title: 'Domain Transfer In Initiated',
-        desc: `Transfer for ${domain} started with verified EPP code. 1-year free extension pending registry ack.`,
-        time: 'Just now',
-        type: 'domain',
-        read: false,
-      },
-      ...prev,
-    ]);
+      setDomains((prev) => [
+        ...prev,
+        {
+          id: `dom_${Date.now()}`,
+          domain,
+          expiryDate: 'Pending Transfer (+1 Yr)',
+          daysRemaining: 365,
+          status: 'Transferring',
+          registrarLock: true,
+          whoisPrivacy: true,
+          autoRenew: true,
+          nameservers: ['ns1.devhost.cloud', 'ns2.devhost.cloud'],
+          eppCode,
+          dnsRecords: [{ id: `dns_init_${Date.now()}`, type: 'A', name: '@', content: '103.145.22.40', ttl: 300, proxied: true }],
+        },
+      ]);
 
-    return true;
+      pushDomainNotification(
+        'Domain Transfer In Initiated',
+        json.message || `Transfer for ${domain} submitted to upstream registrar.`
+      );
+      return true;
+    } catch {
+      pushDomainNotification('Domain Transfer Error', 'Network error submitting transfer request.');
+      return false;
+    }
   };
 
   // ---------------------------------------------------------------------------

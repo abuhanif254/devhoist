@@ -26,8 +26,12 @@ export interface AddonDomainItem {
   hostname: string;
   document_root: string;
   runtime_engine: string;
-  ssl_status: 'active_tls13' | 'provisioning' | 'expired';
+  ssl_status: 'active_tls13' | 'provisioning' | 'pending_validation' | 'expired' | 'failed';
   force_https: boolean;
+  cloudflare_hostname_id?: string | null;
+  ssl_dcv_method?: string | null;
+  dcv_record_name?: string | null;
+  dcv_record_value?: string | null;
   created_at?: string;
 }
 
@@ -60,6 +64,7 @@ export default function HostingAddonManager({
   const [forceHttps, setForceHttps] = useState(true);
   const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [verifyingId, setVerifyingId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   // Fetch live domains and quota
@@ -139,6 +144,26 @@ export default function HostingAddonManager({
       setFormError(err.message);
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleVerifySsl = async (id: string) => {
+    setVerifyingId(id);
+    try {
+      const res = await fetch('/api/hosting/domains', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, serviceId }),
+      });
+      const json = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
+      setToast(json.message || json.error || 'SSL status checked.');
+      setTimeout(() => setToast(null), 4000);
+      await fetchDomains();
+    } catch {
+      setToast('Failed contacting Cloudflare Edge SSL verifier.');
+      setTimeout(() => setToast(null), 3500);
+    } finally {
+      setVerifyingId(null);
     }
   };
 
@@ -375,13 +400,48 @@ export default function HostingAddonManager({
                   <div className="text-[11px] text-slate-400 mt-1">
                     DocRoot: {dom.document_root} • Runtime: {dom.runtime_engine}
                   </div>
+                  {dom.dcv_record_name && dom.dcv_record_value && dom.ssl_status !== 'active_tls13' && (
+                    <div className="mt-2 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-[10px] text-amber-800 dark:text-amber-300 space-y-1">
+                      <div className="font-bold">Cloudflare DCV Validation TXT Record Required:</div>
+                      <div>Host: <code className="select-all">{dom.dcv_record_name}</code></div>
+                      <div>Value: <code className="select-all">{dom.dcv_record_value}</code></div>
+                    </div>
+                  )}
                 </div>
 
-                <div className="flex items-center gap-3">
-                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 text-[11px] font-semibold border border-emerald-500/20">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold border ${
+                      dom.ssl_status === 'active_tls13'
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-500/20'
+                        : dom.ssl_status === 'failed' || dom.ssl_status === 'expired'
+                        ? 'bg-rose-50 text-rose-700 border-rose-500/20'
+                        : 'bg-amber-50 text-amber-700 border-amber-500/20'
+                    }`}
+                  >
                     <Shield className="w-3 h-3" />
-                    <span>AutoSSL TLS 1.3 Active</span>
+                    <span>
+                      {dom.ssl_status === 'active_tls13'
+                        ? 'AutoSSL TLS 1.3 Active'
+                        : dom.ssl_status === 'pending_validation'
+                        ? 'Pending DCV Verification'
+                        : dom.ssl_status === 'provisioning'
+                        ? 'Provisioning Edge SSL'
+                        : 'SSL Verification Needed'}
+                    </span>
                   </span>
+
+                  {dom.ssl_status !== 'active_tls13' && (
+                    <button
+                      type="button"
+                      disabled={verifyingId === dom.id}
+                      onClick={() => handleVerifySsl(dom.id)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-[11px] font-semibold cursor-pointer"
+                    >
+                      <RefreshCw className={`w-3 h-3 ${verifyingId === dom.id ? 'animate-spin' : ''}`} />
+                      <span>{verifyingId === dom.id ? 'Checking...' : 'Verify SSL'}</span>
+                    </button>
+                  )}
 
                   <button
                     type="button"

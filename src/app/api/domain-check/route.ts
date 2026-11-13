@@ -3,6 +3,7 @@ import { EXACT_10_TLD_DATA } from '@/config/domainData';
 import { convertBdtToUsd, CurrencyCode } from '@/config/constants';
 import { buildDomainOrderUrl } from '@/lib/whmcsRouter';
 import { checkRateLimit } from '@/lib/edgeRateLimit';
+import { checkDomainsAvailability, isBdManualTld } from '@/lib/registrarClient';
 
 // Common reserved/high-profile domains for local cache safeguard
 const RESERVED_NAMES = new Set([
@@ -42,7 +43,7 @@ export async function GET(request: Request) {
   }
 
   // 2. Strict sanitization and validation
-  let cleaned = rawQuery.toLowerCase().trim()
+  const cleaned = rawQuery.toLowerCase().trim()
     .replace(/^https?:\/\//i, '')
     .replace(/^www\./i, '')
     .replace(/\/.*$/, '')
@@ -51,10 +52,32 @@ export async function GET(request: Request) {
 
   let baseLabel = cleaned;
   let targetTld = '';
-  const dotIndex = cleaned.lastIndexOf('.');
-  if (dotIndex > 0) {
-    baseLabel = cleaned.substring(0, dotIndex);
-    targetTld = cleaned.substring(dotIndex);
+  const extraMultiLevelSuffixes = [
+    '.com.bd',
+    '.net.bd',
+    '.org.bd',
+    '.edu.bd',
+    '.ac.bd',
+    '.gov.bd',
+    '.info.bd',
+    '.co.uk',
+    '.org.uk',
+    '.com.au',
+    '.bd',
+  ];
+  const knownTldsByLength = Array.from(
+    new Set([...EXACT_10_TLD_DATA.map((item) => item.tld.toLowerCase()), ...extraMultiLevelSuffixes])
+  ).sort((a, b) => b.length - a.length);
+  const matchedSuffix = knownTldsByLength.find((tld) => cleaned.endsWith(tld) && cleaned.length > tld.length);
+  if (matchedSuffix) {
+    baseLabel = cleaned.slice(0, -matchedSuffix.length);
+    targetTld = matchedSuffix;
+  } else {
+    const dotIndex = cleaned.lastIndexOf('.');
+    if (dotIndex > 0) {
+      baseLabel = cleaned.substring(0, dotIndex);
+      targetTld = cleaned.substring(dotIndex);
+    }
   }
 
   // Enforce domain label RFC constraints (1-63 chars, alphanumeric + hyphens, cannot start/end with hyphen)
@@ -65,15 +88,49 @@ export async function GET(request: Request) {
     );
   }
 
-  // 3. DNS-over-HTTPS (DoH) verification across all 10 TLDs in parallel
+  // 3. Query wholesale Registrar availability first (excluding manual .bd registry TLDs)
+  const tldsToEvaluate =
+    targetTld && !EXACT_10_TLD_DATA.some((t) => t.tld.toLowerCase() === targetTld)
+      ? [
+          {
+            tld: targetTld,
+            category: 'Business' as const,
+            registerBDT: isBdManualTld(`${baseLabel}${targetTld}`) ? 1500 : 1850,
+            renewalBDT: isBdManualTld(`${baseLabel}${targetTld}`) ? 1500 : 1950,
+            transferBDT: 1500,
+            badge: isBdManualTld(`${baseLabel}${targetTld}`) ? 'BTCL Registry' : 'Direct Match',
+          },
+          ...EXACT_10_TLD_DATA,
+        ]
+      : EXACT_10_TLD_DATA;
+
+  const candidateDomains = tldsToEvaluate.map((tldInfo) => `${baseLabel}${tldInfo.tld}`);
+  const wholesaleCandidates = candidateDomains.filter((d) => !isBdManualTld(d));
+  const registrarLookup = await checkDomainsAvailability(wholesaleCandidates);
+
+  // 4. Verify each TLD via Registrar result or DNS-over-HTTPS (never fake availability on error)
   const checks = await Promise.all(
-    EXACT_10_TLD_DATA.map(async (tldInfo) => {
+    tldsToEvaluate.map(async (tldInfo) => {
       const fullDomain = `${baseLabel}${tldInfo.tld}`;
+      const manualBd = isBdManualTld(fullDomain);
       let isAvailable = false;
+      let isPremium = false;
+      let premiumPriceUSD: number | undefined;
+      let source: string = 'doh';
+      let verificationStatus: 'verified' | 'unverified' | 'manual_registry' = manualBd
+        ? 'manual_registry'
+        : 'verified';
 
       // Check reserved names first
       if (RESERVED_NAMES.has(baseLabel) || (baseLabel.length <= 2 && tldInfo.tld === '.com')) {
         isAvailable = false;
+        source = 'reserved';
+      } else if (!manualBd && registrarLookup?.results?.[fullDomain]) {
+        const regResult = registrarLookup.results[fullDomain];
+        isAvailable = regResult.available;
+        isPremium = Boolean(regResult.isPremium);
+        premiumPriceUSD = regResult.premiumPriceUSD;
+        source = regResult.source;
       } else {
         try {
           const dohUrl = `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(fullDomain)}&type=NS`;
@@ -94,10 +151,14 @@ export async function GET(request: Request) {
               isAvailable = true;
             }
           } else {
-            isAvailable = baseLabel.length > 4;
+            isAvailable = false;
+            verificationStatus = 'unverified';
+            source = 'doh_error';
           }
         } catch {
-          isAvailable = baseLabel.length > 4;
+          isAvailable = false;
+          verificationStatus = 'unverified';
+          source = 'doh_error';
         }
       }
 
@@ -112,6 +173,12 @@ export async function GET(request: Request) {
         category: tldInfo.category,
         badge: tldInfo.badge,
         available: isAvailable,
+        isPremium,
+        premiumPriceUSD,
+        manualProvisioning: manualBd,
+        manualNote: manualBd ? 'BTCL Manual Provisioning' : undefined,
+        verificationStatus,
+        source,
         isPrimaryMatch: targetTld === tldInfo.tld || (!targetTld && tldInfo.tld === '.com'),
         pricing: {
           registerBDT: registerPriceBDT,
@@ -131,6 +198,8 @@ export async function GET(request: Request) {
       query: cleaned,
       baseLabel,
       currency,
+      registrarConfigured: Boolean(registrarLookup?.configured),
+      registrarProvider: registrarLookup?.provider || null,
       results: checks,
       directWhmcsUrl: buildDomainOrderUrl(baseLabel, currency),
     },

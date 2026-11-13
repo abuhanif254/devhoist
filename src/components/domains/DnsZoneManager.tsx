@@ -239,7 +239,7 @@ export default function DnsZoneManager({
     );
 
     try {
-      await fetch('/api/domains/dns', {
+      const res = await fetch('/api/domains/dns', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -248,9 +248,20 @@ export default function DnsZoneManager({
           record: { ...record, proxied: newProxied },
         }),
       });
+      const json = (await res.json().catch(() => ({}))) as { success?: boolean; error?: string };
+      if (!res.ok || !json.success) {
+        setRecords((prev) =>
+          prev.map((r) => (r.id === record.id ? { ...r, proxied: !newProxied } : r))
+        );
+        showToast(json.error || 'Failed syncing Cloudflare proxy state.');
+        return;
+      }
       showToast(`Edge Proxy is now ${newProxied ? 'ACTIVE (Orange Cloud)' : 'BYPASS (DNS Only)'}`);
     } catch {
-      showToast(`Proxy status updated to ${newProxied ? 'Active' : 'DNS Only'}.`);
+      setRecords((prev) =>
+        prev.map((r) => (r.id === record.id ? { ...r, proxied: !newProxied } : r))
+      );
+      showToast('Failed reaching Cloudflare DNS API.');
     }
   };
 
@@ -357,6 +368,34 @@ export default function DnsZoneManager({
     }
   };
 
+  const handleSyncFromCloudflare = async () => {
+    try {
+      const res = await fetch('/api/domains/dns', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'sync_from_cloudflare',
+          domainId,
+          domainName,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { success?: boolean; message?: string; error?: string };
+      if (!res.ok || !data.success) {
+        showToast(data.error || 'Cloudflare reconciliation failed.');
+        return;
+      }
+      const getRes = await fetch(`/api/domains/dns?domainId=${encodeURIComponent(domainId)}`);
+      const getJson = (await getRes.json().catch(() => ({}))) as { success?: boolean; records?: DnsRecord[] };
+      if (getJson.success && Array.isArray(getJson.records)) {
+        setRecords(getJson.records);
+        onRecordsChange?.(getJson.records);
+      }
+      showToast(data.message || 'Cloudflare DNS zone synchronized.');
+    } catch {
+      showToast('Network error syncing Cloudflare zone.');
+    }
+  };
+
   return (
     <div className="space-y-5">
       {/* Toast Notification */}
@@ -407,6 +446,16 @@ export default function DnsZoneManager({
 
         {/* Buttons */}
         <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={handleSyncFromCloudflare}
+            title="Reconcile live DNS records from Cloudflare Anycast Zone"
+            className="px-3 py-1.5 rounded-xl border border-orange-200 dark:border-orange-900 bg-orange-50/70 dark:bg-orange-950/40 hover:bg-orange-100 text-orange-700 dark:text-orange-300 text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+          >
+            <RefreshCw className="w-3.5 h-3.5 text-orange-500" />
+            <span>Sync Edge</span>
+          </button>
+
           <button
             type="button"
             onClick={handleExportBind}
@@ -546,6 +595,17 @@ export default function DnsZoneManager({
                           <span className="mr-2 text-slate-400">Prio {r.priority || 10}:</span>
                         )}
                         <span title={r.content}>{r.content}</span>
+                        {r.syncStatus && (
+                          <span
+                            className={`ml-2 px-1.5 py-0.5 rounded text-[9px] font-mono uppercase ${
+                              r.syncStatus === 'synced'
+                                ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950 dark:text-emerald-400'
+                                : 'bg-slate-100 text-slate-500 dark:bg-zinc-800 dark:text-zinc-400'
+                            }`}
+                          >
+                            {r.syncStatus}
+                          </span>
+                        )}
                       </td>
 
                       {/* Cloudflare Orange Cloud Proxy */}

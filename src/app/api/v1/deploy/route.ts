@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServiceSupabase, isSupabaseConfigured } from '@/lib/supabase';
-import { timingSafeEqualStr } from '@/lib/authGuard';
+import { getServiceSupabase, isSupabaseConfigured, isDevSandboxMode } from '@/lib/supabase';
+import { timingSafeEqualStr, serviceUnavailableResponse } from '@/lib/authGuard';
+import { validateDnsRecord } from '@/lib/dnsEngine';
+import type { DnsRecord } from '@/context/PortalContext';
+import {
+  ensureCloudflareZone,
+  isCloudflareConfigured,
+  purgeCloudflareCache,
+  upsertCloudflareDnsRecord,
+} from '@/lib/cloudflareClient';
 
 
 // Edge-native in-memory sliding window rate limiter (30 req / min)
@@ -189,16 +197,118 @@ export async function POST(request: NextRequest) {
 
     let message = '';
     const deploymentId = `dep_${Date.now().toString(36)}`;
-    const resolvedDomain = targetDomain || 'app.devhost.cloud';
+    const resolvedDomain = String(targetDomain || 'app.devhost.cloud').trim().toLowerCase();
+    let cloudflareZoneId: string | null = null;
+    let cloudflareRecordId: string | null = null;
 
     switch (action) {
-      case 'cache_purge':
-        message = `LiteSpeed Edge Cache & Static Assets successfully purged for ${resolvedDomain}.`;
+      case 'cache_purge': {
+        if (!isCloudflareConfigured() && !isDevSandboxMode()) {
+          return serviceUnavailableResponse('Cloudflare Edge Cache Purge');
+        }
+        const files = Array.isArray(body.files) ? (body.files as string[]) : undefined;
+        const purgeRes = await purgeCloudflareCache({
+          domain: resolvedDomain,
+          files,
+          purgeEverything: !files || files.length === 0,
+        });
+        if (!purgeRes.ok) {
+          return NextResponse.json(
+            { error: `Cloudflare cache purge failed: ${purgeRes.error}` },
+            { status: 502 }
+          );
+        }
+        cloudflareZoneId = purgeRes.zoneId || null;
+        message = files && files.length > 0
+          ? `Purged ${files.length} asset URL(s) on Cloudflare Anycast Edge (${resolvedDomain}).`
+          : `Entire Cloudflare Anycast Edge cache purged for ${resolvedDomain} (Zone ${cloudflareZoneId || 'sandbox'}).`;
         break;
+      }
 
-      case 'dns_record':
-        message = `DNS Record (${body.recordType || 'A'} ${body.recordName || '@'} -> ${body.recordContent || '103.151.102.45'}) successfully synchronized.`;
+      case 'dns_record': {
+        if (!isCloudflareConfigured() && !isDevSandboxMode()) {
+          return serviceUnavailableResponse('Cloudflare Anycast DNS Edge');
+        }
+        const recordType = String(body.recordType || 'A').toUpperCase();
+        const recordName = String(body.recordName || '@').trim();
+        const recordContent = String(body.recordContent || '103.151.102.45').trim();
+        const recordTtl = Number(body.ttl || 3600);
+        const recordPriority =
+          body.priority !== undefined && body.priority !== null ? Number(body.priority) : undefined;
+        const proxied = body.proxied !== undefined ? Boolean(body.proxied) : recordType === 'A' || recordType === 'AAAA' || recordType === 'CNAME';
+
+        const validation = validateDnsRecord({
+          type: recordType as DnsRecord['type'],
+          name: recordName,
+          content: recordContent,
+          ttl: recordTtl,
+          priority: recordPriority,
+        });
+        if (!validation.valid) {
+          return NextResponse.json({ error: validation.error || 'Invalid DNS record payload.' }, { status: 422 });
+        }
+
+        if (isCloudflareConfigured()) {
+          const { data: domRow } = await db
+            .from('domains')
+            .select('id, cloudflare_zone_id')
+            .eq('domain_name', resolvedDomain)
+            .maybeSingle();
+
+          let zoneId = domRow?.cloudflare_zone_id as string | undefined;
+          if (!zoneId) {
+            const zone = await ensureCloudflareZone(resolvedDomain);
+            if (!zone.ok || !zone.zoneId) {
+              return NextResponse.json(
+                { error: zone.error || 'Failed to resolve Cloudflare zone.' },
+                { status: 502 }
+              );
+            }
+            zoneId = zone.zoneId;
+          }
+          cloudflareZoneId = zoneId;
+
+          const cfSync = await upsertCloudflareDnsRecord(
+            zoneId,
+            {
+              type: recordType,
+              name: recordName,
+              content: recordContent,
+              ttl: recordTtl,
+              priority: recordPriority,
+              proxied,
+            },
+            { apexDomain: resolvedDomain }
+          );
+          if (!cfSync.ok) {
+            return NextResponse.json(
+              { error: cfSync.error || 'Cloudflare DNS record upsert failed.' },
+              { status: 502 }
+            );
+          }
+          cloudflareRecordId = cfSync.cloudflareRecordId || null;
+
+          if (domRow?.id) {
+            await db.from('domain_dns_records').insert({
+              domain_id: domRow.id,
+              user_id: patAuth.userId,
+              record_type: recordType,
+              name: recordName,
+              content: recordContent,
+              ttl: recordTtl,
+              priority: recordPriority ?? null,
+              proxied: Boolean(cfSync.proxied),
+              cloudflare_record_id: cloudflareRecordId,
+              cloudflare_zone_id: cloudflareZoneId,
+              sync_status: 'synced',
+              comment: 'Created via Public API v1',
+            });
+          }
+        }
+
+        message = `DNS Record (${recordType} ${recordName} -> ${recordContent}) synchronized across Cloudflare Anycast Edge.`;
         break;
+      }
 
       case 'deploy':
       default:
@@ -233,13 +343,18 @@ export async function POST(request: NextRequest) {
       domain: resolvedDomain,
       serviceId: serviceId || null,
       deploymentId,
+      cloudflareZoneId,
+      cloudflareRecordId,
       durationMs,
       message,
       rateLimitRemaining: rateLimit.remaining,
       timestamp: new Date().toISOString(),
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('[Public API Error]', err);
-    return NextResponse.json({ error: err?.message || 'Internal API Error' }, { status: 500 });
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'Internal API Error' },
+      { status: 500 }
+    );
   }
 }

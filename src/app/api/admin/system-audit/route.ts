@@ -5,6 +5,8 @@ import { encryptEnvValue, decryptEnvValue, validateShellCommand } from '@/lib/pr
 import { validateDnsRecord } from '@/lib/dnsEngine';
 import { getActiveWafRules, getSecurityLockdown } from '@/lib/wafEngine';
 import { requireAdmin } from '@/lib/authGuard';
+import { getCloudflareConfig, verifyCloudflareToken } from '@/lib/cloudflareClient';
+import { getRegistrarHealthStatus } from '@/lib/registrarClient';
 
 
 export interface AuditCheckResult {
@@ -14,7 +16,7 @@ export interface AuditCheckResult {
   status: 'PASSED' | 'WARNING' | 'FAILED';
   latencyMs: number;
   message: string;
-  details?: Record<string, any>;
+  details?: Record<string, unknown>;
 }
 
 export async function GET(req: NextRequest) {
@@ -79,14 +81,14 @@ export async function GET(req: NextRequest) {
         details: { tables: counts },
       });
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
     checks.push({
       id: 'schema_rls_integrity',
       name: 'Supabase Database Schema & RLS Policies',
       category: 'DATABASE',
       status: 'WARNING',
       latencyMs: Date.now() - t1,
-      message: `Schema verification warning: ${err.message}`,
+      message: `Schema verification warning: ${err instanceof Error ? err.message : 'Unknown error'}`,
     });
   }
 
@@ -96,7 +98,7 @@ export async function GET(req: NextRequest) {
   // =========================================================================
   const t2 = Date.now();
   try {
-    let plans: any[] = [];
+    let plans: Array<Record<string, unknown>> = [];
     if (isSupabaseConfigured()) {
       const db = getServiceSupabase();
       const { data } = await db.from('catalog_hosting_plans').select('*');
@@ -143,14 +145,14 @@ export async function GET(req: NextRequest) {
         : 'All plans strictly enforce (Base Server Cost + Owner Profit) invariant before discounts/affiliates.',
       details: { plans: planBreakdowns },
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     checks.push({
       id: 'unit_economics_invariant',
       name: 'Profit-Protected Unit Economics Engine',
       category: 'FINANCE',
       status: 'FAILED',
       latencyMs: Date.now() - t2,
-      message: `Unit economics check failed: ${err.message}`,
+      message: `Unit economics check failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
     });
   }
 
@@ -177,14 +179,14 @@ export async function GET(req: NextRequest) {
         status: 'Active',
       },
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     checks.push({
       id: 'affiliate_anti_fraud',
       name: 'Affiliate 35-Day Holding Period & Anti-Fraud Engine',
       category: 'FINANCE',
       status: 'FAILED',
       latencyMs: Date.now() - t3,
-      message: `Affiliate anti-fraud check failed: ${err.message}`,
+      message: `Affiliate anti-fraud check failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
     });
   }
 
@@ -214,14 +216,14 @@ export async function GET(req: NextRequest) {
         edgeRuntimeCompatible: true,
       },
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     checks.push({
       id: 'totp_sudo_cryptography',
       name: 'RFC 6238 Web Crypto TOTP & Sudo Elevation Gate',
       category: 'SECURITY',
       status: 'FAILED',
       latencyMs: Date.now() - t4,
-      message: `TOTP crypto test failed: ${err.message}`,
+      message: `TOTP crypto test failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
     });
   }
 
@@ -250,14 +252,14 @@ export async function GET(req: NextRequest) {
         roundtripVerified: match,
       },
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     checks.push({
       id: 'aes_256_gcm_vault',
       name: 'Web Crypto AES-256-GCM Encryption Vault at Rest',
       category: 'SECURITY',
       status: 'FAILED',
       latencyMs: Date.now() - t5,
-      message: `AES-GCM encryption self-test failed: ${err.message}`,
+      message: `AES-GCM encryption self-test failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
     });
   }
 
@@ -294,14 +296,14 @@ export async function GET(req: NextRequest) {
         blockedMalformedDns: !invalidDns.valid,
       },
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     checks.push({
       id: 'dns_and_command_firewall',
       name: 'RFC 1035 DNS Validator & Shell Injection Firewall',
       category: 'SYSTEM',
       status: 'FAILED',
       latencyMs: Date.now() - t6,
-      message: `Firewall validation check failed: ${err.message}`,
+      message: `Firewall validation check failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
     });
   }
 
@@ -328,14 +330,14 @@ export async function GET(req: NextRequest) {
         cacheTtlSeconds: 15,
       },
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     checks.push({
       id: 'edge_waf_status',
       name: 'Real-Time Edge WAF & Threat Quarantine Shield',
       category: 'SECURITY',
       status: 'WARNING',
       latencyMs: Date.now() - t7,
-      message: `Edge WAF check warning: ${err.message}`,
+      message: `Edge WAF check warning: ${err instanceof Error ? err.message : 'Unknown error'}`,
     });
   }
 
@@ -367,14 +369,14 @@ export async function GET(req: NextRequest) {
       message: 'All 8 authentication & OAuth hardening requirements verified with PKCE callback, zero admin overwrite, and 2FA step-up gate.',
       details: checksList,
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     checks.push({
       id: 'auth_security_hardening',
       name: 'Authentication & OAuth Security Architecture',
       category: 'SECURITY',
       status: 'WARNING',
       latencyMs: Date.now() - tAuth,
-      message: `Auth security audit notice: ${err.message}`,
+      message: `Auth security audit notice: ${err instanceof Error ? err.message : 'Unknown error'}`,
     });
   }
 
@@ -410,14 +412,82 @@ export async function GET(req: NextRequest) {
         robotsTxtCompliant: true,
       },
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     checks.push({
       id: 'dynamic_seo_sitemap',
       name: 'Dynamic SEO Engine, JSON-LD Schema & XML Sitemap',
       category: 'SEO',
       status: 'FAILED',
       latencyMs: Date.now() - t8,
-      message: `SEO readiness check failed: ${err.message}`,
+      message: `SEO readiness check failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
+    });
+  }
+
+  // =========================================================================
+  // CHECK 9: CLOUDFLARE ANYCAST EDGE API & SAAS PLANE (Phase 4)
+  // =========================================================================
+  const tCf = Date.now();
+  try {
+    const cfCfg = getCloudflareConfig();
+    const cfVerify = await verifyCloudflareToken();
+    checks.push({
+      id: 'cloudflare_edge_api',
+      name: 'Cloudflare Anycast DNS, SaaS Custom Hostnames & WAF API',
+      category: 'SYSTEM',
+      status: !cfCfg.configured ? 'WARNING' : cfVerify.valid ? 'PASSED' : 'FAILED',
+      latencyMs: Date.now() - tCf,
+      message: !cfCfg.configured
+        ? 'Cloudflare API token not configured (CLOUDFLARE_DNS_API_TOKEN missing).'
+        : cfVerify.valid
+        ? `Cloudflare API token verified live (status: ${cfVerify.status || 'active'}).`
+        : cfVerify.error || 'Cloudflare token verification failed.',
+      details: {
+        configured: cfCfg.configured,
+        accountIdConfigured: Boolean(cfCfg.accountId),
+        saasZoneConfigured: cfCfg.saasConfigured,
+        fallbackOrigin: cfCfg.fallbackOrigin || null,
+        tokenStatus: cfVerify.status || null,
+      },
+    });
+  } catch (err: unknown) {
+    checks.push({
+      id: 'cloudflare_edge_api',
+      name: 'Cloudflare Anycast DNS, SaaS Custom Hostnames & WAF API',
+      category: 'SYSTEM',
+      status: 'FAILED',
+      latencyMs: Date.now() - tCf,
+      message: `Cloudflare probe failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
+    });
+  }
+
+  // =========================================================================
+  // CHECK 10: WHOLESALE DOMAIN REGISTRAR EPP GATEWAY (Phase 4)
+  // =========================================================================
+  const tReg = Date.now();
+  try {
+    const regHealth = await getRegistrarHealthStatus();
+    checks.push({
+      id: 'registrar_epp_gateway',
+      name: 'Wholesale Domain Registrar API (ResellerClub / Namecheap)',
+      category: 'SYSTEM',
+      status: !regHealth.configured ? 'WARNING' : regHealth.healthy ? 'PASSED' : 'FAILED',
+      latencyMs: Date.now() - tReg,
+      message: regHealth.message,
+      details: {
+        configured: regHealth.configured,
+        provider: regHealth.provider,
+        sandbox: regHealth.sandbox,
+        healthy: regHealth.healthy,
+      },
+    });
+  } catch (err: unknown) {
+    checks.push({
+      id: 'registrar_epp_gateway',
+      name: 'Wholesale Domain Registrar API (ResellerClub / Namecheap)',
+      category: 'SYSTEM',
+      status: 'FAILED',
+      latencyMs: Date.now() - tReg,
+      message: `Registrar health probe failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
     });
   }
 

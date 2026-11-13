@@ -12,6 +12,14 @@ import { notifyNewPaidOrder, sendTelegramAlert } from '@/lib/adminNotifier';
 import { scanDomainForPhishing, quarantineAbuseDomain } from '@/lib/abuseShieldEngine';
 import { selectOptimalServerNode, checkNodeCapacityThreshold, WhmServerNodeRecord } from '@/lib/nodeBalancer';
 import { provisionMarketplaceStack, resolveStackSlug } from '@/lib/stackProvisioner';
+import { isBdManualTld, registerDomainWithRegistrar } from '@/lib/registrarClient';
+import {
+  createCloudflareCustomHostname,
+  ensureCloudflareZone,
+  isCloudflareConfigured,
+  isCloudflareSaasConfigured,
+  upsertCloudflareDnsRecord,
+} from '@/lib/cloudflareClient';
 
 export interface ZeroTouchProvisionParams {
   invoiceId?: string;
@@ -29,6 +37,8 @@ export interface ZeroTouchProvisionParams {
   billingCycle?: 'monthly' | 'annually';
   freeDomainBundleApplied?: boolean;
   bundledDomainName?: string;
+  registerDomain?: boolean;
+  existingEppCode?: string;
   targetServerNode?: string;
   appStack?: string;
   affiliateCommissionBDT?: number;
@@ -53,6 +63,9 @@ export interface ZeroTouchProvisionResult {
   serviceId?: string;
   domainId?: string;
   deploymentId?: string;
+  cloudflareZoneId?: string;
+  registrarProvider?: string;
+  registrarOrderId?: string;
   stepsCompleted: string[];
   error?: string;
 }
@@ -103,6 +116,10 @@ export async function executeZeroTouchProvisioning(
   let assignedDomainId: string | undefined;
   let ledgerEntryCode: string | undefined;
   let deploymentId: string | undefined;
+  let cloudflareZoneId: string | undefined;
+  let registrarProvider: string | undefined;
+  let registrarOrderId: string | undefined;
+  let resolvedSslStatus = 'active_tls13';
 
   console.log(`[ZeroTouchProvisioner] Starting 5-Step Pipeline for ${cleanDomain} (cPanel: ${cpanelUser})...`);
 
@@ -329,73 +346,191 @@ export async function executeZeroTouchProvisioning(
     stepsCompleted.push(`Step 2: cPanel Container Provisioned on Node ${serverNodeCode} (${serverIp})`);
 
     // =========================================================================
-    // STEP 3 — AUTOMATED DOMAIN REGISTRATION & DNS ZONE AUTO-WIRING
+    // STEP 3 — REAL REGISTRAR PROVISIONING & CLOUDFLARE ANYCAST DNS AUTO-WIRING
     // =========================================================================
-    if (db && cleanDomain) {
+    if (cleanDomain) {
       try {
         const domainExpiry = new Date();
         domainExpiry.setFullYear(domainExpiry.getFullYear() + 1);
 
-        const tld = cleanDomain.includes('.') ? `.${cleanDomain.split('.').pop()}` : '.com';
+        const tld = cleanDomain.includes('.') ? `.${cleanDomain.split('.').slice(1).join('.')}` : '.com';
+        let cfZoneStatus = 'unprovisioned';
+        let cfNameservers: string[] = [];
 
-        const { data: domData } = await db
-          .from('domains')
-          .upsert(
-            {
-              user_id: params.userId || null,
-              domain_name: cleanDomain,
-              tld: tld,
-              status: 'Active',
-              registrar_lock: true,
-              whois_privacy: true,
-              auto_renew: true,
-              nameservers: serverNameservers,
-              expiry_date: domainExpiry.toISOString().split('T')[0],
-              updated_at: new Date().toISOString(),
+        // 3A. Ensure Cloudflare Anycast Zone when CLOUDFLARE_DNS_API_TOKEN is configured
+        if (isCloudflareConfigured()) {
+          const cfZone = await ensureCloudflareZone(cleanDomain);
+          if (cfZone.ok && cfZone.zoneId) {
+            cloudflareZoneId = cfZone.zoneId;
+            cfZoneStatus = cfZone.status || 'pending';
+            cfNameservers = cfZone.nameServers || [];
+            if (cfNameservers.length >= 2) {
+              serverNameservers = cfNameservers;
+            }
+          }
+        }
+
+        // 3B. Register domain via ResellerClub/Namecheap EPP (or queue .bd for manual BTCL)
+        let domainStatus: 'Active' | 'Pending' = 'Active';
+        const shouldRegister = Boolean(params.registerDomain || params.freeDomainBundleApplied);
+        if (shouldRegister) {
+          const regRes = await registerDomainWithRegistrar({
+            domain: cleanDomain,
+            years: 1,
+            nameservers: serverNameservers,
+            protectPrivacy: true,
+            contact: {
+              name: params.customerName,
+              email: params.customerEmail,
             },
-            { onConflict: 'domain_name' }
-          )
-          .select('id')
-          .single();
+          });
 
-        if (domData) {
-          assignedDomainId = domData.id;
+          if (regRes.ok) {
+            registrarProvider = regRes.provider;
+            registrarOrderId = regRes.orderId;
+            domainStatus = regRes.data?.status || (isBdManualTld(cleanDomain) ? 'Pending' : 'Active');
+            if (regRes.data?.nameservers && regRes.data.nameservers.length >= 2) {
+              serverNameservers = regRes.data.nameservers;
+            }
+            if (isBdManualTld(cleanDomain)) {
+              await sendTelegramAlert(
+                `*BTCL .bd Manual Provisioning Required*\nDomain: \`${cleanDomain}\`\nQueue ID: \`${registrarOrderId || 'BTCL'}\`\nOrder Invoice: \`${params.invoiceNumber || 'AUTO'}\``,
+                'order'
+              );
+            }
+          } else {
+            registrarProvider = regRes.provider;
+            domainStatus = isBdManualTld(cleanDomain) ? 'Pending' : 'Pending';
+            console.warn('[ZeroTouchRegistrar Notice]', regRes.message);
+          }
+        }
 
-          // Auto-wire RFC DNS Zone Records
-          const dnsRecords = [
-            { name: '@', record_type: 'A', content: serverIp, ttl: 3600, proxied: true },
-            { name: 'www', record_type: 'CNAME', content: '@', ttl: 3600, proxied: true },
-            { name: 'mail', record_type: 'A', content: serverIp, ttl: 14400, proxied: false },
-            { name: '@', record_type: 'MX', content: `mail.${cleanDomain}`, priority: 10, ttl: 14400, proxied: false },
-            { name: '@', record_type: 'TXT', content: `v=spf1 +a +mx +ip4:${serverIp} ~all`, ttl: 3600, proxied: false },
-            { name: '_dmarc', record_type: 'TXT', content: `v=DMARC1; p=quarantine; rua=mailto:dmarc@${cleanDomain}`, ttl: 3600, proxied: false },
-          ];
-
-          for (const rec of dnsRecords) {
-            await db.from('domain_dns_records').upsert(
+        // 3C. Persist Domain Record & Sync Cloudflare DNS Records
+        if (db) {
+          const { data: domData } = await db
+            .from('domains')
+            .upsert(
               {
-                domain_id: assignedDomainId,
                 user_id: params.userId || null,
-                record_type: rec.record_type,
-                name: rec.name,
-                content: rec.content,
-                priority: rec.priority || null,
-                ttl: rec.ttl,
-                proxied: rec.proxied,
-                is_system_managed: true,
-                comment: 'Auto-provisioned by DevHost Zero-Touch Orchestrator',
+                domain_name: cleanDomain,
+                tld,
+                status: domainStatus,
+                registrar_lock: domainStatus === 'Active',
+                whois_privacy: true,
+                auto_renew: true,
+                nameservers: serverNameservers,
+                registrar_provider: registrarProvider || null,
+                registrar_order_id: registrarOrderId || null,
+                cloudflare_zone_id: cloudflareZoneId || null,
+                cloudflare_zone_status: cfZoneStatus,
+                cloudflare_nameservers: cfNameservers,
+                expiry_date: domainExpiry.toISOString().split('T')[0],
                 updated_at: new Date().toISOString(),
               },
-              { onConflict: 'domain_id,name,record_type,content' }
+              { onConflict: 'domain_name' }
+            )
+            .select('id')
+            .single();
+
+          if (domData) {
+            assignedDomainId = domData.id;
+
+            const dnsRecords = [
+              { name: '@', record_type: 'A', content: serverIp, ttl: 3600, proxied: true },
+              { name: 'www', record_type: 'CNAME', content: '@', ttl: 3600, proxied: true },
+              { name: 'mail', record_type: 'A', content: serverIp, ttl: 14400, proxied: false },
+              { name: '@', record_type: 'MX', content: `mail.${cleanDomain}`, priority: 10, ttl: 14400, proxied: false },
+              { name: '@', record_type: 'TXT', content: `v=spf1 +a +mx +ip4:${serverIp} ~all`, ttl: 3600, proxied: false },
+              { name: '_dmarc', record_type: 'TXT', content: `v=DMARC1; p=quarantine; rua=mailto:dmarc@${cleanDomain}`, ttl: 3600, proxied: false },
+            ];
+
+            for (const rec of dnsRecords) {
+              let cfRecordId: string | null = null;
+              let syncStatus = 'pending';
+              let finalProxied = rec.proxied;
+
+              if (isCloudflareConfigured() && cloudflareZoneId) {
+                const cfSync = await upsertCloudflareDnsRecord(
+                  cloudflareZoneId,
+                  {
+                    type: rec.record_type,
+                    name: rec.name,
+                    content: rec.content,
+                    ttl: rec.ttl,
+                    priority: rec.priority,
+                    proxied: rec.proxied,
+                    comment: 'Auto-provisioned by DevHost Zero-Touch Orchestrator',
+                  },
+                  { apexDomain: cleanDomain }
+                );
+                if (cfSync.ok) {
+                  cfRecordId = cfSync.cloudflareRecordId || null;
+                  syncStatus = 'synced';
+                  finalProxied = Boolean(cfSync.proxied);
+                } else {
+                  syncStatus = 'failed';
+                }
+              }
+
+              await db.from('domain_dns_records').upsert(
+                {
+                  domain_id: assignedDomainId,
+                  user_id: params.userId || null,
+                  record_type: rec.record_type,
+                  name: rec.name,
+                  content: rec.content,
+                  priority: rec.priority || null,
+                  ttl: rec.ttl,
+                  proxied: finalProxied,
+                  cloudflare_record_id: cfRecordId,
+                  cloudflare_zone_id: cloudflareZoneId || null,
+                  sync_status: syncStatus,
+                  is_system_managed: true,
+                  comment: 'Auto-provisioned by DevHost Zero-Touch Orchestrator',
+                  updated_at: new Date().toISOString(),
+                },
+                { onConflict: 'domain_id,name,record_type,content' }
+              );
+            }
+          }
+        }
+
+        // 3D. Register Cloudflare SaaS Custom Hostname (Edge TLS 1.3 + HTTP/3 + DCV)
+        if (isCloudflareSaasConfigured() && db && assignedServiceId) {
+          const cfHost = await createCloudflareCustomHostname(cleanDomain, {
+            dcvMethod: 'txt',
+            customOriginServer: serverIp,
+          });
+          if (cfHost.ok) {
+            resolvedSslStatus = cfHost.sslStatus || 'pending_validation';
+            await db.from('hosting_addon_domains').upsert(
+              {
+                service_id: assignedServiceId,
+                user_id: params.userId || null,
+                domain_type: 'addon_domain',
+                hostname: cleanDomain,
+                document_root: `/home/${cpanelUser}/public_html`,
+                runtime_engine: params.appStack || 'Node.js 22 LTS',
+                ssl_status: resolvedSslStatus,
+                force_https: true,
+                cloudflare_hostname_id: cfHost.hostnameId || null,
+                ssl_dcv_method: cfHost.dcvMethod || 'txt',
+                dcv_record_name: cfHost.dcvRecordName || null,
+                dcv_record_value: cfHost.dcvRecordValue || null,
+                custom_origin_server: serverIp,
+              },
+              { onConflict: 'hostname' }
             );
           }
         }
       } catch (domErr) {
-        console.warn('[ZeroTouch Warning] domain_dns_records auto-wiring:', domErr);
+        console.warn('[ZeroTouch Warning] domain & Cloudflare auto-wiring:', domErr);
       }
     }
 
-    stepsCompleted.push(`Step 3: Domain DNS Zone Auto-Wired (@ -> ${serverIp}, www -> CNAME, mail -> MX/SPF/DMARC)`);
+    stepsCompleted.push(
+      `Step 3: Domain (${registrarProvider || 'linked'}) & Cloudflare DNS Zone Auto-Wired (@ -> ${serverIp}, www -> CNAME, mail -> MX/SPF/DMARC)`
+    );
 
     // =========================================================================
     // STEP 4 — INSTANT AUTOSSL & GIT CI/CD ENVIRONMENT INITIALIZATION
@@ -495,11 +630,14 @@ export async function executeZeroTouchProvisioning(
       serverNode: serverNodeCode,
       serverIp,
       nameservers: serverNameservers,
-      sslStatus: 'active_tls13',
+      sslStatus: resolvedSslStatus,
       ledgerEntryCode,
       serviceId: assignedServiceId,
       domainId: assignedDomainId,
       deploymentId,
+      cloudflareZoneId,
+      registrarProvider,
+      registrarOrderId,
       stepsCompleted,
     };
   } catch (err: unknown) {

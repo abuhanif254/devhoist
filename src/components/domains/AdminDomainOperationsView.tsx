@@ -147,8 +147,18 @@ export default function AdminDomainOperationsView() {
           <button
             type="button"
             onClick={() => {
-              requireSudo(() => {
-                showToast('Global Registry Heartbeat synchronized across LogicBoxes & Namecheap APIs');
+              requireSudo(async () => {
+                try {
+                  const res = await fetch('/api/domains/manage', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'sync_all_registrars' }),
+                  });
+                  const json = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
+                  showToast(json.message || json.error || 'Registrar sync completed.');
+                } catch {
+                  showToast('Failed connecting to registrar & Cloudflare sync endpoint.');
+                }
               }, 'Trigger Global Registry Sync');
             }}
             className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs flex items-center gap-2 cursor-pointer"

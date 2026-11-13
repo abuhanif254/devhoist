@@ -1,6 +1,60 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
+import { dispatchGitCommitDeployment, teardownPullRequestPreview } from '@/lib/gitDeployDispatcher';
+import {
+  getServiceGitConnection,
+  getUserGitHubAccount,
+  resolveServiceWebhookSecret,
+  upsertGitHubPrComment,
+} from '@/lib/githubIntegration';
 import { verifyGitHubSignature } from '@/lib/projectEngine';
+import { logSecurityAudit } from '@/lib/security';
+import { getServiceSupabase, isDevSandboxMode, isSupabaseConfigured } from '@/lib/supabase';
+
+export const dynamic = 'force-dynamic';
+
+interface GitHubWebhookPayload {
+  zen?: string;
+  hook_id?: number;
+  ref?: string;
+  deleted?: boolean;
+  after?: string;
+  action?: string;
+  number?: number;
+  pusher?: { name?: string };
+  repository?: {
+    full_name?: string;
+    clone_url?: string;
+    html_url?: string;
+    default_branch?: string;
+  };
+  head_commit?: {
+    id?: string;
+    message?: string;
+    author?: { name?: string };
+  };
+  pull_request?: {
+    number?: number;
+    title?: string;
+    html_url?: string;
+    user?: { login?: string };
+    head?: {
+      ref?: string;
+      sha?: string;
+      repo?: {
+        full_name?: string;
+        clone_url?: string;
+      } | null;
+    };
+  };
+}
+
+function getClientIp(request: NextRequest): string {
+  const cf = request.headers.get('cf-connecting-ip');
+  if (cf) return cf.trim();
+  const xff = request.headers.get('x-forwarded-for');
+  if (xff) return xff.split(',')[0].trim();
+  return '127.0.0.1';
+}
 
 export async function POST(
   request: NextRequest,
@@ -8,143 +62,364 @@ export async function POST(
 ) {
   try {
     const { serviceId } = await context.params;
-    const signature = request.headers.get('x-hub-signature-256');
-    const rawBody = await request.text();
+    const cleanServiceId = String(serviceId || '').trim();
+    const signature = request.headers.get('x-hub-signature-256') || '';
+    const eventType = (request.headers.get('x-github-event') || 'push').toLowerCase();
+    const deliveryId = request.headers.get('x-github-delivery') || '';
+    const clientIp = getClientIp(request);
 
-    if (!serviceId) {
-      return NextResponse.json({ success: false, error: 'Service ID is missing in webhook route.' }, { status: 400 });
+    if (!cleanServiceId) {
+      return NextResponse.json({ success: false, error: 'Missing serviceId.' }, { status: 400 });
     }
 
-    if (!isSupabaseConfigured()) {
-      if (process.env.NODE_ENV === 'production') {
+    if (!isSupabaseConfigured() && !isDevSandboxMode()) {
+      return NextResponse.json(
+        { error: 'Service Unavailable', message: 'Webhook receiver requires configured backend storage.' },
+        { status: 503 }
+      );
+    }
+
+    const rawBody = await request.text();
+    const webhookSecret = await resolveServiceWebhookSecret(cleanServiceId);
+
+    if (!webhookSecret) {
+      await logSecurityAudit({
+        actionType: 'GITHUB_WEBHOOK_UNCONFIGURED',
+        targetResource: `service:${cleanServiceId}`,
+        ipAddress: clientIp,
+        riskLevel: 'medium',
+        metadata: { eventType, deliveryId },
+      });
+      return NextResponse.json(
+        { success: false, error: 'Webhook secret not configured for this project.' },
+        { status: 401 }
+      );
+    }
+
+    const isSignatureValid =
+      Boolean(signature) && (await verifyGitHubSignature(webhookSecret, rawBody, signature));
+
+    if (!isSignatureValid) {
+      await logSecurityAudit({
+        actionType: 'GITHUB_WEBHOOK_INVALID_SIGNATURE',
+        targetResource: `service:${cleanServiceId}`,
+        ipAddress: clientIp,
+        riskLevel: 'high',
+        metadata: { eventType, deliveryId, hasSignature: Boolean(signature) },
+      });
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Invalid or missing X-Hub-Signature-256 cryptographic HMAC signature.',
+        },
+        { status: 401 }
+      );
+    }
+
+    let payload: GitHubWebhookPayload;
+    try {
+      payload = JSON.parse(rawBody) as GitHubWebhookPayload;
+    } catch {
+      return NextResponse.json({ success: false, error: 'Malformed webhook JSON payload.' }, { status: 400 });
+    }
+
+    if (eventType === 'ping') {
+      return NextResponse.json({
+        success: true,
+        event: 'ping',
+        pong: true,
+        hookId: payload.hook_id || null,
+        zen: payload.zen || 'Keep it logically awesome.',
+      });
+    }
+
+    const conn = await getServiceGitConnection(cleanServiceId);
+    const db = isSupabaseConfigured() ? getServiceSupabase() : null;
+    const legacySettings =
+      !conn && db
+        ? ((
+            await db
+              .from('hosting_project_settings')
+              .select('production_branch, auto_deploy_on_push, git_repo_url')
+              .eq('service_id', cleanServiceId)
+              .maybeSingle()
+          ).data as {
+            production_branch?: string;
+            auto_deploy_on_push?: boolean;
+            git_repo_url?: string;
+          } | null)
+        : null;
+
+    // 1. Handle Push Events
+    if (eventType === 'push') {
+      const ref = String(payload.ref || '');
+      const pushedBranch = ref.replace(/^refs\/heads\//, '') || 'main';
+      const commitSha = String(payload.after || payload.head_commit?.id || '').trim();
+
+      if (payload.deleted === true || /^0+$/.test(commitSha)) {
+        return NextResponse.json({
+          success: true,
+          event: 'push',
+          ignored: true,
+          reason: `Branch deletion event on '${pushedBranch}' ignored.`,
+        });
+      }
+
+      const autoDeployEnabled = conn
+        ? conn.auto_deploy_on_push
+        : legacySettings?.auto_deploy_on_push !== false;
+
+      if (!autoDeployEnabled) {
+        return NextResponse.json({
+          success: true,
+          event: 'push',
+          ignored: true,
+          reason: 'Auto-deploy on push is disabled for this project.',
+        });
+      }
+
+      const targetBranch = conn?.selected_branch || legacySettings?.production_branch || 'main';
+      if (pushedBranch !== targetBranch) {
+        return NextResponse.json({
+          success: true,
+          event: 'push',
+          ignored: true,
+          reason: `Push to branch '${pushedBranch}' ignored; configured production branch is '${targetBranch}'.`,
+        });
+      }
+
+      const repoFullName = String(payload.repository?.full_name || conn?.repo_full_name || '');
+      if (
+        conn?.repo_full_name &&
+        repoFullName &&
+        conn.repo_full_name.toLowerCase() !== repoFullName.toLowerCase()
+      ) {
+        await logSecurityAudit({
+          actionType: 'GITHUB_WEBHOOK_REPO_MISMATCH',
+          targetResource: `service:${cleanServiceId}`,
+          ipAddress: clientIp,
+          riskLevel: 'high',
+          metadata: { boundRepo: conn.repo_full_name, webhookRepo: repoFullName },
+        });
         return NextResponse.json(
-          { success: false, error: 'Database configuration missing in production.' },
-          { status: 503 }
+          { success: false, error: 'Webhook repository does not match project Git binding.' },
+          { status: 403 }
         );
       }
-      return NextResponse.json({ success: true, message: 'Offline mode: Webhook acknowledged.' });
-    }
 
-    const db = getServiceSupabase();
-
-    // 1. Fetch project settings for this service
-    const { data: settings, error: settingsError } = await db
-      .from('hosting_project_settings')
-      .select('*')
-      .eq('service_id', serviceId)
-      .single();
-
-    if (settingsError || !settings) {
-      return NextResponse.json({ success: false, error: 'Project configuration not found for this service.' }, { status: 404 });
-    }
-
-    if (!settings.webhook_secret_token || typeof settings.webhook_secret_token !== 'string') {
-      return NextResponse.json(
-        { success: false, error: 'Webhook secret token not configured for this service.' },
-        { status: 401 }
-      );
-    }
-
-    // 2. Cryptographic HMAC Signature Verification
-    const isValid = await verifyGitHubSignature(settings.webhook_secret_token, rawBody, signature);
-    if (!isValid) {
-      await db.from('security_audit_logs').insert({
-        actor_id: settings.user_id,
-        actor_role: 'system',
-        action_type: 'WEBHOOK_SIGNATURE_INVALID',
-        target_resource: `service:${serviceId}`,
-        ip_address: request.headers.get('x-forwarded-for') || '127.0.0.1',
-        risk_level: 'critical',
-        metadata: { reason: 'HMAC-SHA256 signature mismatch or missing secret' },
+      const result = await dispatchGitCommitDeployment({
+        serviceId: cleanServiceId,
+        environment: 'production',
+        triggerSource: 'github_webhook',
+        repoFullName,
+        cloneUrl: String(payload.repository?.clone_url || conn?.clone_url || legacySettings?.git_repo_url || ''),
+        gitBranch: pushedBranch,
+        commitSha: commitSha || 'HEAD',
+        commitMessage: String(payload.head_commit?.message || `GitHub push to ${pushedBranch}`).slice(0, 500),
+        authorName: String(payload.head_commit?.author?.name || payload.pusher?.name || 'GitHub Webhook'),
       });
 
       return NextResponse.json(
-        { success: false, error: 'Unauthorized: Invalid X-Hub-Signature-256 signature.' },
-        { status: 401 }
+        {
+          success: result.ok,
+          event: 'push',
+          branch: pushedBranch,
+          deploymentId: result.deploymentId,
+          buildJobId: result.buildJobId || null,
+          releaseId: result.releaseId,
+          status: result.deployStatus,
+          liveUrl: result.liveUrl,
+          edgeRouterUrl: result.edgeRouterUrl || null,
+          code: result.code,
+          error: result.error,
+        },
+        { status: result.status }
       );
     }
 
-    // 3. Parse GitHub Payload
-    const payload = JSON.parse(rawBody);
-    const ref = payload.ref || '';
-    const targetBranch = `refs/heads/${settings.production_branch || 'main'}`;
+    // 2. Handle Pull Request Preview Events
+    if (eventType === 'pull_request') {
+      const action = String(payload.action || '').toLowerCase();
+      const prNumber = Number(payload.number || payload.pull_request?.number || 0);
+      const baseRepoFullName = String(payload.repository?.full_name || conn?.repo_full_name || '');
+      const headRepoFullName = String(
+        payload.pull_request?.head?.repo?.full_name || baseRepoFullName
+      );
+      const branchName = String(payload.pull_request?.head?.ref || `pr-${prNumber}`);
+      const commitSha = String(payload.pull_request?.head?.sha || 'HEAD');
+      const prTitle = String(payload.pull_request?.title || `Pull Request #${prNumber}`);
+      const authorName = String(payload.pull_request?.user?.login || 'github-pr');
+      const isForkPr = Boolean(
+        headRepoFullName &&
+          baseRepoFullName &&
+          headRepoFullName.toLowerCase() !== baseRepoFullName.toLowerCase()
+      );
 
-    if (ref !== targetBranch) {
+      if (conn && !conn.pr_previews_enabled) {
+        return NextResponse.json({
+          success: true,
+          event: 'pull_request',
+          ignored: true,
+          reason: 'Ephemeral PR previews are disabled for this project.',
+        });
+      }
+
+      if (
+        conn?.repo_full_name &&
+        baseRepoFullName &&
+        conn.repo_full_name.toLowerCase() !== baseRepoFullName.toLowerCase()
+      ) {
+        await logSecurityAudit({
+          actionType: 'GITHUB_WEBHOOK_REPO_MISMATCH',
+          targetResource: `service:${cleanServiceId}`,
+          ipAddress: clientIp,
+          riskLevel: 'high',
+          metadata: { boundRepo: conn.repo_full_name, webhookRepo: baseRepoFullName },
+        });
+        return NextResponse.json(
+          { success: false, error: 'Webhook repository does not match project Git binding.' },
+          { status: 403 }
+        );
+      }
+
+      if (!Number.isFinite(prNumber) || prNumber <= 0) {
+        return NextResponse.json(
+          { success: false, error: 'Pull request payload is missing a valid PR number.' },
+          { status: 400 }
+        );
+      }
+
+      if (action === 'opened' || action === 'synchronize' || action === 'reopened') {
+        const result = await dispatchGitCommitDeployment({
+          serviceId: cleanServiceId,
+          environment: 'preview',
+          triggerSource: 'github_webhook',
+          repoFullName: headRepoFullName || baseRepoFullName,
+          cloneUrl: String(
+            payload.pull_request?.head?.repo?.clone_url ||
+              payload.repository?.clone_url ||
+              conn?.clone_url ||
+              ''
+          ),
+          gitBranch: branchName,
+          commitSha,
+          commitMessage: prTitle,
+          authorName,
+          prNumber,
+          prTitle,
+          isForkPr,
+          prUrl: payload.pull_request?.html_url,
+        });
+
+        let prCommentId: number | null = null;
+        if (conn?.user_id && baseRepoFullName) {
+          const account = await getUserGitHubAccount(conn.user_id).catch(() => null);
+          if (account?.accessToken) {
+            const previewLink = result.previewUrl || result.liveUrl;
+            const statusLine = result.ok
+              ? result.deployStatus === 'live'
+                ? 'Ready Live'
+                : 'Building'
+              : `Failed (${result.error || 'Build Error'})`;
+
+            const bodyMd = [
+              `### DevHost Ephemeral Preview (${statusLine})`,
+              '',
+              `- **Branch**: \`${branchName}\` (${commitSha.slice(0, 7)})`,
+              `- **Preview URL**: ${previewLink ? `[Open Preview](${previewLink})` : 'Provisioning...'}`,
+              isForkPr
+                ? '- **Security Isolation**: Fork PR — production `.env` secrets withheld.'
+                : '- **Environment**: Isolated PR preview runtime',
+            ].join('\n');
+
+            const commentRes = await upsertGitHubPrComment({
+              accessToken: account.accessToken,
+              repoFullName: baseRepoFullName,
+              prNumber,
+              markerTag: `devhost-preview-${cleanServiceId}-pr-${prNumber}`,
+              bodyMarkdown: bodyMd,
+            }).catch(() => null);
+
+            if (commentRes?.commentId) {
+              prCommentId = commentRes.commentId;
+              if (db) {
+                await db
+                  .from('hosting_preview_environments')
+                  .update({ pr_comment_id: prCommentId })
+                  .eq('service_id', cleanServiceId)
+                  .eq('pr_number', prNumber);
+              }
+            }
+          }
+        }
+
+        return NextResponse.json(
+          {
+            success: result.ok,
+            event: 'pull_request',
+            action,
+            prNumber,
+            isForkPr,
+            deploymentId: result.deploymentId,
+            buildJobId: result.buildJobId || null,
+            releaseId: result.releaseId,
+            status: result.deployStatus,
+            previewUrl: result.previewUrl || result.liveUrl,
+            previewHostname: result.previewHostname,
+            prCommentId,
+            code: result.code,
+            error: result.error,
+          },
+          { status: result.status }
+        );
+      }
+
+      if (action === 'closed') {
+        const teardown = await teardownPullRequestPreview({
+          serviceId: cleanServiceId,
+          prNumber,
+          branchName,
+        });
+
+        if (conn?.user_id && baseRepoFullName) {
+          const account = await getUserGitHubAccount(conn.user_id).catch(() => null);
+          if (account?.accessToken) {
+            await upsertGitHubPrComment({
+              accessToken: account.accessToken,
+              repoFullName: baseRepoFullName,
+              prNumber,
+              markerTag: `devhost-preview-${cleanServiceId}-pr-${prNumber}`,
+              bodyMarkdown: `### DevHost Ephemeral Preview Destroyed\n\nPR #${prNumber} (\`${branchName}\`) was closed and its isolated preview container / R2 manifest were torn down.`,
+            }).catch(() => null);
+          }
+        }
+
+        return NextResponse.json({
+          success: true,
+          event: 'pull_request',
+          action: 'closed',
+          prNumber,
+          destroyed: true,
+          r2ManifestDeleted: teardown.r2ManifestDeleted,
+          agentDestroyed: teardown.agentDestroyed,
+        });
+      }
+
       return NextResponse.json({
         success: true,
-        message: `Push ignored: Event was for ${ref}, but production branch is set to ${settings.production_branch}.`,
+        event: 'pull_request',
+        ignored: true,
+        action,
       });
-    }
-
-    if (!settings.auto_deploy_on_push) {
-      return NextResponse.json({
-        success: true,
-        message: 'Auto deploy on push is disabled in project settings. Build skipped.',
-      });
-    }
-
-    const headCommit = payload.head_commit || {};
-    const commitSha = (headCommit.id || 'head').substring(0, 7);
-    const commitMessage = headCommit.message || 'Auto-deploy triggered by GitHub push';
-    const authorName = headCommit.author?.name || 'GitHub Webhook';
-
-    const buildLogs = `[${new Date().toISOString()}] Automated CI/CD Webhook Triggered from GitHub Push
-[00:00:01] HMAC-SHA256 signature verified with ${settings.webhook_secret_token.substring(0, 10)}••••
-[00:00:02] Fetching commit ${commitSha}: "${commitMessage}"
-[00:00:03] Running install command: ${settings.install_command || 'npm ci'}
-[00:00:05] Running build command: ${settings.build_command || 'npm run build'}
-[00:00:07] Standalone bundle generated in ${settings.output_directory || '.next/standalone'}
-[00:00:08] Phusion Passenger container reloaded gracefully. Zero downtime!`;
-
-    // 4. Record new production deployment
-    await db
-      .from('project_deployments')
-      .update({ is_current_production: false, status: 'superseded' })
-      .eq('service_id', serviceId)
-      .eq('is_current_production', true);
-
-    const { data: newDep, error: depError } = await db
-      .from('project_deployments')
-      .insert({
-        service_id: serviceId,
-        user_id: settings.user_id,
-        commit_sha: commitSha,
-        commit_message: commitMessage,
-        branch: settings.production_branch || 'main',
-        author_name: authorName,
-        trigger_source: 'github_webhook',
-        status: 'live_production',
-        is_current_production: true,
-        artifact_size_mb: 14.8,
-        inodes_count: 1920,
-        duration_seconds: 3.2,
-        build_logs: buildLogs,
-      })
-      .select('id')
-      .single();
-
-    if (depError) {
-      return NextResponse.json({ success: false, error: depError.message }, { status: 500 });
-    }
-
-    // Prune older releases
-    const { data: allReleases } = await db
-      .from('project_deployments')
-      .select('id')
-      .eq('service_id', serviceId)
-      .order('created_at', { ascending: false });
-
-    if (allReleases && allReleases.length > (settings.retained_rollback_releases || 3)) {
-      const idsToDelete = allReleases.slice(settings.retained_rollback_releases || 3).map((r: any) => r.id);
-      await db.from('project_deployments').delete().in('id', idsToDelete);
     }
 
     return NextResponse.json({
       success: true,
-      message: `Production release for ${commitSha} deployed successfully via GitHub Webhook!`,
-      deploymentId: newDep?.id,
+      ignored: true,
+      event: eventType,
     });
-  } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'GitHub webhook processing failed';
+    return NextResponse.json({ success: false, error: msg }, { status: 500 });
   }
 }

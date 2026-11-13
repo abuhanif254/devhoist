@@ -88,6 +88,10 @@ export interface BuildQueueJobPayload {
   gitRepoUrl?: string;
   gitBranch?: string;
   commitSha?: string;
+  gitAccessToken?: string;
+  environment?: 'production' | 'preview';
+  prNumber?: number;
+  previewHostname?: string;
   installCommand?: string;
   buildCommand?: string;
   startupFile?: string;

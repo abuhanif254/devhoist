@@ -375,6 +375,10 @@ export async function dispatchBuildAndDeploy(
     gitRepoUrl?: string;
     gitBranch?: string;
     commitSha?: string;
+    gitAccessToken?: string;
+    environment?: 'production' | 'preview';
+    prNumber?: number;
+    previewHostname?: string;
     installCommand?: string;
     buildCommand?: string;
     startupFile?: string;
@@ -397,19 +401,27 @@ export async function dispatchBuildAndDeploy(
     body: payload,
     agentUrl: overrideAgentUrl,
     timeoutMs: 20000,
-    sandboxMock: () => ({
-      containerId: `dh_${payload.cpanelUser}_${payload.jobId.slice(0, 6)}`,
-      upstreamPort: 3200,
-      upstreamUrl: 'http://127.0.0.1:3200',
-      liveUrl: `https://${payload.domain}`,
-      healthStatus: 'healthy',
-      durationSeconds: 3,
-      buildLogs: [
-        `[${new Date().toISOString()}] Build job ${payload.jobId} started (${payload.stackSlug})`,
-        `[00:01.10] Synced release ${payload.commitSha || 'HEAD'} and installed dependencies`,
-        `[00:02.40] Compiled ${payload.buildCommand || 'production bundle'} and verified HTTP 200 OK`,
-      ].join('\n'),
-    }),
+    sandboxMock: () => {
+      const isPreview = payload.environment === 'preview' && Number.isFinite(payload.prNumber);
+      const effectiveHost = payload.previewHostname || payload.domain;
+      return {
+        containerId: isPreview
+          ? `dh_${payload.cpanelUser}_${payload.jobId.slice(0, 6)}_pr_${payload.prNumber}`
+          : `dh_${payload.cpanelUser}_${payload.jobId.slice(0, 6)}`,
+        upstreamPort: 3200,
+        upstreamUrl: 'http://127.0.0.1:3200',
+        liveUrl: `https://${effectiveHost}`,
+        healthStatus: 'healthy',
+        durationSeconds: 3,
+        buildLogs: [
+          `[${new Date().toISOString()}] Build job ${payload.jobId} started (${payload.stackSlug}${
+            isPreview ? ` PR #${payload.prNumber}` : ''
+          })`,
+          `[00:01.10] Synced release ${payload.commitSha || 'HEAD'} and installed dependencies`,
+          `[00:02.40] Compiled ${payload.buildCommand || 'production bundle'} and verified HTTP 200 OK`,
+        ].join('\n'),
+      };
+    },
   });
 }
 
@@ -425,6 +437,27 @@ export async function dispatchRollbackRelease(
       rolledBack: true,
       liveUrl: `https://${payload.domain}`,
       message: `Swapped atomic release symlink to ${payload.commitSha || payload.releaseId} on Caddy/Passenger.`,
+    }),
+  });
+}
+
+export async function dispatchDestroyPreview(
+  payload: {
+    serviceId: string;
+    cpanelUser: string;
+    prNumber: number;
+    previewHostname?: string;
+  },
+  overrideAgentUrl?: string | null
+): Promise<ComputeAgentResponse<{ destroyed: boolean; prNumber: number; containerId?: string }>> {
+  return callComputeAgent('/v1/builds/preview-destroy', {
+    method: 'POST',
+    body: payload,
+    agentUrl: overrideAgentUrl,
+    sandboxMock: () => ({
+      destroyed: true,
+      prNumber: payload.prNumber,
+      containerId: `dh_${payload.cpanelUser}_${payload.serviceId.slice(0, 8)}_pr_${payload.prNumber}`,
     }),
   });
 }

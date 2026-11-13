@@ -14,6 +14,10 @@ interface AgentCallbackPayload {
   domain?: string;
   containerId?: string;
   releaseId?: string;
+  buildJobId?: string;
+  deploymentId?: string;
+  environment?: 'production' | 'preview';
+  prNumber?: number | null;
   commitSha?: string;
   status?: 'queued' | 'building' | 'live' | 'failed' | 'cancelled';
   liveUrl?: string;
@@ -67,8 +71,14 @@ export async function POST(request: NextRequest) {
     const supabaseAdmin = getServiceSupabase();
     if (supabaseAdmin) {
       const nowIso = new Date().toISOString();
+      const effectiveJobId = payload.jobId || payload.buildJobId;
+      const isPreviewCallback =
+        payload.environment === 'preview' ||
+        (payload.prNumber !== null &&
+          payload.prNumber !== undefined &&
+          Number.isFinite(Number(payload.prNumber)));
 
-      if (payload.jobId) {
+      if (effectiveJobId) {
         await supabaseAdmin
           .from('compute_build_jobs')
           .update({
@@ -83,11 +93,11 @@ export async function POST(request: NextRequest) {
                 ? nowIso
                 : null,
           })
-          .eq('id', payload.jobId);
+          .eq('id', effectiveJobId);
       }
 
-      if (payload.jobId && (payload.status === 'live' || payload.status === 'failed')) {
-        if (payload.status === 'live') {
+      if (effectiveJobId || payload.deploymentId) {
+        if (payload.status === 'live' && !isPreviewCallback) {
           await supabaseAdmin
             .from('project_deployments')
             .update({ status: 'superseded', is_current_production: false })
@@ -95,42 +105,83 @@ export async function POST(request: NextRequest) {
             .eq('status', 'live_production');
         }
 
+        const depStatus =
+          payload.status === 'live'
+            ? 'live_production'
+            : payload.status === 'failed' || payload.status === 'cancelled'
+            ? 'failed'
+            : 'building';
+
+        const depPatch: Record<string, unknown> = {
+          status: depStatus,
+          build_logs: payload.buildLogs || undefined,
+          container_id: payload.containerId || undefined,
+          r2_artifact_key: payload.r2ArtifactKey || undefined,
+        };
+        if (payload.status === 'live' || payload.status === 'failed') {
+          depPatch.is_current_production = payload.status === 'live' && !isPreviewCallback;
+          depPatch.duration_seconds = payload.durationSeconds ?? 4;
+          depPatch.finished_at = nowIso;
+          if (isPreviewCallback && payload.liveUrl) {
+            depPatch.preview_url = payload.liveUrl;
+          } else if (payload.liveUrl) {
+            depPatch.live_url = payload.liveUrl;
+          }
+        }
+
+        const depQuery = supabaseAdmin.from('project_deployments').update(depPatch);
+        if (payload.deploymentId) {
+          await depQuery.eq('id', payload.deploymentId);
+        } else if (effectiveJobId) {
+          await depQuery.eq('build_job_id', effectiveJobId);
+        }
+      }
+
+      if (isPreviewCallback && payload.prNumber) {
+        const previewStatus =
+          payload.status === 'live'
+            ? 'ready_live'
+            : payload.status === 'failed' || payload.status === 'cancelled'
+            ? 'failed'
+            : 'building';
+        const previewPatch: Record<string, unknown> = {
+          status: previewStatus,
+          updated_at: nowIso,
+        };
+        if (payload.liveUrl) previewPatch.preview_url = payload.liveUrl;
+        if (payload.containerId) previewPatch.container_id = payload.containerId;
+
         await supabaseAdmin
-          .from('project_deployments')
-          .update({
-            status: payload.status === 'live' ? 'live_production' : 'failed',
-            is_current_production: payload.status === 'live',
-            duration_seconds: payload.durationSeconds ?? 4,
-            build_logs: payload.buildLogs || undefined,
-            container_id: payload.containerId || undefined,
-            r2_artifact_key: payload.r2ArtifactKey || undefined,
-            live_url: payload.liveUrl || undefined,
-          })
-          .eq('build_job_id', payload.jobId);
+          .from('hosting_preview_environments')
+          .update(previewPatch)
+          .eq('service_id', payload.serviceId)
+          .eq('pr_number', Number(payload.prNumber));
       }
 
-      const serviceUpdates: Record<string, unknown> = {
-        updated_at: nowIso,
-      };
-      if (payload.containerId) serviceUpdates.container_id = payload.containerId;
-      if (payload.liveUrl) serviceUpdates.live_preview_url = payload.liveUrl;
-      if (payload.metrics?.ramUsedMb !== undefined) {
-        serviceUpdates.ram_used_mb = payload.metrics.ramUsedMb;
-      }
-      if (payload.metrics?.diskUsedGb !== undefined) {
-        serviceUpdates.disk_used_gb = payload.metrics.diskUsedGb;
-      }
-      if (payload.metrics?.inodesUsed !== undefined) {
-        serviceUpdates.inode_used = payload.metrics.inodesUsed;
-      }
-      if (payload.status === 'live') {
-        serviceUpdates.status = 'active';
-      }
+      if (!isPreviewCallback) {
+        const serviceUpdates: Record<string, unknown> = {
+          updated_at: nowIso,
+        };
+        if (payload.containerId) serviceUpdates.container_id = payload.containerId;
+        if (payload.liveUrl) serviceUpdates.live_preview_url = payload.liveUrl;
+        if (payload.metrics?.ramUsedMb !== undefined) {
+          serviceUpdates.ram_used_mb = payload.metrics.ramUsedMb;
+        }
+        if (payload.metrics?.diskUsedGb !== undefined) {
+          serviceUpdates.disk_used_gb = payload.metrics.diskUsedGb;
+        }
+        if (payload.metrics?.inodesUsed !== undefined) {
+          serviceUpdates.inode_used = payload.metrics.inodesUsed;
+        }
+        if (payload.status === 'live') {
+          serviceUpdates.status = 'active';
+        }
 
-      await supabaseAdmin
-        .from('hosting_services')
-        .update(serviceUpdates)
-        .eq('id', payload.serviceId);
+        await supabaseAdmin
+          .from('hosting_services')
+          .update(serviceUpdates)
+          .eq('id', payload.serviceId);
+      }
     }
 
     return NextResponse.json({

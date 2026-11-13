@@ -60,7 +60,7 @@ interface PreviewItem {
   commit_message: string;
   preview_url: string;
   isolated_db_clone: boolean;
-  status: 'building' | 'ready_live' | 'promoted_to_prod' | 'destroyed';
+  status: 'building' | 'ready_live' | 'promoted_to_prod' | 'destroyed' | 'expired' | 'failed';
   created_at: string;
 }
 
@@ -518,6 +518,33 @@ export default function CloudWorkspaceExpansionStudio({
         }
       }
     );
+  };
+
+  const handleDestroyPreview = async (preview: PreviewItem) => {
+    setPreviewBusy(true);
+    try {
+      const res = await fetch('/api/hosting/previews', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'destroy_preview',
+          serviceId,
+          domain,
+          previewId: preview.id,
+          prNumber: preview.pr_number,
+          branchName: preview.branch_name,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setPreviews((prev) =>
+          prev.map((p) => (p.id === preview.id ? { ...p, status: 'destroyed' } : p))
+        );
+        onNotify(data.message || 'Ephemeral preview destroyed.');
+      }
+    } finally {
+      setPreviewBusy(false);
+    }
   };
 
   // ---------------------------------------------------------------------------
@@ -1347,11 +1374,25 @@ export default function CloudWorkspaceExpansionStudio({
                       className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
                         prev.status === 'promoted_to_prod'
                           ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                          : prev.status === 'destroyed' || prev.status === 'expired'
+                          ? 'bg-slate-700/40 text-slate-400 border border-slate-600/40'
+                          : prev.status === 'failed'
+                          ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                          : prev.status === 'building'
+                          ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
                           : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
                       }`}
                     >
                       {prev.status === 'promoted_to_prod'
                         ? 'Promoted to Live Prod'
+                        : prev.status === 'destroyed'
+                        ? 'Destroyed'
+                        : prev.status === 'expired'
+                        ? 'Expired'
+                        : prev.status === 'failed'
+                        ? 'Failed'
+                        : prev.status === 'building'
+                        ? 'Building'
                         : 'Staging Ready'}
                     </span>
                   </div>
@@ -1371,14 +1412,26 @@ export default function CloudWorkspaceExpansionStudio({
                 </div>
 
                 <div className="flex items-center gap-2">
-                  {prev.status !== 'promoted_to_prod' && (
+                  {prev.status !== 'promoted_to_prod' &&
+                    prev.status !== 'destroyed' &&
+                    prev.status !== 'expired' && (
+                      <button
+                        onClick={() => handlePromotePreviewToProd(prev)}
+                        disabled={previewBusy}
+                        className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white shadow-lg shadow-emerald-600/20 transition"
+                      >
+                        <ArrowUpRight className="w-4 h-4" />
+                        Promote to Production
+                      </button>
+                    )}
+                  {prev.status !== 'destroyed' && (
                     <button
-                      onClick={() => handlePromotePreviewToProd(prev)}
+                      onClick={() => void handleDestroyPreview(prev)}
                       disabled={previewBusy}
-                      className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white shadow-lg shadow-emerald-600/20 transition"
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-rose-500/40 bg-rose-500/10 hover:bg-rose-500/20 text-xs font-semibold text-rose-300 transition"
                     >
-                      <ArrowUpRight className="w-4 h-4" />
-                      Promote to Production
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Destroy
                     </button>
                   )}
                 </div>

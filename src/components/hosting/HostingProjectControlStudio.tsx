@@ -38,6 +38,7 @@ import CloudWorkspaceExpansionStudio, {
   WorkspaceExpansionTab,
 } from '@/components/hosting/CloudWorkspaceExpansionStudio';
 import { DirectUploadDeployPanel } from '@/components/hosting/DirectUploadDeployPanel';
+import { GitHubRepoConnectorPanel } from '@/components/hosting/GitHubRepoConnectorPanel';
 
 type ControlStudioActiveTab =
   | 'overview'
@@ -873,6 +874,15 @@ export default function HostingProjectControlStudio({
             }}
           />
 
+          {/* Automated GitHub OAuth & Repository Webhook Connector */}
+          <GitHubRepoConnectorPanel
+            serviceId={serviceId}
+            onNotify={showToast}
+            onConnectionUpdated={() => {
+              void fetchAllData();
+            }}
+          />
+
           {/* Header Action Strip */}
           <div className="p-5 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
@@ -965,11 +975,19 @@ export default function HostingProjectControlStudio({
             </span>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-slate-700 dark:text-zinc-300">
-                <span className="truncate">https://devhost.cloud/api/webhooks/git/{serviceId}</span>
+                <span className="truncate" suppressHydrationWarning>
+                  {typeof window !== 'undefined'
+                    ? `${window.location.origin}/api/webhooks/git/${serviceId}`
+                    : `/api/webhooks/git/${serviceId}`}
+                </span>
                 <button
                   type="button"
                   onClick={() => {
-                    navigator.clipboard.writeText(`https://devhost.cloud/api/webhooks/git/${serviceId}`);
+                    const origin =
+                      typeof window !== 'undefined'
+                        ? window.location.origin
+                        : (process.env.NEXT_PUBLIC_SITE_URL || '').replace(/\/+$/, '');
+                    navigator.clipboard.writeText(`${origin}/api/webhooks/git/${serviceId}`);
                     showToast('Webhook URL copied!');
                   }}
                   className="p-1 hover:text-blue-600 cursor-pointer"

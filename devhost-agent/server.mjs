@@ -358,6 +358,14 @@ export function safeIdentifier(input, fallback = 'app') {
   return clean || fallback;
 }
 
+function redactGitSecrets(text, secretToken) {
+  let out = String(text || '');
+  if (secretToken && secretToken.length > 4) {
+    out = out.split(secretToken).join('[REDACTED_GIT_TOKEN]');
+  }
+  return out.replace(/https:\/\/[^@\s]+@/gi, 'https://[REDACTED]@');
+}
+
 export function containerNameFor(cpanelUser, serviceId) {
   const userPart = safeIdentifier(cpanelUser, 'tenant').slice(0, 20);
   const servicePart = safeIdentifier(serviceId, 'svc').slice(0, 8);
@@ -948,6 +956,7 @@ export function createAgentHandler(options = {}) {
   const agentSecret = (options.agentSecret ?? process.env.DEVHOST_COMPUTE_AGENT_SECRET ?? '').trim();
   const workRoot = options.workRoot || DEFAULT_WORK_ROOT;
   const backupRoot = options.backupRoot || BACKUP_ROOT;
+  const caddySitesDir = options.caddySitesDir || process.env.CADDY_SITES_DIR || CADDY_SITES_DIR;
   const runExecFile = options.runExecFile || defaultRunExecFile;
   const seenNonces = options.seenNonces || new Map();
   const allowWorkspaceOnly = options.allowWorkspaceOnly ?? process.env.AGENT_ALLOW_WORKSPACE_ONLY === 'true';
@@ -1017,10 +1026,22 @@ export function createAgentHandler(options = {}) {
         if (!SAFE_RELEASE_ID_REGEX.test(releaseId)) {
           throw new AgentValidationError('Invalid releaseId format');
         }
-        const containerId = containerNameFor(cpanelUser, serviceId);
+        const isPreview =
+          body.environment === 'preview' &&
+          Number.isFinite(Number(body.prNumber)) &&
+          Number(body.prNumber) > 0;
+        const prNumber = isPreview ? Math.floor(Number(body.prNumber)) : null;
+        const effectiveHost = String(body.previewHostname || body.domain || '').trim().toLowerCase();
+        const gitAccessToken = typeof body.gitAccessToken === 'string' ? body.gitAccessToken.trim() : '';
+
+        const containerId = isPreview
+          ? `${containerNameFor(cpanelUser, serviceId)}_pr_${prNumber}`
+          : containerNameFor(cpanelUser, serviceId);
         const serviceDir = path.join(workRoot, cpanelUser, serviceId);
         const releaseDir = path.join(serviceDir, 'releases', releaseId);
-        const currentLink = path.join(serviceDir, 'current');
+        const currentLink = isPreview
+          ? path.join(serviceDir, `current_pr_${prNumber}`)
+          : path.join(serviceDir, 'current');
         const publicDir = path.join(serviceDir, 'public_html');
 
         await fs.mkdir(releaseDir, { recursive: true });
@@ -1061,31 +1082,120 @@ export function createAgentHandler(options = {}) {
             }
           }
         } else if (body.gitRepoUrl) {
-          const cleanBranch = String(body.gitBranch || 'main').replace(/[^a-zA-Z0-9._/-]/g, '');
-          const cloneRes = await runExecFile('git', [
-            'clone',
-            '--depth',
-            '1',
-            '--branch',
-            cleanBranch || 'main',
-            String(body.gitRepoUrl),
-            releaseDir,
-          ]);
-          if (!cloneRes.ok) {
+          let parsedRepoUrl;
+          try {
+            parsedRepoUrl = new URL(String(body.gitRepoUrl).trim());
+          } catch {
+            return sendJson(res, 422, { ok: false, error: 'Invalid gitRepoUrl format' });
+          }
+          if (parsedRepoUrl.protocol !== 'https:' && parsedRepoUrl.protocol !== 'http:') {
+            return sendJson(res, 422, { ok: false, error: 'Only HTTP(S) Git repository URLs are permitted' });
+          }
+          parsedRepoUrl.username = '';
+          parsedRepoUrl.password = '';
+          const sanitizedRepoUrl = parsedRepoUrl.toString();
+
+          const rawBranch = String(body.gitBranch || 'main').trim();
+          const cleanBranch = rawBranch.replace(/[^a-zA-Z0-9._/-]/g, '') || 'main';
+          if (cleanBranch.startsWith('-') || cleanBranch.includes('..')) {
+            return sendJson(res, 422, { ok: false, error: 'Invalid gitBranch name' });
+          }
+
+          const cleanCommitSha = body.commitSha ? String(body.commitSha).trim() : '';
+          if (cleanCommitSha && !/^[a-fA-F0-9]{7,40}$/.test(cleanCommitSha)) {
+            return sendJson(res, 422, { ok: false, error: 'Invalid commitSha format' });
+          }
+
+          let askpassDir = null;
+          let cloneRes;
+          try {
+            const gitEnv = {
+              ...process.env,
+              GIT_TERMINAL_PROMPT: '0',
+            };
+            if (gitAccessToken) {
+              askpassDir = await fs.mkdtemp(path.join(os.tmpdir(), 'devhost-askpass-'));
+              const askpassPath = path.join(askpassDir, 'askpass.sh');
+              const askpassScript =
+                '#!/bin/sh\ncase "$1" in\n  *sername*) printf "%s\\n" "x-access-token" ;;\n  *) printf "%s\\n" "$DEVHOST_GIT_TOKEN" ;;\nesac\n';
+              await fs.writeFile(askpassPath, askpassScript, { mode: 0o700, encoding: 'utf8' });
+              gitEnv.GIT_ASKPASS = askpassPath;
+              gitEnv.DEVHOST_GIT_TOKEN = gitAccessToken;
+            }
+
+            cloneRes = await runExecFile(
+              'git',
+              ['clone', '--depth', '1', '--branch', cleanBranch, '--', sanitizedRepoUrl, releaseDir],
+              { env: gitEnv }
+            );
+
+            if (cloneRes.ok && cleanCommitSha) {
+              const fetchRes = await runExecFile(
+                'git',
+                ['-C', releaseDir, 'fetch', '--depth', '1', 'origin', cleanCommitSha],
+                { env: gitEnv }
+              );
+              const checkoutRes = await runExecFile(
+                'git',
+                ['-C', releaseDir, 'checkout', '--force', cleanCommitSha],
+                { env: gitEnv }
+              );
+              if (!checkoutRes.ok && !fetchRes.ok) {
+                cloneRes = {
+                  ok: false,
+                  stdout: checkoutRes.stdout || fetchRes.stdout,
+                  stderr: checkoutRes.stderr || fetchRes.stderr,
+                  error: checkoutRes.error || fetchRes.error || 'Failed to checkout target commit',
+                };
+              }
+            }
+          } finally {
+            if (askpassDir) {
+              await fs.rm(askpassDir, { recursive: true, force: true }).catch(() => {});
+            }
+          }
+
+          if (!cloneRes || !cloneRes.ok) {
+            const safeErr = redactGitSecrets(cloneRes?.stderr || cloneRes?.error || 'git clone failed', gitAccessToken);
             if (body.callbackUrl) {
               await sendSignedCallback(
                 agentSecret,
                 body.callbackUrl,
                 {
                   serviceId: body.serviceId,
+                  jobId: body.jobId || body.buildJobId,
+                  deploymentId: body.deploymentId,
+                  buildJobId: body.buildJobId || body.jobId,
                   releaseId,
+                  prNumber,
+                  environment: isPreview ? 'preview' : 'production',
                   status: 'failed',
-                  buildLogs: cloneRes.stderr || cloneRes.error,
+                  buildLogs: safeErr.slice(-4000),
                 },
                 fetchImpl
               );
             }
-            return sendJson(res, 422, { ok: false, error: `git clone failed: ${cloneRes.stderr}` });
+            return sendJson(res, 422, { ok: false, error: `git clone failed: ${safeErr}` });
+          }
+
+          if (body.callbackUrl) {
+            await sendSignedCallback(
+              agentSecret,
+              body.callbackUrl,
+              {
+                serviceId: body.serviceId,
+                deploymentId: body.deploymentId,
+                buildJobId: body.buildJobId,
+                releaseId,
+                prNumber,
+                environment: isPreview ? 'preview' : 'production',
+                status: 'building',
+                buildLogs: `[devhost-agent] Cloned ${sanitizedRepoUrl} (${cleanBranch}${
+                  cleanCommitSha ? `@${cleanCommitSha.slice(0, 7)}` : ''
+                }); building container image...`,
+              },
+              fetchImpl
+            ).catch(() => {});
           }
         } else if (body.marketplaceStackSlug) {
           await fs.writeFile(
@@ -1108,20 +1218,28 @@ export function createAgentHandler(options = {}) {
         const dockerfile = renderDockerfile(body, { hasPackageJson, hasRequirementsTxt });
         await fs.writeFile(path.join(releaseDir, 'Dockerfile'), dockerfile, 'utf8');
 
-        const imageTag = `devhost/${serviceId}:${releaseId.toLowerCase()}`;
+        const imageTag = isPreview
+          ? `devhost/${serviceId}:pr-${prNumber}-${releaseId.toLowerCase()}`
+          : `devhost/${serviceId}:${releaseId.toLowerCase()}`;
         const dockerBuild = await runExecFile('docker', ['build', '-t', imageTag, releaseDir]);
 
         if (!dockerBuild.ok) {
           if (!allowWorkspaceOnly || dockerBuild.errCode !== 'ENOENT') {
+            const safeLogs = redactGitSecrets(dockerBuild.stdout + '\n' + dockerBuild.stderr, gitAccessToken);
             if (body.callbackUrl) {
               await sendSignedCallback(
                 agentSecret,
                 body.callbackUrl,
                 {
                   serviceId: body.serviceId,
+                  jobId: body.jobId || body.buildJobId,
+                  deploymentId: body.deploymentId,
+                  buildJobId: body.buildJobId || body.jobId,
                   releaseId,
+                  prNumber,
+                  environment: isPreview ? 'preview' : 'production',
                   status: 'failed',
-                  buildLogs: (dockerBuild.stdout + '\n' + dockerBuild.stderr).slice(-4000),
+                  buildLogs: safeLogs.slice(-4000),
                   durationSeconds: Math.max(1, Math.round((Date.now() - startedAt) / 1000)),
                 },
                 fetchImpl
@@ -1130,12 +1248,14 @@ export function createAgentHandler(options = {}) {
             return sendJson(res, 502, {
               ok: false,
               error: 'Container image build failed',
-              buildLogs: (dockerBuild.stdout + '\n' + dockerBuild.stderr).slice(-4000),
+              buildLogs: safeLogs.slice(-4000),
             });
           }
         }
 
-        const hostPort = 30000 + (crypto.createHash('md5').update(serviceId).digest()[0] % 9000);
+        const portSeed = isPreview ? `${serviceId}:pr:${prNumber}` : serviceId;
+        const portHash = crypto.createHash('md5').update(portSeed).digest();
+        const hostPort = 30000 + (portHash.readUInt16BE(0) % 9000);
         const upstreamPort = Number(body.upstreamPort || 3000);
 
         if (dockerBuild.ok) {
@@ -1165,29 +1285,31 @@ export function createAgentHandler(options = {}) {
         await fs.symlink(releaseDir, currentLink).catch(() => {});
 
         const upstreamUrl = `http://127.0.0.1:${hostPort}`;
-        const liveUrl = body.domain ? `https://${body.domain}` : upstreamUrl;
+        const liveUrl = effectiveHost ? `https://${effectiveHost}` : upstreamUrl;
         const durationSeconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
 
-        await writeServiceMeta(serviceDir, {
-          serviceId: body.serviceId || serviceId,
-          cpanelUser,
-          containerId,
-          domain: body.domain || '',
-          runtimeFamily: body.runtimeFamily || 'nodejs',
-          upstreamPort,
-          hostPort,
-          upstreamUrl,
-          releaseId,
-          ramLimitMb: Number(body.ramLimitMb || 2048),
-          cpuCores: Number(body.cpuCores || 2),
-        });
+        if (!isPreview) {
+          await writeServiceMeta(serviceDir, {
+            serviceId: body.serviceId || serviceId,
+            cpanelUser,
+            containerId,
+            domain: effectiveHost,
+            runtimeFamily: body.runtimeFamily || 'nodejs',
+            upstreamPort,
+            hostPort,
+            upstreamUrl,
+            releaseId,
+            ramLimitMb: Number(body.ramLimitMb || 2048),
+            cpuCores: Number(body.cpuCores || 2),
+          });
+        }
 
-        const cleanDomain = String(body.domain || '').trim().toLowerCase();
-        if (/^[a-z0-9.-]+\.[a-z]{2,}$/.test(cleanDomain)) {
+        if (/^[a-z0-9.-]+\.[a-z]{2,}$/.test(effectiveHost)) {
           try {
-            await fs.mkdir(CADDY_SITES_DIR, { recursive: true });
-            const caddyConf = `${cleanDomain} {\n  reverse_proxy 127.0.0.1:${hostPort}\n  encode gzip zstd\n}\n`;
-            await fs.writeFile(path.join(CADDY_SITES_DIR, `${serviceId}.caddy`), caddyConf, 'utf8');
+            await fs.mkdir(caddySitesDir, { recursive: true });
+            const caddyConf = `${effectiveHost} {\n  reverse_proxy 127.0.0.1:${hostPort}\n  encode gzip zstd\n}\n`;
+            const caddyFile = isPreview ? `${serviceId}__pr_${prNumber}.caddy` : `${serviceId}.caddy`;
+            await fs.writeFile(path.join(caddySitesDir, caddyFile), caddyConf, 'utf8');
             await runExecFile('docker', ['exec', 'devhost-caddy', 'caddy', 'reload', '--config', '/etc/caddy/Caddyfile']);
           } catch {
             // Best-effort when Caddy volume is absent
@@ -1210,11 +1332,13 @@ export function createAgentHandler(options = {}) {
           }
         }
 
-        const buildLogs =
+        const buildLogs = redactGitSecrets(
           (dockerBuild.stdout || '') +
-          '\n' +
-          (dockerBuild.stderr || '') +
-          `\n[devhost-agent] Deployed hardened non-root release ${releaseId} in ${containerId} (${inodesUsed} inodes, ${diskUsedGb} GB).`;
+            '\n' +
+            (dockerBuild.stderr || '') +
+            `\n[devhost-agent] Deployed hardened non-root release ${releaseId} in ${containerId} (${inodesUsed} inodes, ${diskUsedGb} GB).`,
+          gitAccessToken
+        );
 
         if (body.callbackUrl) {
           await sendSignedCallback(
@@ -1225,6 +1349,8 @@ export function createAgentHandler(options = {}) {
               deploymentId: body.deploymentId,
               buildJobId: body.buildJobId,
               releaseId,
+              prNumber,
+              environment: isPreview ? 'preview' : 'production',
               status: 'live',
               containerId,
               upstreamUrl,
@@ -1307,6 +1433,50 @@ export function createAgentHandler(options = {}) {
         return sendJson(res, 200, {
           ok: true,
           rolledBackTo: releaseId,
+          containerId,
+        });
+      }
+
+      // 2b. Destroy ephemeral Pull Request preview container, Caddy route & workspace releases
+      if (req.method === 'POST' && url.pathname === '/v1/builds/preview-destroy') {
+        const cpanelUser = safeIdentifier(body.cpanelUser || 'tenant', 'tenant');
+        const serviceId = safeIdentifier(body.serviceId || 'svc', 'svc');
+        const prNum = Number(body.prNumber);
+        if (!Number.isFinite(prNum) || prNum <= 0) {
+          throw new AgentValidationError('Valid positive prNumber is required');
+        }
+        const prNumber = Math.floor(prNum);
+        const containerId = `${containerNameFor(cpanelUser, serviceId)}_pr_${prNumber}`;
+        const serviceDir = path.join(workRoot, cpanelUser, serviceId);
+        const previewLink = path.join(serviceDir, `current_pr_${prNumber}`);
+
+        await runExecFile('docker', ['rm', '-f', containerId]).catch(() => {});
+        await fs.rm(previewLink, { recursive: true, force: true }).catch(() => {});
+
+        const releasesDir = path.join(serviceDir, 'releases');
+        const releaseEntries = await fs.readdir(releasesDir).catch(() => []);
+        for (const entry of releaseEntries) {
+          if (entry.startsWith(`pr${prNumber}_`)) {
+            await fs.rm(path.join(releasesDir, entry), { recursive: true, force: true }).catch(() => {});
+          }
+        }
+
+        const caddyFile = path.join(caddySitesDir, `${serviceId}__pr_${prNumber}.caddy`);
+        await fs.rm(caddyFile, { force: true }).catch(() => {});
+        await runExecFile('docker', [
+          'exec',
+          'devhost-caddy',
+          'caddy',
+          'reload',
+          '--config',
+          '/etc/caddy/Caddyfile',
+        ]).catch(() => {});
+
+        return sendJson(res, 200, {
+          ok: true,
+          destroyed: true,
+          prNumber,
+          serviceId,
           containerId,
         });
       }

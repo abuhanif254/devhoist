@@ -19,24 +19,51 @@ export function extractDomainTld(domain: string): string {
   return idx >= 0 ? clean.slice(idx) : '.com';
 }
 
+export function isStandaloneDomainOrderType(orderType: string): boolean {
+  const norm = orderType.trim().toLowerCase();
+  return (
+    norm === 'domain_registration' ||
+    norm === 'domain_register' ||
+    norm === 'domain_renewal' ||
+    norm === 'domain_renew' ||
+    norm === 'domain_transfer'
+  );
+}
+
 export async function resolveDomainTldPriceBDT(
   db: SupabaseClient | null,
   domain: string,
   operation: 'register' | 'renew' | 'transfer'
-): Promise<{ found: boolean; tld: string; unitPriceBDT: number }> {
+): Promise<{
+  found: boolean;
+  tld: string;
+  unitPriceBDT: number;
+  registrarCostBDT: number;
+  minOwnerProfitBDT: number;
+  affiliateEligible: boolean;
+}> {
   const tld = extractDomainTld(domain);
 
   if (db) {
     try {
       const { data: tldRow } = await db
         .from('catalog_domain_tlds')
-        .select('tld, reg_price_bdt, renew_price_bdt, transfer_price_bdt, is_active')
+        .select(
+          'tld, reg_price_bdt, renew_price_bdt, transfer_price_bdt, registrar_cost_bdt, owner_net_profit_reg_bdt, affiliate_eligible, is_active'
+        )
         .eq('tld', tld)
         .maybeSingle();
 
       if (tldRow) {
         if (tldRow.is_active === false) {
-          return { found: false, tld, unitPriceBDT: 0 };
+          return {
+            found: false,
+            tld,
+            unitPriceBDT: 0,
+            registrarCostBDT: 0,
+            minOwnerProfitBDT: 0,
+            affiliateEligible: false,
+          };
         }
         const price =
           operation === 'renew'
@@ -45,7 +72,23 @@ export async function resolveDomainTldPriceBDT(
             ? Number(tldRow.transfer_price_bdt ?? tldRow.reg_price_bdt ?? 0)
             : Number(tldRow.reg_price_bdt ?? 0);
         if (price > 0) {
-          return { found: true, tld, unitPriceBDT: price };
+          const fallbackMatch = DEFAULT_PRODUCTION_DOMAIN_TLDS.find((t) => t.tld === tld);
+          const regCost = Number(
+            tldRow.registrar_cost_bdt ?? fallbackMatch?.registrar_cost_bdt ?? Math.round(price * 0.85)
+          );
+          const ownerProfit = Number(
+            tldRow.owner_net_profit_reg_bdt ??
+              fallbackMatch?.owner_net_profit_reg_bdt ??
+              Math.max(50, price - regCost)
+          );
+          return {
+            found: true,
+            tld,
+            unitPriceBDT: price,
+            registrarCostBDT: regCost,
+            minOwnerProfitBDT: ownerProfit,
+            affiliateEligible: Boolean(tldRow.affiliate_eligible ?? fallbackMatch?.affiliate_eligible),
+          };
         }
       }
     } catch {
@@ -61,15 +104,36 @@ export async function resolveDomainTldPriceBDT(
         : operation === 'transfer'
         ? fallback.transfer_price_bdt
         : fallback.reg_price_bdt;
-    return { found: true, tld, unitPriceBDT: Number(price || 0) };
+    return {
+      found: true,
+      tld,
+      unitPriceBDT: Number(price || 0),
+      registrarCostBDT: Number(fallback.registrar_cost_bdt || Math.round(price * 0.85)),
+      minOwnerProfitBDT: Number(fallback.owner_net_profit_reg_bdt || 100),
+      affiliateEligible: Boolean(fallback.affiliate_eligible),
+    };
   }
 
   // Known BD manual TLDs with standard BTCL tariff when absent from mock tables
   if (['.com.bd', '.net.bd', '.org.bd', '.edu.bd', '.bd'].includes(tld)) {
-    return { found: true, tld, unitPriceBDT: 1500 };
+    return {
+      found: true,
+      tld,
+      unitPriceBDT: 1500,
+      registrarCostBDT: 1200,
+      minOwnerProfitBDT: 300,
+      affiliateEligible: false,
+    };
   }
 
-  return { found: false, tld, unitPriceBDT: 0 };
+  return {
+    found: false,
+    tld,
+    unitPriceBDT: 0,
+    registrarCostBDT: 0,
+    minOwnerProfitBDT: 0,
+    affiliateEligible: false,
+  };
 }
 
 export interface DomainEntitlementResult {

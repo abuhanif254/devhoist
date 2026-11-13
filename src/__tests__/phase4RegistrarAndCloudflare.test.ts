@@ -771,7 +771,7 @@ describe('Phase 4: Real Domain Registrar & Cloudflare Anycast Edge Plane', () =>
                 method: 'txt',
                 validation_records: [
                   {
-                    txt_name: '_cf-custom-hostname.app.client.com',
+                    txt_name: '_cf-custom-hostname.app.shopbd.com',
                     txt_value: 'dcv-verify-xyz-999',
                   },
                 ],
@@ -805,7 +805,7 @@ describe('Phase 4: Real Domain Registrar & Cloudflare Anycast Edge Plane', () =>
       jsonReq('http://localhost/api/hosting/domains', 'POST', {
         serviceId: SERVICE_ID,
         domainType: 'addon_domain',
-        hostname: 'app.client.com',
+        hostname: 'app.shopbd.com',
       })
     );
     expect(createRes.status).toBe(200);

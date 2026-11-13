@@ -249,15 +249,23 @@ export default function DomainChecker() {
                         >
                           <span>Bundle + Host</span>
                         </button>
-                        <a
-                          href={item.cartUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
+                        <button
+                          type="button"
+                          onClick={() =>
+                            openStackBuilder({
+                              orderMode: 'domain_registration',
+                              planName: `Domain Registration: ${item.domain}`,
+                              domainName: item.domain,
+                              domainYears: 1,
+                              basePriceBDT: item.pricing.registerBDT,
+                              basePriceUSD: item.pricing.registerUSD,
+                            })
+                          }
                           className="inline-flex items-center gap-1.5 h-8 px-3.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 text-slate-900 dark:text-white font-semibold text-xs border border-slate-300 dark:border-white/10 transition-all shrink-0 cursor-pointer shadow-xs"
                         >
                           <span>Domain Only</span>
                           <ArrowRight className="w-3 h-3" />
-                        </a>
+                        </button>
                       </div>
                     ) : (
                       <button

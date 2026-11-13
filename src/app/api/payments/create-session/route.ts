@@ -12,7 +12,12 @@ import {
   resolveSiteOrigin,
 } from '@/lib/paymentGateways';
 import { calculateOrderProfitBreakdown } from '@/lib/profitEngine';
-import { resolveDomainTldPriceBDT } from '@/lib/billingEntitlements';
+import {
+  isStandaloneDomainOrderType,
+  resolveDomainTldPriceBDT,
+} from '@/lib/billingEntitlements';
+import { isValidCustomHostname } from '@/lib/cloudflareClient';
+import { encryptEppCode } from '@/lib/dnsEngine';
 
 export async function POST(req: Request) {
   const rateLimit = checkRateLimit(req, 20, 60 * 1000);
@@ -32,10 +37,17 @@ export async function POST(req: Request) {
     const rawAmountBDT = Number(body.amountBDT ?? body.amount ?? 0);
     const items = Array.isArray(body.items) ? (body.items as Array<Record<string, unknown>>) : [];
     const firstItem = items[0] || {};
-    const orderType = String(
+    const rawOrderType = String(
       body.orderType ||
-        (firstItem.type === 'wallet_topup' || firstItem.isWalletTopup ? 'wallet_topup' : 'hosting_order')
-    );
+        firstItem.type ||
+        (firstItem.isWalletTopup ? 'wallet_topup' : 'hosting_order')
+    ).trim();
+    const orderType =
+      rawOrderType === 'domain_register'
+        ? 'domain_registration'
+        : rawOrderType === 'domain_renew'
+        ? 'domain_renewal'
+        : rawOrderType;
 
     if (!Number.isFinite(rawAmountBDT) || rawAmountBDT <= 0 || rawAmountBDT > 10_000_000) {
       return NextResponse.json(
@@ -98,9 +110,51 @@ export async function POST(req: Request) {
     let discountBDT = 0;
     let totalBDT = rawAmountBDT;
     let verifiedPlanName = String(body.planName || firstItem.name || 'DevHost Cloud Service');
+    const domainYears =
+      orderType === 'domain_transfer'
+        ? 1
+        : Math.max(1, Math.min(10, Number(body.years ?? firstItem.years ?? 1)));
+    const rawEppCode = String(body.eppCode ?? firstItem.eppCode ?? '').trim();
+    const eppCodeEncrypted =
+      orderType === 'domain_transfer' && rawEppCode
+        ? await encryptEppCode(rawEppCode)
+        : undefined;
 
     if (db && orderType !== 'wallet_topup') {
-      if (planSlugOrId) {
+      if (isStandaloneDomainOrderType(orderType)) {
+        if (!domain || !domain.includes('.') || !isValidCustomHostname(domain)) {
+          return NextResponse.json(
+            { error: 'A valid domain hostname is required for domain billing verification.' },
+            { status: 400 }
+          );
+        }
+        const op =
+          orderType === 'domain_renewal'
+            ? 'renew'
+            : orderType === 'domain_transfer'
+            ? 'transfer'
+            : 'register';
+        const tldPricing = await resolveDomainTldPriceBDT(db, domain, op);
+        if (!tldPricing.found || tldPricing.unitPriceBDT <= 0) {
+          return NextResponse.json(
+            { error: `Unsupported or inactive TLD "${tldPricing.tld}" for checkout.` },
+            { status: 400 }
+          );
+        }
+        subtotalBDT = Math.round(tldPricing.unitPriceBDT * domainYears);
+        discountBDT = 0;
+        totalBDT = subtotalBDT;
+        verifiedPlanName = `Domain ${op.toUpperCase()}: ${domain} (${domainYears}y)`;
+
+        if (Math.abs(totalBDT - rawAmountBDT) > 5) {
+          return NextResponse.json(
+            {
+              error: `Price tampering detected: client supplied ৳${rawAmountBDT} BDT, authoritative domain price is ৳${totalBDT} BDT.`,
+            },
+            { status: 400 }
+          );
+        }
+      } else if (planSlugOrId) {
         const pidSlugMap: Record<string, string> = {
           '1': 'starter',
           '2': 'developer-pro',
@@ -190,45 +244,6 @@ export async function POST(req: Request) {
             { status: 400 }
           );
         }
-      } else if (
-        orderType === 'domain_registration' ||
-        orderType === 'domain_renewal' ||
-        orderType === 'domain_transfer'
-      ) {
-        if (!domain || !domain.includes('.')) {
-          return NextResponse.json(
-            { error: 'A valid domain name is required for domain billing verification.' },
-            { status: 400 }
-          );
-        }
-        const years = Math.max(1, Math.min(10, Number(body.years ?? firstItem.years ?? 1)));
-        const op =
-          orderType === 'domain_renewal'
-            ? 'renew'
-            : orderType === 'domain_transfer'
-            ? 'transfer'
-            : 'register';
-        const tldPricing = await resolveDomainTldPriceBDT(db, domain, op);
-        if (!tldPricing.found || tldPricing.unitPriceBDT <= 0) {
-          return NextResponse.json(
-            { error: `Unsupported or inactive TLD "${tldPricing.tld}" for checkout.` },
-            { status: 400 }
-          );
-        }
-        const effectiveYears = op === 'transfer' ? 1 : years;
-        subtotalBDT = Math.round(tldPricing.unitPriceBDT * effectiveYears);
-        discountBDT = 0;
-        totalBDT = subtotalBDT;
-        verifiedPlanName = `Domain ${op.toUpperCase()}: ${domain} (${effectiveYears}y)`;
-
-        if (Math.abs(totalBDT - rawAmountBDT) > 5) {
-          return NextResponse.json(
-            {
-              error: `Price tampering detected: client supplied ৳${rawAmountBDT} BDT, authoritative domain price is ৳${totalBDT} BDT.`,
-            },
-            { status: 400 }
-          );
-        }
       } else if (orderType === 'agency_handover') {
         if (!handoverToken) {
           return NextResponse.json(
@@ -282,9 +297,31 @@ export async function POST(req: Request) {
         ? body.invoiceNumber.trim()
         : `DEV-INV-${Date.now().toString(36).toUpperCase()}`;
 
+    const sanitizedItems = items.map((item, idx) => {
+      const { eppCode: _discardRawEpp, ...rest } = item;
+      void _discardRawEpp;
+      if (idx === 0) {
+        return {
+          ...rest,
+          name: String(rest.name || (orderType === 'wallet_topup' ? 'DevHost Wallet Credit Top-Up' : verifiedPlanName)),
+          type: orderType,
+          domain: String(rest.domain || domain || '').trim() || undefined,
+          years: isStandaloneDomainOrderType(orderType)
+            ? domainYears
+            : rest.years !== undefined
+            ? Number(rest.years)
+            : undefined,
+          eppCodeEncrypted: eppCodeEncrypted || undefined,
+          hasEppCode: Boolean(eppCodeEncrypted),
+          amountBDT: isStandaloneDomainOrderType(orderType) ? totalBDT : Number(rest.amountBDT ?? totalBDT),
+        };
+      }
+      return rest;
+    });
+
     const invoiceItems =
-      items.length > 0
-        ? items
+      sanitizedItems.length > 0
+        ? sanitizedItems
         : [
             {
               name: orderType === 'wallet_topup' ? 'DevHost Wallet Credit Top-Up' : verifiedPlanName,
@@ -292,6 +329,9 @@ export async function POST(req: Request) {
               domain: domain || undefined,
               planId: planSlugOrId || undefined,
               billingCycle,
+              years: isStandaloneDomainOrderType(orderType) ? domainYears : undefined,
+              eppCodeEncrypted: eppCodeEncrypted || undefined,
+              hasEppCode: Boolean(eppCodeEncrypted),
               freeDomainApplied,
               promoCode: promoCodeInput || undefined,
               promoDiscountBDT: discountBDT,

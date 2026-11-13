@@ -8,6 +8,8 @@ import {
 } from '@/lib/emailEngine';
 import { sendTelegramAlert } from '@/lib/adminNotifier';
 import { verifyCronOrAdmin } from '@/lib/authGuard';
+import { getServiceSupabase, isSupabaseConfigured } from '@/lib/supabase';
+import { syncDomainTransferStatuses } from '@/lib/transferLifecycle';
 
 
 export async function GET(req: NextRequest) {
@@ -32,6 +34,9 @@ async function handleLifecycleCron(req: NextRequest) {
     accountsSuspended: 0,
     accountsTerminated: 0,
     affiliateCommissionsMaturedBDT: 0,
+    transfersPolled: 0,
+    transfersCompleted: 0,
+    transfersFailed: 0,
   };
 
   const now = new Date();
@@ -145,6 +150,29 @@ async function handleLifecycleCron(req: NextRequest) {
     logs.push(`⚠ Task 6 Warning: ${err?.message}`);
   }
 
+  // ============================================================================
+  // TASK 7: REGISTRAR INBOUND DOMAIN TRANSFER STATUS SYNC & ACTIVATION
+  // ============================================================================
+  try {
+    if (isSupabaseConfigured()) {
+      const db = getServiceSupabase();
+      const pollSummary = await syncDomainTransferStatuses(db);
+      results.transfersPolled = pollSummary.checked;
+      results.transfersCompleted = pollSummary.completed;
+      results.transfersFailed = pollSummary.failed;
+      logs.push(
+        `✓ Task 7: Polled ${pollSummary.checked} registrar domain transfer(s) (${pollSummary.updated} updated, ${pollSummary.completed} completed & activated, ${pollSummary.failed} failed).`
+      );
+      if (pollSummary.errors.length > 0) {
+        logs.push(`⚠ Task 7 Registrar Notes: ${pollSummary.errors.join('; ')}`);
+      }
+    } else {
+      logs.push(`ℹ Task 7: Skipped registrar transfer polling (Supabase not configured).`);
+    }
+  } catch (err: unknown) {
+    logs.push(`⚠ Task 7 Warning: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   // Dispatch Summary to Founder Telegram Bot
   const summaryTelegram = `
 🤖 <b>[DevHost Engine] Daily Lifecycle Cron Completed</b>
@@ -154,6 +182,7 @@ async function handleLifecycleCron(req: NextRequest) {
 • Urgent Notices Sent: <b>${results.urgentRemindersSent}</b>
 • Accounts Suspended: <b>${results.accountsSuspended}</b>
 • Affiliate Matured: <b>৳${results.affiliateCommissionsMaturedBDT} BDT</b>
+• Transfers Synced: <b>${results.transfersPolled} (${results.transfersCompleted} Done / ${results.transfersFailed} Failed)</b>
 • Status: <b>100% Operational & Zero-Gap</b>
 `.trim();
 

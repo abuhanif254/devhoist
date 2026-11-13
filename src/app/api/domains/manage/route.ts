@@ -31,6 +31,10 @@ import {
   isCloudflareConfigured,
   verifyCloudflareToken,
 } from '@/lib/cloudflareClient';
+import {
+  serializeTransferRow,
+  syncDomainTransferStatuses,
+} from '@/lib/transferLifecycle';
 
 async function logAudit(
   actorId: string | null,
@@ -137,7 +141,12 @@ export async function POST(request: NextRequest) {
     let resolvedDomainId = domainId;
     let resolvedDomainName = domainName?.trim().toLowerCase();
 
-    if (action === 'initiate_transfer') {
+    if (
+      action === 'initiate_transfer' ||
+      action === 'list_transfers' ||
+      action === 'poll_transfers' ||
+      action === 'resubmit_transfer_epp'
+    ) {
       const auth = await requireUser(request);
       if (!auth.ok) return auth.response;
       userId = auth.user.id;
@@ -793,6 +802,210 @@ export async function POST(request: NextRequest) {
         provider: registrarProvider,
         currentStep,
         status: transferStatus,
+      });
+    }
+
+    // 8b. LIST USER INBOUND DOMAIN TRANSFERS (No Mock Fallback)
+    if (action === 'list_transfers') {
+      if (!isSupabaseConfigured() && !isDevSandboxMode()) {
+        return serviceUnavailableResponse('Domain Transfer Tracker');
+      }
+      if (!db) {
+        return NextResponse.json({ success: true, transfers: [] });
+      }
+
+      const { data: rows, error } = await db
+        .from('domain_transfers')
+        .select('*')
+        .eq('user_id', userId)
+        .order('initiated_at', { ascending: false });
+
+      if (error) {
+        return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+      }
+
+      return NextResponse.json({
+        success: true,
+        transfers: ((rows || []) as Array<Record<string, unknown>>).map(serializeTransferRow),
+      });
+    }
+
+    // 8c. POLL REGISTRAR FOR REAL INBOUND TRANSFER STATUS UPDATES
+    if (action === 'poll_transfers') {
+      if (!isSupabaseConfigured() && !isDevSandboxMode()) {
+        return serviceUnavailableResponse('Domain Transfer Polling');
+      }
+      if (!db) {
+        return NextResponse.json({
+          success: true,
+          checked: 0,
+          updated: 0,
+          completed: 0,
+          failed: 0,
+          transfers: [],
+        });
+      }
+
+      if (transferId && userRole !== 'admin') {
+        const { data: trfOwner } = await db
+          .from('domain_transfers')
+          .select('id, user_id')
+          .eq('id', transferId)
+          .maybeSingle();
+        if (!trfOwner) {
+          return NextResponse.json({ success: false, error: 'Transfer record not found.' }, { status: 404 });
+        }
+        if (trfOwner.user_id !== userId) {
+          return NextResponse.json({ success: false, error: 'Forbidden transfer access.' }, { status: 403 });
+        }
+      }
+
+      const pollSummary = await syncDomainTransferStatuses(db, {
+        userId: userRole === 'admin' ? undefined : userId,
+        transferId,
+      });
+
+      const { data: allRows } = await db
+        .from('domain_transfers')
+        .select('*')
+        .eq('user_id', userId)
+        .order('initiated_at', { ascending: false });
+
+      return NextResponse.json({
+        success: true,
+        checked: pollSummary.checked,
+        updated: pollSummary.updated,
+        completed: pollSummary.completed,
+        failed: pollSummary.failed,
+        errors: pollSummary.errors,
+        transfers: ((allRows || []) as Array<Record<string, unknown>>).map(serializeTransferRow),
+      });
+    }
+
+    // 8d. CLIENT-AUTHORIZED EPP CODE RESUBMISSION TO REGISTRAR
+    if (action === 'resubmit_transfer_epp') {
+      if (!transferId || !eppCode?.trim()) {
+        return NextResponse.json(
+          { success: false, error: 'Transfer ID and fresh EPP Auth code are required.' },
+          { status: 400 }
+        );
+      }
+      if (!isSupabaseConfigured() && !isDevSandboxMode()) {
+        return serviceUnavailableResponse('Domain Transfer Retry');
+      }
+
+      let targetDomain = String(domainName || '').trim().toLowerCase();
+      let existingRegistrarTransferId: string | null = null;
+      if (db) {
+        const { data: existingTrf, error: fetchErr } = await db
+          .from('domain_transfers')
+          .select('*')
+          .eq('id', transferId)
+          .maybeSingle();
+
+        if (fetchErr) {
+          return NextResponse.json({ success: false, error: fetchErr.message }, { status: 500 });
+        }
+        if (!existingTrf) {
+          return NextResponse.json({ success: false, error: 'Transfer record not found.' }, { status: 404 });
+        }
+        if (existingTrf.user_id !== userId && userRole !== 'admin') {
+          return NextResponse.json(
+            { success: false, error: 'Forbidden: you do not own this domain transfer.' },
+            { status: 403 }
+          );
+        }
+        targetDomain = String(existingTrf.domain_name || targetDomain).trim().toLowerCase();
+        existingRegistrarTransferId = existingTrf.registrar_transfer_id
+          ? String(existingTrf.registrar_transfer_id)
+          : null;
+      }
+
+      if (!targetDomain) {
+        return NextResponse.json({ success: false, error: 'Target domain name missing.' }, { status: 400 });
+      }
+
+      const entitlement = await verifyPaidDomainEntitlement({
+        db,
+        userId,
+        role: userRole,
+        domain: targetDomain,
+        operation: 'transfer',
+        invoiceNumber: invoiceNumber || null,
+      });
+      if (!entitlement.entitled) {
+        return NextResponse.json(
+          { success: false, code: 'PAYMENT_REQUIRED', error: entitlement.reason },
+          { status: 402 }
+        );
+      }
+
+      const encryptedEpp = await encryptEppCode(eppCode.trim());
+      const regRes = await transferDomainWithRegistrar({
+        domain: targetDomain,
+        eppCode: eppCode.trim(),
+      });
+      const nowIso = new Date().toISOString();
+
+      if (!regRes.ok) {
+        if (db) {
+          await db
+            .from('domain_transfers')
+            .update({
+              epp_status: 'rejected',
+              status_message: regRes.message || regRes.error || 'Registrar rejected resubmitted EPP code.',
+              last_polled_at: nowIso,
+              updated_at: nowIso,
+            })
+            .eq('id', transferId);
+        }
+        return NextResponse.json(
+          { success: false, error: regRes.message || regRes.error || 'Registrar transfer resubmission failed.' },
+          { status: regRes.statusCode || 502 }
+        );
+      }
+
+      const currentStep = regRes.mode === 'manual_btcl_queue' ? 1 : 2;
+      const status = regRes.mode === 'manual_btcl_queue' ? 'pending_payment' : 'verifying_epp';
+      const registrarTransferId = regRes.orderId || existingRegistrarTransferId;
+
+      if (db) {
+        const { error: updErr } = await db
+          .from('domain_transfers')
+          .update({
+            epp_code_encrypted: encryptedEpp,
+            registrar_transfer_id: registrarTransferId,
+            registrar_provider: regRes.provider,
+            current_step: currentStep,
+            status,
+            epp_status: 'resubmitted',
+            status_message: regRes.message,
+            last_polled_at: nowIso,
+            updated_at: nowIso,
+          })
+          .eq('id', transferId);
+
+        if (updErr) {
+          return NextResponse.json({ success: false, error: updErr.message }, { status: 500 });
+        }
+      }
+
+      await logAudit(
+        userId,
+        'TRANSFER_EPP_RESUBMITTED',
+        `trf:${transferId}`,
+        { domain: targetDomain, registrarTransferId, provider: regRes.provider },
+        ip
+      );
+
+      return NextResponse.json({
+        success: true,
+        message: regRes.message,
+        transferId,
+        currentStep,
+        status,
+        registrarTransferId,
+        provider: regRes.provider,
       });
     }
 

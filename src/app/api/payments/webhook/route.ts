@@ -234,6 +234,7 @@ export async function POST(req: Request) {
       trxId,
       walletBalanceBDT: fulfillment.walletBalanceBDT,
       provision: fulfillment.provision,
+      domainOrder: fulfillment.domainOrder,
       affiliate: fulfillment.affiliate,
     });
   } catch (err) {

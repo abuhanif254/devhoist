@@ -6,12 +6,7 @@ import {
   CheckCircle2,
   Clock,
   AlertCircle,
-  ShieldCheck,
   RefreshCw,
-  Key,
-  ExternalLink,
-  ChevronRight,
-  Sparkles,
 } from 'lucide-react';
 
 export interface TransferRecord {
@@ -28,36 +23,22 @@ export interface TransferRecord {
     | 'rejected_invalid_epp'
     | 'locked_at_source';
   statusMessage?: string;
+  eppStatus?: string | null;
+  registrarProvider?: string | null;
+  registrarTransferId?: string | null;
+  lastPolledAt?: string | null;
   initiatedAt: string;
 }
 
 interface DomainTransferTrackerProps {
   transfers?: TransferRecord[];
-  onRefresh?: () => void;
+  onRefresh?: () => Promise<void> | void;
+  onPollTransfers?: () => Promise<void> | void;
+  onResubmitEpp?: (
+    transferId: string,
+    eppCode: string
+  ) => Promise<{ ok: boolean; error?: string; message?: string; currentStep?: number; status?: string }>;
 }
-
-const DEFAULT_TRANSFERS: TransferRecord[] = [
-  {
-    id: 'trf_active_1',
-    domainName: 'devhost-agency.com',
-    tld: '.com',
-    transferPriceBDT: 1250,
-    currentStep: 3,
-    status: 'awaiting_losing_registrar',
-    statusMessage: 'Losing registrar notified via ICANN FOA. Handshake in progress (estimated 48-72h).',
-    initiatedAt: '2026-11-04 14:30',
-  },
-  {
-    id: 'trf_completed_2',
-    domainName: 'cloudpulse.io',
-    tld: '.io',
-    transferPriceBDT: 3800,
-    currentStep: 5,
-    status: 'completed',
-    statusMessage: 'Registry transfer finalized. 1 year free renewal added to lifecycle.',
-    initiatedAt: '2026-10-28 09:15',
-  },
-];
 
 const TRANSFER_STEPS = [
   { step: 1, title: 'Transfer Ordered', desc: 'Order placed & invoice verified' },
@@ -68,51 +49,133 @@ const TRANSFER_STEPS = [
 ];
 
 export default function DomainTransferTracker({
-  transfers = DEFAULT_TRANSFERS,
+  transfers = [],
   onRefresh,
+  onPollTransfers,
+  onResubmitEpp,
 }: DomainTransferTrackerProps) {
-  const [activeTransfers, setActiveTransfers] = useState<TransferRecord[]>(transfers);
-  const [editingEppTransferId, setEditingEppTransferId] = useState<string | null>(null);
-  const [updatedEppInput, setUpdatedEppInput] = useState('');
-  const [isUpdating, setIsUpdating] = useState(false);
+  const [localOverrides, setLocalOverrides] = useState<Record<string, Partial<TransferRecord>>>({});
+  const [polledList, setPolledList] = useState<TransferRecord[] | null>(null);
+  const [eppInputs, setEppInputs] = useState<Record<string, string>>({});
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [isPolling, setIsPolling] = useState(false);
+  const [feedback, setFeedback] = useState<{ type: 'error' | 'success'; message: string } | null>(null);
+
+  const sourceList = polledList && transfers.length === 0 ? polledList : transfers;
+  const activeTransfers = sourceList.map((t) =>
+    localOverrides[t.id] ? { ...t, ...localOverrides[t.id] } : t
+  );
+
+  const handlePollRefresh = async () => {
+    setIsPolling(true);
+    setFeedback(null);
+    try {
+      if (onPollTransfers) {
+        await onPollTransfers();
+      } else if (onRefresh) {
+        await onRefresh();
+      } else {
+        const res = await fetch('/api/domains/manage', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'poll_transfers' }),
+        });
+        const json = (await res.json().catch(() => ({}))) as {
+          success?: boolean;
+          transfers?: TransferRecord[];
+          checked?: number;
+          updated?: number;
+          error?: string;
+        };
+        if (!res.ok || !json.success) {
+          setFeedback({ type: 'error', message: json.error || 'Failed to poll registrar transfer status.' });
+        } else if (Array.isArray(json.transfers)) {
+          setPolledList(json.transfers);
+          setFeedback({
+            type: 'success',
+            message: `Synced ${json.checked ?? json.transfers.length} transfer(s) with upstream registrar.`,
+          });
+        }
+      }
+    } catch {
+      setFeedback({ type: 'error', message: 'Network error while syncing transfer status.' });
+    } finally {
+      setIsPolling(false);
+    }
+  };
 
   const handleUpdateEppCode = async (transferId: string) => {
-    if (!updatedEppInput.trim()) return;
-    setIsUpdating(true);
+    const code = (eppInputs[transferId] || '').trim();
+    if (!code) return;
+    setUpdatingId(transferId);
+    setFeedback(null);
     try {
-      await fetch('/api/domains/manage', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'update_transfer_step',
-          transferId,
-          transferStep: 2,
-        }),
-      });
+      let json: {
+        success?: boolean;
+        ok?: boolean;
+        message?: string;
+        error?: string;
+        currentStep?: number;
+        status?: TransferRecord['status'];
+        registrarTransferId?: string | null;
+      };
 
-      setActiveTransfers((prev) =>
-        prev.map((t) =>
-          t.id === transferId
-            ? {
-                ...t,
-                currentStep: 2,
-                status: 'verifying_epp',
-                statusMessage: 'Updated EPP code received. Re-submitting to registry...',
-              }
-            : t
-        )
-      );
-      setEditingEppTransferId(null);
-      setUpdatedEppInput('');
+      if (onResubmitEpp) {
+        const result = await onResubmitEpp(transferId, code);
+        json = {
+          success: result.ok,
+          message: result.message,
+          error: result.error,
+          currentStep: result.currentStep,
+          status: result.status as TransferRecord['status'] | undefined,
+        };
+      } else {
+        const res = await fetch('/api/domains/manage', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'resubmit_transfer_epp',
+            transferId,
+            eppCode: code,
+          }),
+        });
+        json = (await res.json().catch(() => ({}))) as typeof json;
+        if (!res.ok) json.success = false;
+      }
+
+      if (!json.success) {
+        setFeedback({
+          type: 'error',
+          message: json.error || 'Registrar rejected resubmitted EPP code.',
+        });
+        return;
+      }
+
+      setLocalOverrides((prev) => ({
+        ...prev,
+        [transferId]: {
+          currentStep: json.currentStep ?? 2,
+          status: json.status ?? 'verifying_epp',
+          statusMessage:
+            json.message || 'Updated EPP code accepted. Re-submitted to upstream registrar.',
+          registrarTransferId: json.registrarTransferId ?? prev[transferId]?.registrarTransferId,
+        },
+      }));
+      setEppInputs((prev) => ({ ...prev, [transferId]: '' }));
+      setFeedback({
+        type: 'success',
+        message: json.message || 'EPP code re-submitted to registrar successfully.',
+      });
+      await onRefresh?.();
     } catch {
-      alert('Updated EPP code queued for retry.');
+      setFeedback({ type: 'error', message: 'Network error re-submitting EPP code.' });
     } finally {
-      setIsUpdating(false);
+      setUpdatingId(null);
     }
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
@@ -125,17 +188,38 @@ export default function DomainTransferTracker({
         </div>
         <button
           type="button"
-          onClick={onRefresh}
-          className="p-1.5 rounded-lg border border-slate-200 dark:border-white/10 text-slate-500 hover:text-slate-900 dark:hover:text-white cursor-pointer"
+          disabled={isPolling}
+          onClick={handlePollRefresh}
+          title="Poll upstream registrar for live transfer updates"
+          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-white/10 text-xs text-slate-600 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white disabled:opacity-50 cursor-pointer"
         >
-          <RefreshCw className="w-3.5 h-3.5" />
+          <RefreshCw className={`w-3.5 h-3.5 ${isPolling ? 'animate-spin' : ''}`} />
+          <span>{isPolling ? 'Syncing...' : 'Sync Registrar'}</span>
         </button>
       </div>
 
-      <div className="space-y-4">
-        {activeTransfers.map((item) => {
-          const isDone = item.currentStep === 5;
-          const isFailed = item.status === 'rejected_invalid_epp' || item.status === 'locked_at_source';
+      {feedback && (
+        <div
+          className={`p-3 rounded-xl text-xs font-mono border ${
+            feedback.type === 'error'
+              ? 'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-300'
+              : 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-900 text-emerald-700 dark:text-emerald-300'
+          }`}
+        >
+          {feedback.message}
+        </div>
+      )}
+
+      {activeTransfers.length === 0 ? (
+        <div className="p-6 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] text-center text-xs font-mono text-slate-400">
+          No inbound domain transfers recorded yet. Click &ldquo;Transfer In Existing Domain&rdquo; above to migrate a domain to DevHost.
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {activeTransfers.map((item) => {
+            const isDone = item.currentStep === 5 || item.status === 'completed';
+            const isFailed = item.status === 'rejected_invalid_epp' || item.status === 'locked_at_source';
+            const currentInput = eppInputs[item.id] || '';
 
           return (
             <div
@@ -233,26 +317,29 @@ export default function DomainTransferTracker({
                   <div className="flex items-center gap-2">
                     <input
                       type="text"
-                      value={updatedEppInput}
-                      onChange={(e) => setUpdatedEppInput(e.target.value)}
+                      value={currentInput}
+                      onChange={(e) =>
+                        setEppInputs((prev) => ({ ...prev, [item.id]: e.target.value }))
+                      }
                       placeholder="Enter new EPP code from losing registrar"
                       className="flex-1 px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono"
                     />
                     <button
                       type="button"
-                      disabled={isUpdating || !updatedEppInput.trim()}
+                      disabled={updatingId === item.id || !currentInput.trim()}
                       onClick={() => handleUpdateEppCode(item.id)}
                       className="px-4 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-semibold cursor-pointer"
                     >
-                      {isUpdating ? 'Re-submitting...' : 'Update & Retry'}
+                      {updatingId === item.id ? 'Re-submitting...' : 'Update & Retry'}
                     </button>
                   </div>
                 </div>
               )}
             </div>
           );
-        })}
-      </div>
+          })}
+        </div>
+      )}
     </div>
   );
 }

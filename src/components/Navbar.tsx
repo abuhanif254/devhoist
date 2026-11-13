@@ -34,7 +34,6 @@ import {
 import { useBilling } from '@/context/BillingContext';
 import { useLanguage } from '@/context/LanguageContext';
 import { usePortal } from '@/context/PortalContext';
-import { getWhmcsClientAreaUrl } from '@/config/whmcs';
 
 export default function Navbar() {
   const pathname = usePathname();

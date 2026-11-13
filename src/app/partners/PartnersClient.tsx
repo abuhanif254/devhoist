@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import Link from 'next/link';
 import {
   TrendingUp,
   DollarSign,
@@ -15,7 +16,6 @@ import {
   Zap,
 } from 'lucide-react';
 import { useBilling } from '@/context/BillingContext';
-import { getWhmcsClientAreaUrl } from '@/config/whmcs';
 
 const PLAN_OPTIONS = [
   { id: 'starter', name: 'Starter Pack', bdt: 200, usd: 1.67 },
@@ -194,16 +194,14 @@ export default function PartnersClient() {
               </div>
             </div>
 
-            <a
-              href={`${getWhmcsClientAreaUrl()}register.php`}
-              target="_blank"
-              rel="noopener noreferrer"
+            <Link
+              href="/register?next=%2Fdashboard%3Ftab%3Daffiliate"
               className="w-full inline-flex items-center justify-center gap-2 h-11 px-5 rounded-lg text-sm font-semibold bg-blue-600 hover:bg-blue-700 text-white dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white transition-all shadow-md group cursor-pointer"
             >
               <span className="w-2 h-2 rounded-full bg-emerald-400" />
               <span>Join Partner Program Now</span>
               <ArrowRight className="w-4 h-4 stroke-[2.5] group-hover:translate-x-0.5 transition-transform" />
-            </a>
+            </Link>
 
             <div className="text-center text-[11px] font-mono text-slate-500 dark:text-zinc-500">
               Instant activation • Automated referral tracking cookie (90 days)
@@ -230,7 +228,7 @@ export default function PartnersClient() {
             <span className="text-xs font-mono text-slate-500 dark:text-zinc-500 font-semibold">Step 01</span>
             <h3 className="text-sm font-bold text-slate-900 dark:text-zinc-200">Free Sign Up</h3>
             <p className="text-xs text-slate-600 dark:text-zinc-400 leading-relaxed font-normal">
-              Create your affiliate account via our WHMCS portal in under a minute. No application approval delays.
+              Create your affiliate account via our native DevHost Client Portal in under a minute. No application approval delays.
             </p>
           </div>
 

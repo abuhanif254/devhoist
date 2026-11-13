@@ -1,14 +1,13 @@
 'use client';
 
 import React, { useState, useMemo } from 'react';
-import { Search, ShieldCheck, ArrowRight } from 'lucide-react';
+import { Search, ArrowRight } from 'lucide-react';
 import { EXACT_10_TLD_DATA, getFormattedDomainPrice } from '@/config/domainData';
 import { useBilling } from '@/context/BillingContext';
 import { usePortal } from '@/context/PortalContext';
-import { buildDomainOrderUrl } from '@/lib/whmcsRouter';
 
 export default function DomainPricingTable() {
-  const { currency } = useBilling();
+  const { currency, openStackBuilder } = useBilling();
   const { dynamicTlds } = usePortal();
   const [filterCategory, setFilterCategory] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -118,15 +117,22 @@ export default function DomainPricingTable() {
                     {getFormattedDomainPrice(item.transferBDT, currency)}/yr
                   </td>
                   <td className="p-3.5 sm:p-4 text-right">
-                    <a
-                      href={buildDomainOrderUrl(`example${item.tld}`, currency)}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                    <button
+                      type="button"
+                      onClick={() =>
+                        openStackBuilder({
+                          orderMode: 'domain_registration',
+                          planName: `Domain Registration (${item.tld})`,
+                          domainName: `mybrand${item.tld}`,
+                          domainYears: 1,
+                          basePriceBDT: item.registerBDT,
+                        })
+                      }
                       className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs shadow-xs transition-all cursor-pointer"
                     >
                       <span>Register</span>
                       <ArrowRight className="w-3 h-3" />
-                    </a>
+                    </button>
                   </td>
                 </tr>
               ))}

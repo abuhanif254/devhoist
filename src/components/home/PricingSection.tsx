@@ -6,7 +6,6 @@ import { useBilling } from '@/context/BillingContext';
 import { usePortal } from '@/context/PortalContext';
 import { HOSTING_PACKAGES } from '@/config/hostingData';
 import { calculateBilling } from '@/config/constants';
-import { buildHostingOrderUrl } from '@/lib/whmcsRouter';
 import AnimatedPrice from '@/components/ui/AnimatedPrice';
 import SpotlightCard from '@/components/ui/SpotlightCard';
 import { BkashBadge, NagadBadge, StripeBadge } from '@/components/visuals/BrandLogos';
@@ -291,7 +290,7 @@ export default function PricingSection() {
             <div>
               <div className="flex items-center gap-1.5 text-xs text-blue-600 dark:text-blue-400 font-mono font-semibold uppercase tracking-wider">
                 <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                <span>Automated 3-Step WHMCS Provisioning Pipeline</span>
+                <span>Automated 3-Step Zero-Touch Provisioning Pipeline</span>
               </div>
               <h4 className="text-base font-bold text-slate-900 dark:text-white mt-1">
                 Zero Human Delays — Instant Account Delivery
@@ -311,7 +310,7 @@ export default function PricingSection() {
             </div>
             <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-950/70 border border-slate-200/80 dark:border-white/[0.06] space-y-1">
               <span className="text-emerald-600 dark:text-emerald-400 font-semibold">Step 2: Instant Webhook</span>
-              <p className="text-slate-600 dark:text-zinc-400 text-[11px] font-sans">Payment verification marks WHMCS invoice as PAID in under 2 seconds.</p>
+              <p className="text-slate-600 dark:text-zinc-400 text-[11px] font-sans">Payment verification marks your DevHost invoice as PAID in under 2 seconds.</p>
             </div>
             <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-950/70 border border-slate-200/80 dark:border-white/[0.06] space-y-1">
               <span className="text-slate-900 dark:text-white font-semibold">Step 3: Auto-Provisioning</span>

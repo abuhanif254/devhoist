@@ -4,7 +4,6 @@ import React, { useState } from 'react';
 import { Check, X, ArrowRight } from 'lucide-react';
 import { EXACT_14_POINT_MATRIX, HOSTING_PACKAGES } from '@/config/hostingData';
 import { useBilling } from '@/context/BillingContext';
-import { buildHostingOrderUrl } from '@/lib/whmcsRouter';
 
 export default function ComparisonMatrix() {
   const { currency, billingCycle, openStackBuilder } = useBilling();

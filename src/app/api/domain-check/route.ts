@@ -201,7 +201,7 @@ export async function GET(request: Request) {
       registrarConfigured: Boolean(registrarLookup?.configured),
       registrarProvider: registrarLookup?.provider || null,
       results: checks,
-      directWhmcsUrl: buildDomainOrderUrl(baseLabel, currency),
+      checkoutUrl: buildDomainOrderUrl(baseLabel, currency),
     },
     {
       headers: {

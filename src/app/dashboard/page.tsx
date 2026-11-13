@@ -207,7 +207,10 @@ export default function CustomerDashboardPage() {
     domainRedirects,
     createDomainRedirect,
     deleteDomainRedirect,
+    domainTransfers,
     initiateDomainTransfer,
+    pollDomainTransfers,
+    resubmitTransferEpp,
 
     walletBalanceBDT,
     walletTransactions,
@@ -234,7 +237,7 @@ export default function CustomerDashboardPage() {
     revokeAllOtherSessions,
   } = usePortal();
 
-  const { theme, toggleTheme } = useBilling();
+  const { theme, toggleTheme, openStackBuilder } = useBilling();
   const { language } = useLanguage();
 
   // Navigation State
@@ -471,11 +474,24 @@ export default function CustomerDashboardPage() {
 
   const handleTransferInSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!transferDomainInput.trim() || !transferEppInput.trim()) return;
-    await initiateDomainTransfer(transferDomainInput.trim(), transferEppInput.trim());
+    const dom = transferDomainInput.trim().toLowerCase();
+    const epp = transferEppInput.trim();
+    if (!dom || !epp) return;
+
+    const result = await initiateDomainTransfer(dom, epp);
     setIsTransferInModalOpen(false);
     setTransferDomainInput('');
     setTransferEppInput('');
+
+    if (result.paymentRequired) {
+      openStackBuilder({
+        orderMode: 'domain_transfer',
+        planName: `Domain Transfer: ${dom}`,
+        domainName: dom,
+        eppCode: epp,
+        domainYears: 1,
+      });
+    }
   };
 
   const filteredLogs = serverLogs.filter((log) => {
@@ -1765,6 +1781,21 @@ export default function CustomerDashboardPage() {
 
                         <button
                           type="button"
+                          onClick={() =>
+                            openStackBuilder({
+                              orderMode: 'domain_renewal',
+                              planName: `Renew ${dom.domain}`,
+                              domainName: dom.domain,
+                              domainYears: 1,
+                            })
+                          }
+                          className="px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 font-semibold hover:bg-emerald-100 transition-colors cursor-pointer"
+                        >
+                          Renew (+1 Yr)
+                        </button>
+
+                        <button
+                          type="button"
                           onClick={() => {
                             setSelectedDomainForDrawer(dom);
                             setDrawerNs1(dom.nameservers[0] || 'ns1.devhost.cloud');
@@ -1785,6 +1816,17 @@ export default function CustomerDashboardPage() {
               </div>
                 </>
               )}
+
+              {/* Live 5-Step Registrar Transfer Tracker (DB-Hydrated & Polled) */}
+              <div className="pt-2">
+                <DomainTransferTracker
+                  transfers={domainTransfers}
+                  onPollTransfers={async () => {
+                    await pollDomainTransfers();
+                  }}
+                  onResubmitEpp={resubmitTransferEpp}
+                />
+              </div>
             </div>
           )}
 

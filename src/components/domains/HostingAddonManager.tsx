@@ -32,6 +32,9 @@ export interface AddonDomainItem {
   ssl_dcv_method?: string | null;
   dcv_record_name?: string | null;
   dcv_record_value?: string | null;
+  verification_token?: string | null;
+  verification_status?: 'pending_txt' | 'verified' | 'internal_owned' | string | null;
+  verified_at?: string | null;
   created_at?: string;
 }
 
@@ -149,6 +152,7 @@ export default function HostingAddonManager({
 
   const handleVerifySsl = async (id: string) => {
     setVerifyingId(id);
+    setFormError(null);
     try {
       const res = await fetch('/api/hosting/domains', {
         method: 'PATCH',
@@ -156,12 +160,15 @@ export default function HostingAddonManager({
         body: JSON.stringify({ id, serviceId }),
       });
       const json = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
-      setToast(json.message || json.error || 'SSL status checked.');
-      setTimeout(() => setToast(null), 4000);
+      if (!res.ok) {
+        setFormError(json.error || 'Domain ownership or SSL verification pending.');
+      } else {
+        setToast(json.message || 'Verification check complete.');
+        setTimeout(() => setToast(null), 4500);
+      }
       await fetchDomains();
     } catch {
-      setToast('Failed contacting Cloudflare Edge SSL verifier.');
-      setTimeout(() => setToast(null), 3500);
+      setFormError('Failed contacting Cloudflare Edge SSL / DNS verifier.');
     } finally {
       setVerifyingId(null);
     }
@@ -400,7 +407,17 @@ export default function HostingAddonManager({
                   <div className="text-[11px] text-slate-400 mt-1">
                     DocRoot: {dom.document_root} • Runtime: {dom.runtime_engine}
                   </div>
-                  {dom.dcv_record_name && dom.dcv_record_value && dom.ssl_status !== 'active_tls13' && (
+                  {dom.verification_status === 'pending_txt' && dom.verification_token && (
+                    <div className="mt-2 p-2.5 rounded-lg bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 text-[10px] text-blue-900 dark:text-blue-200 space-y-1">
+                      <div className="font-bold">Step 1: Verify External Domain Ownership (DNS TXT Required Before Edge SSL):</div>
+                      <div>Host / Name: <code className="select-all font-semibold">_devhost-verify.{dom.hostname}</code></div>
+                      <div>TXT Value: <code className="select-all font-semibold">{dom.verification_token}</code></div>
+                    </div>
+                  )}
+                  {dom.verification_status !== 'pending_txt' &&
+                    dom.dcv_record_name &&
+                    dom.dcv_record_value &&
+                    dom.ssl_status !== 'active_tls13' && (
                     <div className="mt-2 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-[10px] text-amber-800 dark:text-amber-300 space-y-1">
                       <div className="font-bold">Cloudflare DCV Validation TXT Record Required:</div>
                       <div>Host: <code className="select-all">{dom.dcv_record_name}</code></div>
@@ -412,7 +429,9 @@ export default function HostingAddonManager({
                 <div className="flex items-center gap-2">
                   <span
                     className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold border ${
-                      dom.ssl_status === 'active_tls13'
+                      dom.verification_status === 'pending_txt'
+                        ? 'bg-blue-50 text-blue-700 border-blue-500/20'
+                        : dom.ssl_status === 'active_tls13'
                         ? 'bg-emerald-50 text-emerald-700 border-emerald-500/20'
                         : dom.ssl_status === 'failed' || dom.ssl_status === 'expired'
                         ? 'bg-rose-50 text-rose-700 border-rose-500/20'
@@ -421,7 +440,9 @@ export default function HostingAddonManager({
                   >
                     <Shield className="w-3 h-3" />
                     <span>
-                      {dom.ssl_status === 'active_tls13'
+                      {dom.verification_status === 'pending_txt'
+                        ? 'Pending TXT Ownership'
+                        : dom.ssl_status === 'active_tls13'
                         ? 'AutoSSL TLS 1.3 Active'
                         : dom.ssl_status === 'pending_validation'
                         ? 'Pending DCV Verification'
@@ -431,7 +452,7 @@ export default function HostingAddonManager({
                     </span>
                   </span>
 
-                  {dom.ssl_status !== 'active_tls13' && (
+                  {(dom.verification_status === 'pending_txt' || dom.ssl_status !== 'active_tls13') && (
                     <button
                       type="button"
                       disabled={verifyingId === dom.id}
@@ -439,7 +460,13 @@ export default function HostingAddonManager({
                       className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-[11px] font-semibold cursor-pointer"
                     >
                       <RefreshCw className={`w-3 h-3 ${verifyingId === dom.id ? 'animate-spin' : ''}`} />
-                      <span>{verifyingId === dom.id ? 'Checking...' : 'Verify SSL'}</span>
+                      <span>
+                        {verifyingId === dom.id
+                          ? 'Checking...'
+                          : dom.verification_status === 'pending_txt'
+                          ? 'Verify Domain Ownership'
+                          : 'Verify SSL'}
+                      </span>
                     </button>
                   )}
 

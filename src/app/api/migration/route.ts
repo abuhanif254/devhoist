@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
-import { WHMCS_CONFIG } from '@/config/constants';
-import { buildHostingOrderUrl } from '@/lib/whmcsRouter';
+import { buildHostingOrderUrl, buildMigrationTicketUrl } from '@/lib/whmcsRouter';
 import { checkRateLimit } from '@/lib/edgeRateLimit';
 
 const ALLOWED_PLANS = new Set([1, 2, 3]);
@@ -73,17 +72,16 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Invalid website domain format' }, { status: 400 });
     }
 
-    // Construct direct WHMCS ticket subject and migration URL
-    const ticketSubject = `Free Migration Request - ${sanitizedUrl}`;
-    const ticketUrl = `${WHMCS_CONFIG.WHMCS_URL}/submitticket.php?step=2&deptid=2&subject=${encodeURIComponent(ticketSubject)}`;
+    // Build native DevHost support desk URL for migration tracking
+    const ticketUrl = buildMigrationTicketUrl(sanitizedUrl, currentHostName);
 
-    // Build the recommended hosting order cart link
+    // Build the recommended native hosting order route
     const orderCartUrl = buildHostingOrderUrl(selectedPlanId, false, 'BDT');
 
     return NextResponse.json(
       {
         success: true,
-        message: 'Migration qualification verified. Directing to secure WHMCS ticket portal.',
+        message: 'Migration qualification verified. Directing to your native DevHost Support Desk.',
         data: {
           fullName,
           email,

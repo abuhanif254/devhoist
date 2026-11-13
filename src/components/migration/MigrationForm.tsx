@@ -68,7 +68,7 @@ export default function MigrationForm() {
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 mx-auto block animate-ping" />
             <h4 className="text-xl font-bold text-slate-900 dark:text-zinc-100">Migration Request Qualified!</h4>
             <p className="text-xs text-slate-600 dark:text-zinc-400 max-w-md mx-auto">
-              Redirecting you to our secure WHMCS Ticket Department #2 to verify your transfer safely...
+              Opening your native DevHost Support Desk to assign a Linux migration engineer safely...
             </p>
           </div>
         ) : (

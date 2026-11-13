@@ -60,11 +60,9 @@ export default function ContactPage() {
 
           {/* Contact Methods Cards */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {/* WHMCS Ticket Desk */}
+            {/* Native Support Ticket Desk */}
             <a
-              href="https://billing.yourdomain.com/submitticket.php"
-              target="_blank"
-              rel="noopener noreferrer"
+              href="/dashboard?tab=support"
               className="p-6 rounded-xl border border-blue-200 dark:border-white/20 bg-white dark:bg-zinc-950 hover:border-blue-400 dark:hover:border-white/30 transition-all space-y-3.5 shadow-sm group cursor-pointer"
             >
               <div className="flex items-center justify-between">

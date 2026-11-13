@@ -54,10 +54,10 @@ export async function POST(req: Request) {
 
     const db = getServiceSupabase();
 
-    // Prevent using wallet balance to pay a wallet top-up invoice
+    // Prevent using wallet balance to pay a wallet top-up invoice & cache fallback metadata
     const { data: precheck } = await db
       .from('invoices')
-      .select('id, order_type, user_id')
+      .select('id, order_type, user_id, items, plan_id')
       .eq('invoice_number', invoiceNumber)
       .maybeSingle();
 
@@ -136,10 +136,14 @@ export async function POST(req: Request) {
       bundled_domain_name: result.bundled_domain_name,
       referral_code: result.referral_code,
       referral_sub_id: result.referral_sub_id,
-      order_type: result.order_type || 'hosting_order',
+      order_type: result.order_type || precheck?.order_type || 'hosting_order',
       discount_bdt: Number(result.promo_discount_bdt || 0),
-      plan_id: result.plan_id,
-      items: Array.isArray(result.items) ? result.items : [],
+      plan_id: result.plan_id ?? precheck?.plan_id,
+      items: Array.isArray(result.items)
+        ? result.items
+        : Array.isArray(precheck?.items)
+        ? precheck.items
+        : [],
     };
 
     const fulfillment = await fulfillPaidInvoiceAndAffiliate({
@@ -168,11 +172,13 @@ export async function POST(req: Request) {
 
     return NextResponse.json({
       success: true,
+      kind: fulfillment.kind,
       invoiceNumber: result.invoice_number || invoiceNumber,
       trxId: result.trx_id,
       paidAmountBDT: Number(result.total_bdt || 0),
       newWalletBalanceBDT: Number(result.new_balance ?? 0),
       provision: fulfillment.provision,
+      domainOrder: fulfillment.domainOrder,
       affiliate: fulfillment.affiliate,
       message: `Paid ৳${Number(result.total_bdt || 0).toLocaleString()} BDT atomically from Cloud Wallet.`,
     });

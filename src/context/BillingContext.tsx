@@ -7,7 +7,14 @@ type Currency = 'BDT' | 'USD';
 type BillingCycle = 'monthly' | 'annually';
 type Theme = 'dark' | 'light';
 
+export type StackOrderMode =
+  | 'hosting_order'
+  | 'domain_registration'
+  | 'domain_renewal'
+  | 'domain_transfer';
+
 export interface StackBuilderConfig {
+  orderMode?: StackOrderMode;
   pid?: number;
   defaultPlanId?: number;
   planName: string;
@@ -15,6 +22,8 @@ export interface StackBuilderConfig {
   basePriceMonthlyUSD?: number;
   basePriceBDT?: number;
   basePriceUSD?: number;
+  domainYears?: number;
+  eppCode?: string;
   defaultRegion?: 'sg' | 'us';
   defaultStack?: 'nextjs_git' | 'wordpress_lscache' | 'laravel_php' | 'clean_cpanel' | string;
   selectedStackSlug?: string;

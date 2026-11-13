@@ -128,7 +128,7 @@ export default function BentoGridFeatures() {
             </div>
             <h4 className="text-sm font-bold text-slate-900 dark:text-zinc-100 mb-1.5">Instant bKash &amp; Stripe</h4>
             <p className="text-xs text-slate-600 dark:text-zinc-400 leading-relaxed mb-3 font-normal">
-              Automated WHMCS payment webhooks. Pay via personal or merchant bKash, Nagad, or credit cards with instant account activation.
+              Automated native payment webhooks. Pay via personal or merchant bKash, Nagad, Wallet, or credit cards with instant account activation.
             </p>
             <div className="flex flex-wrap gap-1.5 pt-1 font-mono text-[10px]">
               <span className="px-2 py-0.5 rounded bg-white dark:bg-zinc-800 border border-slate-200 dark:border-white/10 text-slate-700 dark:text-zinc-300 font-semibold">bKash</span>

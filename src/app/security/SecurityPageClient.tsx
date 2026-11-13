@@ -17,7 +17,6 @@ import {
   Key,
 } from 'lucide-react';
 import SecurityPerimeterVisual from '@/components/visuals/SecurityPerimeterVisual';
-import { getWhmcsSupportTicketUrl } from '@/config/whmcs';
 
 export default function SecurityPageClient() {
   const [abuseForm, setAbuseForm] = useState({

@@ -14,13 +14,12 @@ import {
 } from 'lucide-react';
 import { HOSTING_PACKAGES, HostingPlanData } from '@/config/hostingData';
 import { useBilling } from '@/context/BillingContext';
-import { buildHostingOrderUrl } from '@/lib/whmcsRouter';
 
 type ProjectType = 'wordpress' | 'custom_code' | 'ecommerce';
 type WorkloadScale = 'light' | 'moderate' | 'heavy';
 
 export default function PlanRecommenderQuiz() {
-  const { currency, billingCycle } = useBilling();
+  const { currency, billingCycle, openStackBuilder } = useBilling();
   const [step, setStep] = useState<1 | 2>(1);
   const [projectType, setProjectType] = useState<ProjectType>('custom_code');
   const [workloadScale, setWorkloadScale] = useState<WorkloadScale>('moderate');
@@ -253,16 +252,22 @@ export default function PlanRecommenderQuiz() {
                       </div>
                     </div>
 
-                    <a
-                      href={buildHostingOrderUrl(recommendation.plan.pid, isAnnual, currency)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1.5 h-10 px-5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs transition-all shadow-md shadow-blue-600/20"
+                    <button
+                      type="button"
+                      onClick={() =>
+                        openStackBuilder({
+                          pid: recommendation.plan.pid,
+                          planName: recommendation.plan.name,
+                          basePriceMonthlyBDT: recommendation.plan.baseMonthlyBDT,
+                          basePriceMonthlyUSD: Number((recommendation.plan.baseMonthlyBDT / 120).toFixed(2)),
+                        })
+                      }
+                      className="inline-flex items-center gap-1.5 h-10 px-5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs transition-all shadow-md shadow-blue-600/20 cursor-pointer"
                     >
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
                       <span>Select Plan</span>
                       <ArrowRight className="w-3.5 h-3.5" />
-                    </a>
+                    </button>
                   </div>
                 </div>
               </div>

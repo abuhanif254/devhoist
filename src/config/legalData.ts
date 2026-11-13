@@ -61,13 +61,13 @@ export const PRIVACY_POLICY_DATA = {
   dataRetention:
     'Standard HTTP server logs (IP address, user agent, timestamp) are retained for 30 days strictly for DDoS defense and security analysis before automatic purging.',
   gdprRights:
-    'Clients may export their data or request permanent account deletion at any time via the WHMCS Client Area.',
+    'Clients may export their data or request permanent account deletion at any time via the DevHost Client Dashboard.',
 };
 
 export const CONTACT_DATA = {
   ticketDesk: {
     title: '24/7 Technical Ticket Desk',
-    url: 'https://billing.yourdomain.com/submitticket.php',
+    url: '/dashboard?tab=support',
     responseTime: '< 15 minutes average response',
     desc: 'Direct escalation queue handled by senior Linux and DevOps engineers.',
   },

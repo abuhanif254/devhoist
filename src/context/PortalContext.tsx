@@ -153,11 +153,23 @@ export interface DomainItem {
 
 export interface DomainTransferRequest {
   id: string;
-  domain: string;
-  eppCode: string;
-  currentStep: 1 | 2 | 3; // 1: EPP Verified, 2: Registry Approval Pending, 3: Completed
-  status: 'Processing' | 'Completed';
-  requestDate: string;
+  domainName: string;
+  tld: string;
+  transferPriceBDT: number;
+  currentStep: number;
+  status:
+    | 'pending_payment'
+    | 'verifying_epp'
+    | 'awaiting_losing_registrar'
+    | 'completed'
+    | 'rejected_invalid_epp'
+    | 'locked_at_source';
+  statusMessage?: string;
+  eppStatus?: string | null;
+  registrarProvider?: string | null;
+  registrarTransferId?: string | null;
+  lastPolledAt?: string | null;
+  initiatedAt: string;
 }
 
 export interface InvoiceItem {
@@ -505,7 +517,15 @@ interface PortalContextType {
 
   // Domain Transfer-In
   domainTransfers: DomainTransferRequest[];
-  initiateDomainTransfer: (domain: string, eppCode: string) => Promise<boolean>;
+  initiateDomainTransfer: (
+    domain: string,
+    eppCode: string
+  ) => Promise<{ ok: boolean; paymentRequired?: boolean; error?: string }>;
+  pollDomainTransfers: () => Promise<{ ok: boolean; error?: string }>;
+  resubmitTransferEpp: (
+    transferId: string,
+    eppCode: string
+  ) => Promise<{ ok: boolean; error?: string; message?: string; currentStep?: number; status?: string }>;
 
   // Billing & Wallet
   walletBalanceBDT: number;
@@ -1043,25 +1063,74 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
 
       if (domRows && domRows.length > 0) {
         setDomains(
-          domRows.map((d: any) => ({
-            id: d.id,
-            domain: d.domain_name || d.domain,
-            expiryDate: String(d.expiry_date || '').split('T')[0],
-            daysRemaining: Math.max(
-              0,
-              Math.ceil((new Date(d.expiry_date).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
-            ),
-            status: d.status === 'active' ? 'Active' : 'Expiring Soon',
-            registrarLock: !!d.registrar_lock,
-            whoisPrivacy: !!d.whois_privacy,
-            autoRenew: !!d.auto_renew,
-            nameservers: d.nameservers || ['ns1.devhost.cloud', 'ns2.devhost.cloud'],
-            eppCode: d.epp_code || '',
-            dnsRecords: d.dns_records || [],
-          }))
+          domRows.map((d: any) => {
+            const rawStatus = String(d.status || '');
+            const normStatus =
+              rawStatus.toLowerCase() === 'active'
+                ? 'Active'
+                : rawStatus === 'Pending' || rawStatus === 'Transferring' || rawStatus === 'Grace Period'
+                ? rawStatus
+                : 'Expiring Soon';
+            return {
+              id: d.id,
+              domain: d.domain_name || d.domain,
+              expiryDate: String(d.expiry_date || '').split('T')[0],
+              daysRemaining: d.expiry_date
+                ? Math.max(
+                    0,
+                    Math.ceil((new Date(d.expiry_date).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+                  )
+                : 365,
+              status: normStatus,
+              registrarLock: !!d.registrar_lock,
+              whoisPrivacy: !!d.whois_privacy,
+              autoRenew: !!d.auto_renew,
+              nameservers: d.nameservers || ['ns1.devhost.cloud', 'ns2.devhost.cloud'],
+              eppCode: '',
+              dnsRecords: d.dns_records || [],
+              registrarProvider: d.registrar_provider || undefined,
+              registrarOrderId: d.registrar_order_id || undefined,
+              cloudflareZoneId: d.cloudflare_zone_id || undefined,
+              cloudflareZoneStatus: d.cloudflare_zone_status || undefined,
+            };
+          })
         );
       } else {
         setDomains([]);
+      }
+
+      // 3b. Hydrate inbound domain transfers directly from DB
+      try {
+        const { data: trfRows } = await supabase
+          .from('domain_transfers')
+          .select('*')
+          .eq('user_id', userId)
+          .order('initiated_at', { ascending: false });
+
+        if (Array.isArray(trfRows) && trfRows.length > 0) {
+          setDomainTransfers(
+            trfRows.map((t: Record<string, unknown>) => ({
+              id: String(t.id),
+              domainName: String(t.domain_name || ''),
+              tld: String(t.tld || '.com'),
+              transferPriceBDT: Number(t.transfer_price_bdt || 0),
+              currentStep: Number(t.current_step || 1),
+              status: (String(t.status || 'pending_payment') as DomainTransferRequest['status']),
+              statusMessage: t.status_message ? String(t.status_message) : undefined,
+              eppStatus: t.epp_status ? String(t.epp_status) : null,
+              registrarProvider: t.registrar_provider ? String(t.registrar_provider) : null,
+              registrarTransferId: t.registrar_transfer_id ? String(t.registrar_transfer_id) : null,
+              lastPolledAt: t.last_polled_at ? String(t.last_polled_at) : null,
+              initiatedAt: t.initiated_at
+                ? String(t.initiated_at).replace('T', ' ').slice(0, 16)
+                : new Date().toISOString().replace('T', ' ').slice(0, 16),
+            }))
+          );
+        } else {
+          setDomainTransfers([]);
+        }
+      } catch {
+        setDomainTransfers([]);
       }
 
       // 4. Fetch transactions
@@ -1176,6 +1245,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         setActiveRole('client');
         setServices([]);
         setDomains([]);
+        setDomainTransfers([]);
         setInvoices([]);
         setWalletBalanceBDT(0);
         syncAuthCookie(null);
@@ -2213,7 +2283,10 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const initiateDomainTransfer = async (domain: string, eppCode: string): Promise<boolean> => {
+  const initiateDomainTransfer = async (
+    domain: string,
+    eppCode: string
+  ): Promise<{ ok: boolean; paymentRequired?: boolean; error?: string }> => {
     try {
       const res = await fetch('/api/domains/manage', {
         method: 'POST',
@@ -2226,51 +2299,130 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       });
       const json = (await res.json().catch(() => ({}))) as {
         success?: boolean;
+        code?: string;
         transferId?: string;
+        transferPriceBDT?: number;
+        registrarTransferId?: string | null;
+        provider?: string | null;
         currentStep?: number;
+        status?: DomainTransferRequest['status'];
         message?: string;
         error?: string;
       };
+      if (res.status === 402 || json.code === 'PAYMENT_REQUIRED') {
+        return {
+          ok: false,
+          paymentRequired: true,
+          error: json.error || 'Paid domain transfer invoice required before registrar submission.',
+        };
+      }
       if (!res.ok || !json.success) {
         pushDomainNotification('Domain Transfer Failed', json.error || 'Registrar rejected transfer request.');
-        return false;
+        return { ok: false, error: json.error || 'Registrar rejected transfer request.' };
       }
 
+      const cleanDom = domain.trim().toLowerCase();
+      const dotIdx = cleanDom.indexOf('.');
       const newTransfer: DomainTransferRequest = {
         id: json.transferId || `tr_${Date.now()}`,
-        domain,
-        eppCode,
-        currentStep: (json.currentStep === 2 ? 2 : 1) as 1 | 2 | 3,
-        status: 'Processing',
-        requestDate: new Date().toISOString().split('T')[0],
+        domainName: cleanDom,
+        tld: dotIdx >= 0 ? cleanDom.slice(dotIdx) : '.com',
+        transferPriceBDT: Number(json.transferPriceBDT || 1350),
+        currentStep: Number(json.currentStep ?? 2),
+        status: json.status || 'verifying_epp',
+        statusMessage: json.message,
+        registrarProvider: json.provider || null,
+        registrarTransferId: json.registrarTransferId || null,
+        initiatedAt: new Date().toISOString().replace('T', ' ').slice(0, 16),
       };
       setDomainTransfers((prev) => [newTransfer, ...prev]);
 
-      setDomains((prev) => [
-        ...prev,
-        {
-          id: `dom_${Date.now()}`,
-          domain,
-          expiryDate: 'Pending Transfer (+1 Yr)',
-          daysRemaining: 365,
-          status: 'Transferring',
-          registrarLock: true,
-          whoisPrivacy: true,
-          autoRenew: true,
-          nameservers: ['ns1.devhost.cloud', 'ns2.devhost.cloud'],
-          eppCode,
-          dnsRecords: [{ id: `dns_init_${Date.now()}`, type: 'A', name: '@', content: '103.145.22.40', ttl: 300, proxied: true }],
-        },
-      ]);
-
       pushDomainNotification(
         'Domain Transfer In Initiated',
-        json.message || `Transfer for ${domain} submitted to upstream registrar.`
+        json.message || `Transfer for ${cleanDom} submitted to upstream registrar.`
       );
-      return true;
+      return { ok: true };
     } catch {
       pushDomainNotification('Domain Transfer Error', 'Network error submitting transfer request.');
-      return false;
+      return { ok: false, error: 'Network error submitting transfer request.' };
+    }
+  };
+
+  const pollDomainTransfers = async (): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const res = await fetch('/api/domains/manage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'poll_transfers' }),
+      });
+      const json = (await res.json().catch(() => ({}))) as {
+        success?: boolean;
+        transfers?: DomainTransferRequest[];
+        completed?: number;
+        error?: string;
+      };
+      if (!res.ok || !json.success) {
+        return { ok: false, error: json.error || 'Failed to sync registrar transfer statuses.' };
+      }
+      if (Array.isArray(json.transfers)) {
+        setDomainTransfers(json.transfers);
+      }
+      if ((json.completed || 0) > 0) {
+        await refreshUserData();
+      }
+      return { ok: true };
+    } catch {
+      return { ok: false, error: 'Network error while syncing transfer status.' };
+    }
+  };
+
+  const resubmitTransferEpp = async (
+    transferId: string,
+    eppCode: string
+  ): Promise<{ ok: boolean; error?: string; message?: string; currentStep?: number; status?: string }> => {
+    try {
+      const res = await fetch('/api/domains/manage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'resubmit_transfer_epp',
+          transferId,
+          eppCode,
+        }),
+      });
+      const json = (await res.json().catch(() => ({}))) as {
+        success?: boolean;
+        message?: string;
+        error?: string;
+        currentStep?: number;
+        status?: DomainTransferRequest['status'];
+        registrarTransferId?: string | null;
+      };
+      if (!res.ok || !json.success) {
+        return { ok: false, error: json.error || 'Failed to re-submit EPP code.' };
+      }
+
+      setDomainTransfers((prev) =>
+        prev.map((t) =>
+          t.id === transferId
+            ? {
+                ...t,
+                currentStep: json.currentStep ?? 2,
+                status: json.status || 'verifying_epp',
+                statusMessage: json.message,
+                registrarTransferId: json.registrarTransferId ?? t.registrarTransferId,
+              }
+            : t
+        )
+      );
+      return {
+        ok: true,
+        message: json.message,
+        currentStep: json.currentStep ?? 2,
+        status: json.status || 'verifying_epp',
+      };
+    } catch {
+      return { ok: false, error: 'Network error re-submitting EPP code.' };
     }
   };
 
@@ -3284,6 +3436,8 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
 
         domainTransfers,
         initiateDomainTransfer,
+        pollDomainTransfers,
+        resubmitTransferEpp,
 
         walletBalanceBDT,
         walletTransactions,

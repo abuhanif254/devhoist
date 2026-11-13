@@ -12,7 +12,6 @@ import {
   Cpu,
   Lock,
 } from 'lucide-react';
-import { getWhmcsSupportTicketUrl } from '@/config/whmcs';
 
 export default function Footer() {
   const currentYear = 2026;

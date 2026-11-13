@@ -6,19 +6,14 @@ import {
   X,
   Server,
   Layers,
-  Cpu,
-  HardDrive,
-  ShieldCheck,
   CheckCircle2,
   ArrowRight,
   Globe,
   Terminal,
   Zap,
   Sparkles,
-  Tag,
   CreditCard,
   Wallet,
-  Phone,
   Key,
   Lock,
   Loader2,
@@ -29,7 +24,6 @@ import {
 } from 'lucide-react';
 import { useBilling } from '@/context/BillingContext';
 import { usePortal } from '@/context/PortalContext';
-import { WHMCS_CONFIG } from '@/config/whmcs';
 import {
   UNIVERSAL_MARKETPLACE_STACKS,
   getStackBlueprintBySlug,
@@ -102,7 +96,7 @@ const PLAN_SPECS: Record<
 export default function StackBuilderDrawer() {
   const router = useRouter();
   const { isStackBuilderOpen, closeStackBuilder, stackBuilderConfig, currency } = useBilling();
-  const { walletBalanceBDT, currentUser, promoCodes } = usePortal();
+  const { walletBalanceBDT, currentUser, promoCodes, dynamicTlds, refreshUserData } = usePortal();
 
   const [region, setRegion] = useState<Region>('sg');
   const [appStack, setAppStack] = useState<AppStack>('nextjs-15-standalone');
@@ -127,8 +121,32 @@ export default function StackBuilderDrawer() {
   // Real Payment Flow State
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('bKash');
-  const [customDomainInput, setCustomDomainInput] = useState('');
+  const [domainOverride, setDomainOverride] = useState<{ cfg: unknown; value: string } | null>(null);
+  const [yearsOverride, setYearsOverride] = useState<{ cfg: unknown; value: number } | null>(null);
+  const [eppOverride, setEppOverride] = useState<{ cfg: unknown; value: string } | null>(null);
+  const [drawerFormError, setDrawerFormError] = useState<string | null>(null);
   const [paymentStep, setPaymentStep] = useState<'select' | 'manual_verification' | 'submitted'>('select');
+
+  const customDomainInput =
+    domainOverride && domainOverride.cfg === stackBuilderConfig
+      ? domainOverride.value
+      : stackBuilderConfig?.domainName || '';
+  const setCustomDomainInput = (val: string) =>
+    setDomainOverride({ cfg: stackBuilderConfig, value: val });
+
+  const domainYears =
+    yearsOverride && yearsOverride.cfg === stackBuilderConfig
+      ? yearsOverride.value
+      : stackBuilderConfig?.domainYears || 1;
+  const setDomainYears = (val: number) =>
+    setYearsOverride({ cfg: stackBuilderConfig, value: val });
+
+  const eppCodeInput =
+    eppOverride && eppOverride.cfg === stackBuilderConfig
+      ? eppOverride.value
+      : stackBuilderConfig?.eppCode || '';
+  const setEppCodeInput = (val: string) =>
+    setEppOverride({ cfg: stackBuilderConfig, value: val });
 
   // Free Domain Bundle on Annual Plans
   const [freeDomainQuery, setFreeDomainQuery] = useState('');
@@ -153,6 +171,12 @@ export default function StackBuilderDrawer() {
 
   if (!isStackBuilderOpen) return null;
 
+  const orderMode = stackBuilderConfig?.orderMode || 'hosting_order';
+  const isDomainOrder =
+    orderMode === 'domain_registration' ||
+    orderMode === 'domain_renewal' ||
+    orderMode === 'domain_transfer';
+
   const activeBlueprint =
     getStackBlueprintBySlug(appStack) || UNIVERSAL_MARKETPLACE_STACKS[0];
   const minRequiredPid =
@@ -165,13 +189,37 @@ export default function StackBuilderDrawer() {
     stackBuilderConfig?.defaultPlanId ||
     minRequiredPid;
   const pid = Math.max(rawConfigPid, Math.min(minRequiredPid, 3));
-  const planName =
+  const hostingPlanName =
     pid === 1
       ? 'Starter Pack Cloud'
       : pid === 3
       ? 'Business Max Cloud'
       : 'Developer Pro Cloud';
-  const effectiveDomain = customDomainInput.trim() || stackBuilderConfig?.domainName || 'my-new-app.com';
+  const effectiveDomain = (
+    customDomainInput.trim() ||
+    stackBuilderConfig?.domainName ||
+    (isDomainOrder ? '' : 'my-new-app.com')
+  ).toLowerCase();
+
+  const matchedTldEntry = [...dynamicTlds]
+    .sort((a, b) => b.tld.length - a.tld.length)
+    .find((item) => effectiveDomain.endsWith(item.tld.toLowerCase()));
+  const unitDomainPriceBDT = matchedTldEntry
+    ? orderMode === 'domain_renewal'
+      ? matchedTldEntry.renewalBDT
+      : orderMode === 'domain_transfer'
+      ? matchedTldEntry.transferBDT
+      : matchedTldEntry.registerBDT
+    : stackBuilderConfig?.basePriceBDT || 1350;
+  const effectiveDomainYears = orderMode === 'domain_transfer' ? 1 : Math.max(1, Math.min(3, domainYears));
+
+  const domainOrderTitle =
+    orderMode === 'domain_transfer'
+      ? `Domain Transfer: ${effectiveDomain || 'domain'}`
+      : orderMode === 'domain_renewal'
+      ? `Domain Renewal: ${effectiveDomain || 'domain'} (${effectiveDomainYears} Yr)`
+      : `Domain Registration: ${effectiveDomain || 'domain'} (${effectiveDomainYears} Yr)`;
+  const planName = isDomainOrder ? domainOrderTitle : hostingPlanName;
   const specs = PLAN_SPECS[pid] || PLAN_SPECS[2];
 
   const eligibleFreeTlds = pid === 1 ? ['.xyz', '.shop'] : ['.com', '.net', '.org', '.xyz', '.shop'];
@@ -181,7 +229,7 @@ export default function StackBuilderDrawer() {
   const baseMonthly = isBDT ? specs.monthlyBDT : specs.monthlyUSD;
 
   // Billing calculation
-  const isAnnual = cycle === 'annually';
+  const isAnnual = !isDomainOrder && cycle === 'annually';
   const annualDiscountMultiplier = 0.8; // 20% OFF
   const effectiveMonthly = isAnnual
     ? isBDT
@@ -189,15 +237,24 @@ export default function StackBuilderDrawer() {
       : Number((baseMonthly * annualDiscountMultiplier).toFixed(2))
     : baseMonthly;
 
-  const subtotal = isAnnual ? effectiveMonthly * 12 : baseMonthly;
+  const hostingSubtotal = isAnnual ? effectiveMonthly * 12 : baseMonthly;
   const discountMultiplier = promoApplied ? Math.max(0.1, 1 - appliedDiscountPercent / 100) : 1;
-  const finalTotal = promoApplied
+  const domainTotalBDT = Math.round(unitDomainPriceBDT * effectiveDomainYears);
+  const finalTotal = isDomainOrder
     ? isBDT
-      ? Math.round(subtotal * discountMultiplier)
-      : Number((subtotal * discountMultiplier).toFixed(2))
-    : subtotal;
+      ? domainTotalBDT
+      : Number((domainTotalBDT / 120).toFixed(2))
+    : promoApplied
+    ? isBDT
+      ? Math.round(hostingSubtotal * discountMultiplier)
+      : Number((hostingSubtotal * discountMultiplier).toFixed(2))
+    : hostingSubtotal;
 
-  const finalAmountBDT = isBDT ? Number(finalTotal) : Math.round(Number(finalTotal) * 120);
+  const finalAmountBDT = isDomainOrder
+    ? domainTotalBDT
+    : isBDT
+    ? Number(finalTotal)
+    : Math.round(Number(finalTotal) * 120);
 
   const handleApplyPromo = () => {
     setPromoError(null);
@@ -289,6 +346,36 @@ export default function StackBuilderDrawer() {
     setIsSubmitting(true);
     setVerificationError(null);
 
+    const checkoutPayloadBase = isDomainOrder
+      ? {
+          orderType: orderMode,
+          amountBDT: finalAmountBDT,
+          currency: 'BDT',
+          domain: effectiveDomain,
+          years: effectiveDomainYears,
+          eppCode: orderMode === 'domain_transfer' ? eppCodeInput.trim() : undefined,
+          planName,
+          userId: currentUser?.id,
+          customerEmail: currentUser?.email,
+          customerName: currentUser?.name,
+        }
+      : {
+          orderType: 'hosting_order',
+          amountBDT: finalAmountBDT,
+          currency: 'BDT',
+          domain: effectiveDomain,
+          planId: String(pid),
+          planName,
+          promoCode: promoApplied ? promoInput.trim().toUpperCase() : undefined,
+          userId: currentUser?.id,
+          customerEmail: currentUser?.email,
+          customerName: currentUser?.name,
+          billingCycle: cycle,
+          freeDomainBundleApplied: Boolean(isAnnual && claimedFreeDomain),
+          bundledDomainName: claimedFreeDomain || effectiveDomain,
+          appStack: appStack,
+        };
+
     // If User chooses Wallet Checkout
     if (paymentMethod === 'Wallet') {
       if (walletBalanceBDT < finalAmountBDT) {
@@ -300,25 +387,12 @@ export default function StackBuilderDrawer() {
       }
 
       try {
-        const activePromo = promoApplied ? promoInput.trim().toUpperCase() : undefined;
         const invRes = await fetch('/api/payments/create-session', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            amountBDT: finalAmountBDT,
-            currency: 'BDT',
+            ...checkoutPayloadBase,
             gateway: 'wallet',
-            domain: effectiveDomain,
-            planId: String(pid),
-            planName,
-            promoCode: activePromo,
-            userId: currentUser?.id,
-            customerEmail: currentUser?.email,
-            customerName: currentUser?.name,
-            billingCycle: cycle,
-            freeDomainBundleApplied: Boolean(isAnnual && claimedFreeDomain),
-            bundledDomainName: claimedFreeDomain || effectiveDomain,
-            appStack: appStack,
           }),
         });
         const invData = await invRes.json();
@@ -330,23 +404,18 @@ export default function StackBuilderDrawer() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            ...checkoutPayloadBase,
             invoiceNumber: invData.invoiceNumber,
             amountBDT: invData.amountBDT ?? finalAmountBDT,
-            domain: effectiveDomain,
-            planName,
-            planId: String(pid),
-            billingCycle: cycle,
-            freeDomainBundleApplied: Boolean(isAnnual && claimedFreeDomain),
-            bundledDomainName: claimedFreeDomain || effectiveDomain,
-            appStack: appStack,
           }),
         });
 
         const payData = await payRes.json();
         if (payRes.ok && payData.success) {
+          await refreshUserData();
           setIsPaymentModalOpen(false);
           closeStackBuilder();
-          router.push('/dashboard?tab=services&paid=1');
+          router.push(isDomainOrder ? '/dashboard?tab=domains&paid=1' : '/dashboard?tab=services&paid=1');
         } else {
           setVerificationError(payData.error || 'Wallet payment failed');
         }
@@ -360,25 +429,12 @@ export default function StackBuilderDrawer() {
 
     // If User chooses bKash / Nagad / Stripe
     try {
-      const activePromo = promoApplied ? promoInput.trim().toUpperCase() : undefined;
       const res = await fetch('/api/payments/create-session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          amountBDT: finalAmountBDT,
-          currency: 'BDT',
+          ...checkoutPayloadBase,
           gateway: paymentMethod.toLowerCase(),
-          domain: effectiveDomain,
-          planId: String(pid),
-          planName,
-          promoCode: activePromo,
-          userId: currentUser?.id,
-          customerEmail: currentUser?.email,
-          customerName: currentUser?.name,
-          billingCycle: cycle,
-          freeDomainBundleApplied: Boolean(isAnnual && claimedFreeDomain),
-          bundledDomainName: claimedFreeDomain || effectiveDomain,
-          appStack: appStack,
         }),
       });
 
@@ -476,10 +532,18 @@ export default function StackBuilderDrawer() {
               </div>
               <div>
                 <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                  Configure Your Cloud Server
+                  {orderMode === 'domain_transfer'
+                    ? 'Transfer Domain to DevHost'
+                    : orderMode === 'domain_renewal'
+                    ? 'Renew Domain Registration'
+                    : isDomainOrder
+                    ? 'Register Domain Name'
+                    : 'Configure Your Cloud Server'}
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-zinc-400">
-                  Select your datacenter node, runtime stack, and billing cycle.
+                  {isDomainOrder
+                    ? 'Includes Anycast Cloudflare DNS, DNSSEC protection & WHOIS Privacy.'
+                    : 'Select your datacenter node, runtime stack, and billing cycle.'}
                 </p>
               </div>
             </div>
@@ -493,23 +557,101 @@ export default function StackBuilderDrawer() {
 
           {/* Body */}
           <div className="p-6 overflow-y-auto space-y-6 flex-1 text-xs">
+            {drawerFormError && (
+              <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 flex items-center gap-2 font-mono">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>{drawerFormError}</span>
+              </div>
+            )}
+
             {/* Primary Domain Input */}
             <div className="space-y-1.5">
               <label className="font-semibold text-slate-800 dark:text-zinc-200">
-                Primary Domain or Subdomain
+                {isDomainOrder ? 'Target Domain Name (FQDN)' : 'Primary Domain or Subdomain'}
               </label>
               <div className="relative">
                 <Globe className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
-                  placeholder="e.g. myapp.com or staging.myapp.com"
+                  placeholder="e.g. myapp.com"
                   value={customDomainInput}
-                  onChange={(e) => setCustomDomainInput(e.target.value)}
-                  className="w-full h-10 pl-9 pr-3 rounded-xl border border-slate-300 dark:border-white/10 bg-slate-50 dark:bg-zinc-900 font-mono text-slate-900 dark:text-white"
+                  disabled={orderMode === 'domain_renewal'}
+                  onChange={(e) => {
+                    setDrawerFormError(null);
+                    setCustomDomainInput(e.target.value);
+                  }}
+                  className="w-full h-10 pl-9 pr-3 rounded-xl border border-slate-300 dark:border-white/10 bg-slate-50 dark:bg-zinc-900 font-mono text-slate-900 dark:text-white disabled:opacity-70"
                 />
               </div>
             </div>
 
+            {isDomainOrder ? (
+              <div className="space-y-4">
+                {orderMode !== 'domain_transfer' ? (
+                  <div className="space-y-2">
+                    <label className="font-semibold text-slate-800 dark:text-zinc-200">
+                      {orderMode === 'domain_renewal' ? 'Renewal Term' : 'Registration Term'}
+                    </label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {[1, 2, 3].map((yrs) => (
+                        <button
+                          key={yrs}
+                          type="button"
+                          onClick={() => setDomainYears(yrs)}
+                          className={`p-3 rounded-xl border text-center transition-all cursor-pointer ${
+                            effectiveDomainYears === yrs
+                              ? 'border-blue-600 bg-blue-50/50 dark:bg-blue-950/20 font-bold text-blue-600'
+                              : 'border-slate-200 dark:border-white/10'
+                          }`}
+                        >
+                          <div className="font-bold">
+                            {yrs} {yrs === 1 ? 'Year' : 'Years'}
+                          </div>
+                          <div className="text-[10px] font-mono text-slate-500 mt-0.5">
+                            ৳{(unitDomainPriceBDT * yrs).toLocaleString()}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    <label className="font-semibold text-slate-800 dark:text-zinc-200 flex items-center gap-1.5">
+                      <Key className="w-3.5 h-3.5 text-blue-600" />
+                      <span>EPP / Authorization Code (Required from Current Registrar)</span>
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Paste unlocked domain EPP / Auth code"
+                      value={eppCodeInput}
+                      onChange={(e) => {
+                        setDrawerFormError(null);
+                        setEppCodeInput(e.target.value);
+                      }}
+                      className="w-full h-10 px-3 rounded-xl border border-slate-300 dark:border-white/10 bg-slate-50 dark:bg-zinc-900 font-mono text-slate-900 dark:text-white"
+                    />
+                    <p className="text-[11px] text-slate-500">
+                      AES-256-GCM encrypted before storage. Includes mandatory +1 year ICANN expiry extension upon completion.
+                    </p>
+                  </div>
+                )}
+
+                <div className="p-4 rounded-xl border border-emerald-500/20 bg-emerald-50/50 dark:bg-emerald-950/20 space-y-2">
+                  <div className="flex items-center justify-between font-bold text-emerald-950 dark:text-emerald-300">
+                    <span>Authoritative TLD Checkout Summary</span>
+                    <span className="font-mono">
+                      ৳{unitDomainPriceBDT.toLocaleString()}/yr
+                    </span>
+                  </div>
+                  <ul className="space-y-1 text-[11px] text-emerald-800/90 dark:text-emerald-300/90">
+                    <li>✓ Real-time Registrar API Fulfillment after verified settlement</li>
+                    <li>✓ Zero-Cost Cloudflare Anycast DNS Zone &amp; DNSSEC auto-activated</li>
+                    <li>✓ Full Registrar Lock, WHOIS Privacy &amp; EPP self-service control</li>
+                  </ul>
+                </div>
+              </div>
+            ) : (
+              <>
             {/* Region Selection */}
             <div className="space-y-2">
               <label className="font-semibold text-slate-800 dark:text-zinc-200">
@@ -823,7 +965,8 @@ export default function StackBuilderDrawer() {
               </div>
             </div>
 
-            {/* Promo Code Input */}
+            {/* Promo Code Input (Hosting Orders Only) */}
+            {!isDomainOrder && (
             <div className="space-y-1.5">
               <div className="flex gap-2">
                 <input
@@ -848,6 +991,9 @@ export default function StackBuilderDrawer() {
                 </p>
               )}
             </div>
+            )}
+              </>
+            )}
           </div>
 
           {/* Footer Checkout Bar */}
@@ -864,6 +1010,18 @@ export default function StackBuilderDrawer() {
             <button
               type="button"
               onClick={() => {
+                if (isDomainOrder) {
+                  if (!effectiveDomain || !effectiveDomain.includes('.')) {
+                    setDrawerFormError('Please enter a valid domain name (e.g. example.com).');
+                    return;
+                  }
+                  if (orderMode === 'domain_transfer' && !eppCodeInput.trim()) {
+                    setDrawerFormError('Please paste the EPP / Authorization code from your current registrar.');
+                    return;
+                  }
+                }
+                setDrawerFormError(null);
+                setVerificationError(null);
                 setPaymentStep('select');
                 setIsPaymentModalOpen(true);
               }}
@@ -1022,28 +1180,62 @@ export default function StackBuilderDrawer() {
                     </div>
                   )}
 
-                  <button
-                    type="button"
-                    onClick={handleProceedToPayment}
-                    disabled={isSubmitting}
-                    className="w-full h-11 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-md shadow-blue-500/20 disabled:opacity-50"
-                  >
-                    {isSubmitting ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        <span>Initializing Payment...</span>
-                      </>
-                    ) : (
-                      <>
-                        <span>
-                          {paymentMethod === 'Wallet'
-                            ? `Pay ৳${finalAmountBDT} with Wallet`
-                            : 'Proceed to Payment Verification'}
-                        </span>
-                        <ArrowRight className="w-4 h-4" />
-                      </>
-                    )}
-                  </button>
+                  {!currentUser ? (
+                    <div className="p-4 rounded-xl bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 space-y-3 text-center">
+                      <p className="text-xs font-semibold text-blue-950 dark:text-blue-200">
+                        Sign in or create a free DevHost account to complete your verified checkout.
+                      </p>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nextPath = typeof window !== 'undefined' ? window.location.pathname : '/domains';
+                            setIsPaymentModalOpen(false);
+                            closeStackBuilder();
+                            router.push(`/login?next=${encodeURIComponent(nextPath)}`);
+                          }}
+                          className="h-10 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs cursor-pointer"
+                        >
+                          Sign In
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nextPath = typeof window !== 'undefined' ? window.location.pathname : '/domains';
+                            setIsPaymentModalOpen(false);
+                            closeStackBuilder();
+                            router.push(`/register?next=${encodeURIComponent(nextPath)}`);
+                          }}
+                          className="h-10 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs cursor-pointer"
+                        >
+                          Create Account
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleProceedToPayment}
+                      disabled={isSubmitting}
+                      className="w-full h-11 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-md shadow-blue-500/20 disabled:opacity-50"
+                    >
+                      {isSubmitting ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          <span>Initializing Payment...</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>
+                            {paymentMethod === 'Wallet'
+                              ? `Pay ৳${finalAmountBDT} with Wallet`
+                              : 'Proceed to Payment Verification'}
+                          </span>
+                          <ArrowRight className="w-4 h-4" />
+                        </>
+                      )}
+                    </button>
+                  )}
                 </>
               )}
 

@@ -25,7 +25,6 @@ import { EXACT_DOCS_ARTICLES, DocArticle } from '@/config/docsData';
 import { useBilling } from '@/context/BillingContext';
 import { usePortal, CloudService } from '@/context/PortalContext';
 import { HOSTING_PACKAGES } from '@/config/hostingData';
-import { buildHostingOrderUrl } from '@/lib/whmcsRouter';
 
 export interface CmsArticle {
   id: string | number;
@@ -53,7 +52,7 @@ export interface CmsArticle {
 
 export default function DocsViewer({ initialSlug }: { initialSlug?: string } = {}) {
   const searchParams = useSearchParams();
-  const { setIsCommandPaletteOpen, currency, billingCycle } = useBilling();
+  const { setIsCommandPaletteOpen, currency, billingCycle, openStackBuilder } = useBilling();
   const { services } = usePortal();
 
   // Articles & FAQs state
@@ -377,15 +376,21 @@ export default function DocsViewer({ initialSlug }: { initialSlug?: string } = {
                   Engineered with isolated CloudLinux LVE resources, LiteSpeed Enterprise &amp; Jailed SSH.
                 </p>
               </div>
-              <a
-                href={buildHostingOrderUrl(recPlan.pid, isAnnual, currency)}
-                target="_blank"
-                rel="noopener noreferrer"
+              <button
+                type="button"
+                onClick={() =>
+                  openStackBuilder({
+                    pid: recPlan.pid,
+                    planName: recPlan.name,
+                    basePriceMonthlyBDT: recPlan.baseMonthlyBDT,
+                    basePriceMonthlyUSD: Number((recPlan.baseMonthlyBDT / 120).toFixed(2)),
+                  })
+                }
                 className="w-full inline-flex items-center justify-center gap-1.5 h-8 px-3 rounded-md bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs shadow-xs transition-all cursor-pointer"
               >
                 <span>Deploy with One Click</span>
                 <ArrowRight className="w-3 h-3" />
-              </a>
+              </button>
             </div>
           </div>
         </div>

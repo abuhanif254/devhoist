@@ -130,15 +130,23 @@ export default function DomainSearchEngine({ initialQuery = '' }: { initialQuery
                     >
                       <span>Bundle + Host</span>
                     </button>
-                    <a
-                      href={r.cartUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                    <button
+                      type="button"
+                      onClick={() =>
+                        openStackBuilder({
+                          orderMode: 'domain_registration',
+                          planName: `Domain Registration: ${r.domain}`,
+                          domainName: r.domain,
+                          domainYears: 1,
+                          basePriceBDT: r.pricing.registerBDT,
+                          basePriceUSD: r.pricing.registerUSD,
+                        })
+                      }
                       className="inline-flex items-center gap-1 h-7 px-2.5 rounded-md bg-blue-600 hover:bg-blue-700 text-white font-semibold text-[11px] shadow-xs transition-all cursor-pointer"
                     >
-                      <span>Domain</span>
+                      <span>Register Domain</span>
                       <ArrowRight className="w-2.5 h-2.5" />
-                    </a>
+                    </button>
                   </div>
                 ) : (
                   <span className="text-[11px] font-mono text-slate-400 dark:text-zinc-600">Unavailable</span>

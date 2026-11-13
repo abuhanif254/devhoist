@@ -324,8 +324,7 @@ export const TLD_PRICING_LIST: TldPricing[] = [
 ];
 
 /**
- * Generate Direct WHMCS Cart URL
- * Follows the mandatory 3-Click rule to direct checkout
+ * Generate Native Internal Hosting Checkout Route
  */
 export function getWhmcsCartUrl(
   pid: number,
@@ -333,43 +332,40 @@ export function getWhmcsCartUrl(
   currency: 'BDT' | 'USD' = 'BDT',
   domain?: string
 ): string {
-  const currencyId = currency === 'BDT' ? 1 : 2;
   const billingCycle = cycle === 'annually' ? 'annually' : 'monthly';
-  let url = `${WHMCS_CONFIG.baseUrl}/cart.php?a=add&pid=${pid}&billingcycle=${billingCycle}&currency=${currencyId}`;
-  
+  let url = `/pricing?pid=${pid}&billing=${billingCycle}&currency=${currency}`;
+
   if (domain) {
-    url += `&domain=register&query=${encodeURIComponent(domain)}`;
+    url += `&domain=${encodeURIComponent(domain)}`;
   }
   return url;
 }
 
 /**
- * Generate WHMCS Domain Registration URL
+ * Generate Native Internal Domain Registration Route
  */
 export function getWhmcsDomainRegisterUrl(domain: string, currency: 'BDT' | 'USD' = 'BDT'): string {
-  const currencyId = currency === 'BDT' ? 1 : 2;
-  return `${WHMCS_CONFIG.baseUrl}/cart.php?a=add&domain=register&query=${encodeURIComponent(domain)}&currency=${currencyId}`;
+  return `/domains?q=${encodeURIComponent(domain)}&mode=register&currency=${currency}`;
 }
 
 /**
- * Generate WHMCS Domain Transfer URL
+ * Generate Native Internal Domain Transfer Route
  */
 export function getWhmcsDomainTransferUrl(domain: string): string {
-  return `${WHMCS_CONFIG.baseUrl}/cart.php?a=add&domain=transfer&query=${encodeURIComponent(domain)}`;
+  return `/dashboard?tab=domains&transfer=${encodeURIComponent(domain)}`;
 }
 
 /**
- * Common WHMCS Portal Links
+ * Native Client Portal & Support Links
  */
 export function getWhmcsClientAreaUrl(): string {
-  return `${WHMCS_CONFIG.baseUrl}/clientarea.php`;
+  return '/dashboard';
 }
 
 export function getWhmcsSupportTicketUrl(): string {
-  return `${WHMCS_CONFIG.baseUrl}/submitticket.php`;
+  return '/dashboard?tab=support';
 }
 
 export function getWhmcsMigrationUrl(platform?: string): string {
-  const customField = platform ? `&deptid=2&subject=${encodeURIComponent(`Free Migration Request (${platform})`)}` : '';
-  return `${WHMCS_CONFIG.baseUrl}/submitticket.php?step=2${customField}`;
+  return platform ? `/migration?platform=${encodeURIComponent(platform)}` : '/migration';
 }

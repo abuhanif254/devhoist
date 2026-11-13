@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { randomBytes } from 'crypto';
 import { isSupabaseConfigured, getServiceSupabase, isDevSandboxMode } from '@/lib/supabase';
 import { requireServiceAccess, serviceUnavailableResponse } from '@/lib/authGuard';
+import { scanDomainForPhishing } from '@/lib/abuseShieldEngine';
 import {
   createCloudflareCustomHostname,
   deleteCloudflareCustomHostname,
@@ -9,6 +11,8 @@ import {
   getCloudflareCustomHostnameStatus,
   isCloudflareConfigured,
   isCloudflareSaasConfigured,
+  isValidCustomHostname,
+  verifyDomainTxtRecord,
 } from '@/lib/cloudflareClient';
 
 async function logAudit(
@@ -16,7 +20,8 @@ async function logAudit(
   actionType: string,
   targetResource: string,
   metadata: Record<string, unknown>,
-  ip: string = '127.0.0.1'
+  ip: string = '127.0.0.1',
+  riskLevel: 'low' | 'medium' | 'high' = 'medium'
 ) {
   if (!isSupabaseConfigured()) return;
   try {
@@ -27,12 +32,124 @@ async function logAudit(
       action_type: actionType,
       target_resource: targetResource,
       ip_address: ip,
-      risk_level: 'medium',
+      risk_level: riskLevel,
       metadata,
     });
   } catch (err) {
     console.warn('[Audit Log Warning]:', err);
   }
+}
+
+async function resolveAllowedOriginServer(
+  db: ReturnType<typeof getServiceSupabase> | null,
+  requestedOrigin: string | null | undefined,
+  fallbackOrigin: string | null | undefined
+): Promise<{ allowed: boolean; originServer?: string; error?: string }> {
+  const cleanFallback = String(fallbackOrigin || '').trim().toLowerCase() || undefined;
+  const cleanRequested = String(requestedOrigin || '').trim().toLowerCase();
+
+  if (!cleanRequested) {
+    return { allowed: true, originServer: cleanFallback };
+  }
+
+  if (cleanFallback && cleanRequested === cleanFallback) {
+    return { allowed: true, originServer: cleanRequested };
+  }
+
+  if (db) {
+    try {
+      const { data: nodes } = await db
+        .from('whm_server_nodes')
+        .select('hostname, ip_address, is_active')
+        .eq('is_active', true);
+
+      const matched = ((nodes || []) as Array<{ hostname?: string; ip_address?: string; is_active?: boolean }>).some(
+        (n) => {
+          if (n.is_active === false) return false;
+          const h = String(n.hostname || '').trim().toLowerCase();
+          const ip = String(n.ip_address || '').trim().toLowerCase();
+          return cleanRequested === h || cleanRequested === ip;
+        }
+      );
+
+      if (matched) {
+        return { allowed: true, originServer: cleanRequested };
+      }
+    } catch {
+      // Fail closed if node lookup cannot confirm custom origin override
+    }
+  }
+
+  return {
+    allowed: false,
+    error:
+      'Arbitrary custom origin overrides are forbidden. Leave origin empty or target a verified DevHost server node.',
+  };
+}
+
+async function provisionCloudflareForDomainHost(
+  hostname: string,
+  originServer?: string
+): Promise<{
+  ok: boolean;
+  error?: string;
+  cfHostnameId: string | null;
+  sslStatus: 'pending_validation' | 'provisioning' | 'active_tls13' | 'failed' | 'expired';
+  sslDcvMethod: string;
+  dcvRecordName: string | null;
+  dcvRecordValue: string | null;
+}> {
+  let cfHostnameId: string | null = null;
+  let sslStatus: 'pending_validation' | 'provisioning' | 'active_tls13' | 'failed' | 'expired' = 'pending_validation';
+  let sslDcvMethod = 'txt';
+  let dcvRecordName: string | null = null;
+  let dcvRecordValue: string | null = null;
+
+  if (isCloudflareSaasConfigured() || isDevSandboxMode()) {
+    const cfHost = await createCloudflareCustomHostname(hostname, {
+      dcvMethod: 'txt',
+      customOriginServer: originServer,
+    });
+    if (!cfHost.ok) {
+      return {
+        ok: false,
+        error: cfHost.error || 'Failed creating Cloudflare Custom Hostname.',
+        cfHostnameId: null,
+        sslStatus: 'failed',
+        sslDcvMethod: 'txt',
+        dcvRecordName: null,
+        dcvRecordValue: null,
+      };
+    }
+    cfHostnameId = cfHost.hostnameId || null;
+    sslStatus = cfHost.sslStatus || 'pending_validation';
+    sslDcvMethod = cfHost.dcvMethod || 'txt';
+    dcvRecordName = cfHost.dcvRecordName || null;
+    dcvRecordValue = cfHost.dcvRecordValue || null;
+  } else if (isCloudflareConfigured()) {
+    const cfZone = await ensureCloudflareZone(hostname);
+    if (!cfZone.ok) {
+      return {
+        ok: false,
+        error: cfZone.error || 'Cloudflare zone setup failed.',
+        cfHostnameId: null,
+        sslStatus: 'failed',
+        sslDcvMethod: 'txt',
+        dcvRecordName: null,
+        dcvRecordValue: null,
+      };
+    }
+    sslStatus = cfZone.status === 'active' ? 'active_tls13' : 'provisioning';
+  }
+
+  return {
+    ok: true,
+    cfHostnameId,
+    sslStatus,
+    sslDcvMethod,
+    dcvRecordName,
+    dcvRecordValue,
+  };
 }
 
 /**
@@ -172,8 +289,68 @@ export async function POST(request: NextRequest) {
       return serviceUnavailableResponse('Cloudflare SaaS Edge Custom Hostnames & SSL');
     }
 
-    const cleanHost = hostname.trim().toLowerCase();
+    const cleanHost = hostname.trim().toLowerCase().replace(/\.+$/, '');
+    if (!isValidCustomHostname(cleanHost)) {
+      return NextResponse.json(
+        {
+          success: false,
+          code: 'INVALID_HOSTNAME',
+          error: `Invalid hostname format '${cleanHost}'. Provide a valid FQDN such as app.example.com.`,
+        },
+        { status: 400 }
+      );
+    }
+
+    const phishingScan = scanDomainForPhishing(cleanHost);
+    if (phishingScan.isThreat) {
+      await logAudit(
+        userId,
+        'HOSTING_DOMAIN_PHISHING_BLOCKED',
+        `hostname:${cleanHost}`,
+        {
+          serviceId,
+          riskScore: phishingScan.riskScore,
+          matchedRule: phishingScan.matchedRule,
+          matchedBrand: phishingScan.matchedBrand,
+          reason: phishingScan.reason,
+        },
+        ip,
+        'high'
+      );
+      return NextResponse.json(
+        {
+          success: false,
+          code: 'PHISHING_DOMAIN_BLOCKED',
+          error: phishingScan.reason,
+          riskScore: phishingScan.riskScore,
+          matchedRule: phishingScan.matchedRule,
+        },
+        { status: 403 }
+      );
+    }
+
     const db = isSupabaseConfigured() ? getServiceSupabase() : null;
+    const cfConfig = getCloudflareConfig();
+    const originCheck = await resolveAllowedOriginServer(db, customOriginServer, cfConfig.fallbackOrigin);
+    if (!originCheck.allowed) {
+      await logAudit(
+        userId,
+        'ORIGIN_OVERRIDE_BLOCKED',
+        `service:${serviceId}`,
+        { hostname: cleanHost, requestedOrigin: customOriginServer || null },
+        ip,
+        'high'
+      );
+      return NextResponse.json(
+        {
+          success: false,
+          code: 'ORIGIN_OVERRIDE_FORBIDDEN',
+          error: originCheck.error || 'Arbitrary custom origin overrides are blocked.',
+        },
+        { status: 400 }
+      );
+    }
+    const originServer = originCheck.originServer;
 
     if (db && domainType === 'addon_domain') {
       const { data: service } = await db
@@ -216,41 +393,102 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Provision Cloudflare SaaS Custom Hostname (Edge TLS 1.3 + HTTP/3 + DCV Validation)
-    const cfConfig = getCloudflareConfig();
-    const originServer = customOriginServer || cfConfig.fallbackOrigin || undefined;
-    let cfHostnameId: string | null = null;
-    let sslStatus: 'pending_validation' | 'provisioning' | 'active_tls13' | 'failed' | 'expired' = 'pending_validation';
-    let sslDcvMethod = 'txt';
-    let dcvRecordName: string | null = null;
-    let dcvRecordValue: string | null = null;
+    // Verify internal registrar ownership; external domains must prove ownership via DNS TXT before Cloudflare provisioning.
+    let isInternallyOwned = !db && isDevSandboxMode();
+    if (db) {
+      const { data: ownedRows } = await db
+        .from('domains')
+        .select('domain_name, status')
+        .eq('user_id', userId)
+        .eq('status', 'Active');
 
-    if (isCloudflareSaasConfigured() || isDevSandboxMode()) {
-      const cfHost = await createCloudflareCustomHostname(cleanHost, {
-        dcvMethod: 'txt',
-        customOriginServer: originServer,
+      isInternallyOwned = ((ownedRows || []) as Array<{ domain_name?: string; status?: string }>).some((d) => {
+        if (d.status && d.status !== 'Active') return false;
+        const dom = String(d.domain_name || '').trim().toLowerCase().replace(/\.+$/, '');
+        return Boolean(dom && (cleanHost === dom || cleanHost.endsWith(`.${dom}`)));
       });
-      if (!cfHost.ok) {
-        return NextResponse.json(
-          { success: false, error: cfHost.error || 'Failed creating Cloudflare Custom Hostname.' },
-          { status: 502 }
-        );
-      }
-      cfHostnameId = cfHost.hostnameId || null;
-      sslStatus = cfHost.sslStatus || 'pending_validation';
-      sslDcvMethod = cfHost.dcvMethod || 'txt';
-      dcvRecordName = cfHost.dcvRecordName || null;
-      dcvRecordValue = cfHost.dcvRecordValue || null;
-    } else if (isCloudflareConfigured()) {
-      const cfZone = await ensureCloudflareZone(cleanHost);
-      if (!cfZone.ok) {
-        return NextResponse.json(
-          { success: false, error: cfZone.error || 'Cloudflare zone setup failed.' },
-          { status: 502 }
-        );
-      }
-      sslStatus = cfZone.status === 'active' ? 'active_tls13' : 'provisioning';
     }
+
+    if (!isInternallyOwned && db) {
+      const verificationToken = `devhost-site-verification=${randomBytes(16).toString('hex')}`;
+      const verificationRecordName = `_devhost-verify.${cleanHost}`;
+      const defaultDocRoot = documentRoot || `/home/user/public_html/${cleanHost}`;
+
+      const { data, error } = await db
+        .from('hosting_addon_domains')
+        .insert({
+          service_id: serviceId,
+          user_id: userId,
+          domain_type: domainType,
+          hostname: cleanHost,
+          document_root: defaultDocRoot,
+          runtime_engine: runtimeEngine,
+          ssl_status: 'pending_validation',
+          force_https: Boolean(forceHttps),
+          cloudflare_hostname_id: null,
+          ssl_dcv_method: 'txt',
+          dcv_record_name: null,
+          dcv_record_value: null,
+          custom_origin_server: originServer || null,
+          verification_token: verificationToken,
+          verification_status: 'pending_txt',
+          verified_at: null,
+        })
+        .select('id')
+        .single();
+
+      if (error) {
+        if (error.code === '23505') {
+          return NextResponse.json(
+            { success: false, error: `Domain/Hostname '${cleanHost}' is already registered or mapped to another service.` },
+            { status: 409 }
+          );
+        }
+        return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+      }
+
+      await logAudit(
+        userId,
+        'HOSTING_DOMAIN_PENDING_TXT',
+        `service:${serviceId}`,
+        {
+          domainType,
+          hostname: cleanHost,
+          verificationRecordName,
+        },
+        ip
+      );
+
+      return NextResponse.json(
+        {
+          success: true,
+          verificationRequired: true,
+          verificationStatus: 'pending_txt',
+          id: data?.id,
+          hostname: cleanHost,
+          cloudflareHostnameId: null,
+          sslStatus: 'pending_validation',
+          verification: {
+            method: 'txt',
+            recordName: verificationRecordName,
+            recordValue: verificationToken,
+          },
+          dcv: null,
+          message: `External domain '${cleanHost}' queued. Publish TXT ${verificationRecordName} = "${verificationToken}" and click Verify Domain Ownership before Cloudflare SSL provisioning.`,
+        },
+        { status: 202 }
+      );
+    }
+
+    // Internally owned domain -> provision Cloudflare SaaS Custom Hostname / Zone immediately
+    const prov = await provisionCloudflareForDomainHost(cleanHost, originServer);
+    if (!prov.ok) {
+      return NextResponse.json(
+        { success: false, error: prov.error || 'Failed provisioning Cloudflare domain routing.' },
+        { status: 502 }
+      );
+    }
+    const { cfHostnameId, sslStatus, sslDcvMethod, dcvRecordName, dcvRecordValue } = prov;
 
     if (db) {
       const defaultDocRoot = documentRoot || `/home/user/public_html/${cleanHost}`;
@@ -270,6 +508,9 @@ export async function POST(request: NextRequest) {
           dcv_record_name: dcvRecordName,
           dcv_record_value: dcvRecordValue,
           custom_origin_server: originServer || null,
+          verification_token: null,
+          verification_status: 'internal_owned',
+          verified_at: new Date().toISOString(),
         })
         .select('id')
         .single();
@@ -290,10 +531,13 @@ export async function POST(request: NextRequest) {
         runtimeEngine,
         cloudflareHostnameId: cfHostnameId,
         sslStatus,
+        verificationStatus: 'internal_owned',
       }, ip);
 
       return NextResponse.json({
         success: true,
+        verificationRequired: false,
+        verificationStatus: 'internal_owned',
         message: dcvRecordValue
           ? `${domainType === 'addon_domain' ? 'Addon Domain' : 'Subdomain'} '${cleanHost}' mapped on Cloudflare Edge. Add TXT DCV record to complete Edge TLS 1.3.`
           : `${domainType === 'addon_domain' ? 'Addon Domain' : 'Subdomain'} '${cleanHost}' mapped and Edge SSL initiated.`,
@@ -330,6 +574,7 @@ export async function POST(request: NextRequest) {
  */
 export async function PATCH(request: NextRequest) {
   try {
+    const ip = request.headers.get('x-forwarded-for') || '127.0.0.1';
     const body = (await request.json().catch(() => ({}))) as { id?: string; serviceId?: string };
     const { id } = body;
     let serviceId = body.serviceId;
@@ -341,15 +586,27 @@ export async function PATCH(request: NextRequest) {
     const db = isSupabaseConfigured() ? getServiceSupabase() : null;
     let cfHostnameId: string | null = null;
     let hostname = '';
+    let verificationToken: string | null = null;
+    let verificationStatus: string = 'pending_txt';
+    let customOriginFromRow: string | null = null;
+
     if (db) {
       const { data: row } = await db
         .from('hosting_addon_domains')
-        .select('service_id, cloudflare_hostname_id, hostname')
+        .select('id, service_id, cloudflare_hostname_id, hostname, verification_token, verification_status, custom_origin_server')
         .eq('id', id)
         .maybeSingle();
-      if (!serviceId) serviceId = row?.service_id;
-      cfHostnameId = row?.cloudflare_hostname_id || null;
-      hostname = row?.hostname || '';
+
+      if (!row) {
+        return NextResponse.json({ success: false, error: 'Hosting domain mapping not found.' }, { status: 404 });
+      }
+
+      if (!serviceId) serviceId = row.service_id;
+      cfHostnameId = row.cloudflare_hostname_id || null;
+      hostname = String(row.hostname || '').trim().toLowerCase();
+      verificationToken = row.verification_token || null;
+      verificationStatus = row.verification_status || (cfHostnameId ? 'verified' : 'pending_txt');
+      customOriginFromRow = row.custom_origin_server || null;
     }
 
     const access = await requireServiceAccess(request, serviceId || null, 'services:write');
@@ -357,6 +614,135 @@ export async function PATCH(request: NextRequest) {
 
     if (!isSupabaseConfigured() && !isDevSandboxMode()) {
       return serviceUnavailableResponse('Hosting Domains Router');
+    }
+
+    // Step 1: Enforce external DNS TXT ownership verification before creating any Cloudflare Custom Hostname / Zone.
+    if (db && verificationStatus !== 'verified' && verificationStatus !== 'internal_owned') {
+      if (!hostname || !isValidCustomHostname(hostname)) {
+        return NextResponse.json({ success: false, error: 'Stored hostname is invalid.' }, { status: 400 });
+      }
+
+      const phishingScan = scanDomainForPhishing(hostname);
+      if (phishingScan.isThreat) {
+        return NextResponse.json(
+          {
+            success: false,
+            code: 'PHISHING_DOMAIN_BLOCKED',
+            error: phishingScan.reason,
+          },
+          { status: 403 }
+        );
+      }
+
+      if (!verificationToken) {
+        return NextResponse.json(
+          {
+            success: false,
+            code: 'VERIFICATION_TOKEN_MISSING',
+            error: 'Verification token missing for pending external domain.',
+          },
+          { status: 400 }
+        );
+      }
+
+      const recordName = `_devhost-verify.${hostname}`;
+      const txtResult = await verifyDomainTxtRecord(recordName, verificationToken);
+      if (!txtResult.verified) {
+        await logAudit(
+          access.user.id,
+          'HOSTING_DOMAIN_TXT_FAILED',
+          `domain_mapping:${id}`,
+          {
+            hostname,
+            recordName,
+            observedValues: txtResult.observedValues,
+            provider: txtResult.provider,
+          },
+          ip
+        );
+
+        return NextResponse.json(
+          {
+            success: false,
+            code: 'OWNERSHIP_TXT_MISSING',
+            verificationRequired: true,
+            verificationStatus: 'pending_txt',
+            recordName,
+            expectedValue: verificationToken,
+            observedValues: txtResult.observedValues,
+            provider: txtResult.provider,
+            error:
+              txtResult.error ||
+              `TXT ownership record not matched at ${recordName}. Expected "${verificationToken}".`,
+          },
+          { status: 422 }
+        );
+      }
+
+      if (!isCloudflareConfigured() && !isDevSandboxMode()) {
+        return serviceUnavailableResponse('Cloudflare SaaS Edge Custom Hostnames & SSL');
+      }
+
+      const cfConfig = getCloudflareConfig();
+      const originCheck = await resolveAllowedOriginServer(db, customOriginFromRow, cfConfig.fallbackOrigin);
+      if (!originCheck.allowed) {
+        return NextResponse.json(
+          {
+            success: false,
+            code: 'ORIGIN_OVERRIDE_FORBIDDEN',
+            error: originCheck.error || 'Origin server validation failed.',
+          },
+          { status: 400 }
+        );
+      }
+
+      const prov = await provisionCloudflareForDomainHost(hostname, originCheck.originServer);
+      if (!prov.ok) {
+        return NextResponse.json(
+          { success: false, error: prov.error || 'Failed creating Cloudflare Custom Hostname after TXT verification.' },
+          { status: 502 }
+        );
+      }
+
+      const verifiedAt = new Date().toISOString();
+      await db
+        .from('hosting_addon_domains')
+        .update({
+          verification_status: 'verified',
+          verified_at: verifiedAt,
+          cloudflare_hostname_id: prov.cfHostnameId,
+          ssl_status: prov.sslStatus,
+          ssl_dcv_method: prov.sslDcvMethod,
+          dcv_record_name: prov.dcvRecordName,
+          dcv_record_value: prov.dcvRecordValue,
+        })
+        .eq('id', id);
+
+      await logAudit(
+        access.user.id,
+        'HOSTING_DOMAIN_VERIFIED',
+        `domain_mapping:${id}`,
+        {
+          hostname,
+          cloudflareHostnameId: prov.cfHostnameId,
+          sslStatus: prov.sslStatus,
+          provider: txtResult.provider,
+        },
+        ip
+      );
+
+      return NextResponse.json({
+        success: true,
+        verified: true,
+        verificationRequired: false,
+        verificationStatus: 'verified',
+        cloudflareHostnameId: prov.cfHostnameId,
+        sslStatus: prov.sslStatus,
+        dcv: prov.dcvRecordName
+          ? { method: prov.sslDcvMethod, recordName: prov.dcvRecordName, recordValue: prov.dcvRecordValue }
+          : null,
+        message: `Ownership verified via ${recordName} TXT! Cloudflare Edge SSL provisioning initiated for ${hostname}.`,
+      });
     }
 
     if (!isCloudflareSaasConfigured()) {

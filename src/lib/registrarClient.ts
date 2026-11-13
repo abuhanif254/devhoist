@@ -760,6 +760,283 @@ export async function transferDomainWithRegistrar(params: {
   }
 }
 
+export type RegistrarTransferStatusValue =
+  | 'pending_payment'
+  | 'verifying_epp'
+  | 'awaiting_losing_registrar'
+  | 'completed'
+  | 'rejected_invalid_epp'
+  | 'locked_at_source';
+
+export interface RegistrarTransferStatusData {
+  currentStep: 1 | 2 | 3 | 4 | 5;
+  status: RegistrarTransferStatusValue;
+  eppStatus: string;
+  statusMessage: string;
+  completed: boolean;
+}
+
+/**
+ * Polls the wholesale registrar API (Namecheap / ResellerClub / BTCL queue)
+ * for real-time EPP & FOA transfer progress.
+ */
+export async function getDomainTransferStatusWithRegistrar(params: {
+  domain: string;
+  registrarTransferId?: string | null;
+}): Promise<RegistrarOperationResult<RegistrarTransferStatusData>> {
+  const domain = params.domain.trim().toLowerCase();
+  const transferId = params.registrarTransferId?.trim() || '';
+
+  if (isBdManualTld(domain)) {
+    return {
+      ok: true,
+      configured: true,
+      mode: 'manual_btcl_queue',
+      provider: 'btcl_manual',
+      orderId: transferId || undefined,
+      message: `BTCL manual registry review for ${domain}.`,
+      data: {
+        currentStep: 1,
+        status: 'pending_payment',
+        eppStatus: 'btcl_manual_queue',
+        statusMessage: 'Queued for manual BTCL domain registry verification.',
+        completed: false,
+      },
+    };
+  }
+
+  const cfg = getRegistrarConfig();
+  if (!cfg.configured) {
+    if (isDevSandboxMode()) {
+      return {
+        ok: true,
+        configured: false,
+        mode: 'sandbox',
+        provider: 'sandbox',
+        orderId: transferId || undefined,
+        message: `Sandbox registrar check for ${domain}: awaiting losing registrar release.`,
+        data: {
+          currentStep: 3,
+          status: 'awaiting_losing_registrar',
+          eppStatus: 'sandbox_awaiting_foa',
+          statusMessage: 'DEV_SANDBOX_MODE: Awaiting losing registrar FOA release.',
+          completed: false,
+        },
+      };
+    }
+    return unconfiguredFailure('domain transfer status lookup');
+  }
+
+  try {
+    if (cfg.provider === 'namecheap') {
+      if (!transferId) {
+        return {
+          ok: false,
+          configured: true,
+          mode: 'live',
+          provider: 'namecheap',
+          statusCode: 400,
+          message: 'Namecheap transferId is required to query transfer status.',
+          error: 'MISSING_TRANSFER_ID',
+        };
+      }
+
+      const url = new URL(getNamecheapBaseUrl(cfg.sandbox));
+      url.searchParams.set('ApiUser', cfg.apiUser);
+      url.searchParams.set('ApiKey', cfg.apiKey);
+      url.searchParams.set('UserName', cfg.apiUser);
+      url.searchParams.set('ClientIp', cfg.clientIp);
+      url.searchParams.set('Command', 'namecheap.domains.transfer.getStatus');
+      url.searchParams.set('TransferID', transferId);
+
+      const res = await fetch(url.toString(), { method: 'GET' });
+      const xml = await res.text();
+      const xmlErr = extractXmlErrors(xml);
+      if (!res.ok || xmlErr) {
+        return {
+          ok: false,
+          configured: true,
+          mode: 'live',
+          provider: 'namecheap',
+          statusCode: res.ok ? 422 : res.status,
+          message: xmlErr || 'Namecheap transfer status query failed.',
+          error: xmlErr || 'Namecheap transfer status query failed.',
+        };
+      }
+
+      const statusTag = xml.match(/<DomainTransferGetStatusResult\b[^>]*>/i)?.[0] || '';
+      const statusId = Number(parseXmlAttr(statusTag, 'StatusID') || 0);
+      const rawStatusText = parseXmlAttr(statusTag, 'Status') || '';
+      const lowerText = rawStatusText.toLowerCase();
+
+      let mapped: RegistrarTransferStatusData;
+      if (statusId === 5 || lowerText.includes('completed')) {
+        mapped = {
+          currentStep: 5,
+          status: 'completed',
+          eppStatus: `namecheap_${statusId || 5}`,
+          statusMessage: 'Registry transfer finalized. +1 year added to domain expiry.',
+          completed: true,
+        };
+      } else if (lowerText.includes('lock')) {
+        mapped = {
+          currentStep: 2,
+          status: 'locked_at_source',
+          eppStatus: `namecheap_${statusId}`,
+          statusMessage: rawStatusText || 'Domain is locked (clientTransferProhibited) at current registrar.',
+          completed: false,
+        };
+      } else if (
+        lowerText.includes('epp') ||
+        lowerText.includes('auth') ||
+        lowerText.includes('invalid') ||
+        lowerText.includes('cancelled') ||
+        lowerText.includes('denied') ||
+        lowerText.includes('rejected')
+      ) {
+        mapped = {
+          currentStep: 2,
+          status: 'rejected_invalid_epp',
+          eppStatus: `namecheap_${statusId}`,
+          statusMessage: rawStatusText || 'Losing registrar rejected EPP authorization code.',
+          completed: false,
+        };
+      } else if (statusId === 10 || statusId === 11 || lowerText.includes('registry')) {
+        mapped = {
+          currentStep: 4,
+          status: 'awaiting_losing_registrar',
+          eppStatus: `namecheap_${statusId}`,
+          statusMessage: rawStatusText || 'Registry migration and nameserver synchronization in progress.',
+          completed: false,
+        };
+      } else if (statusId === 9 || statusId === 12 || lowerText.includes('awaiting') || lowerText.includes('pending')) {
+        mapped = {
+          currentStep: 3,
+          status: 'awaiting_losing_registrar',
+          eppStatus: `namecheap_${statusId}`,
+          statusMessage: rawStatusText || 'Losing registrar notified via ICANN FOA. Awaiting release.',
+          completed: false,
+        };
+      } else {
+        mapped = {
+          currentStep: 2,
+          status: 'verifying_epp',
+          eppStatus: `namecheap_${statusId || 'pending'}`,
+          statusMessage: rawStatusText || 'Validating EPP authorization code with registry.',
+          completed: false,
+        };
+      }
+
+      return {
+        ok: true,
+        configured: true,
+        mode: 'live',
+        provider: 'namecheap',
+        orderId: transferId,
+        message: mapped.statusMessage,
+        data: mapped,
+      };
+    }
+
+    // ResellerClub / LogicBoxes transfer inspection via details-by-name & order actions
+    const detailUrl = new URL(`${getLogicBoxesBaseUrl(cfg.sandbox)}/domains/details-by-name.json`);
+    detailUrl.searchParams.set('auth-userid', cfg.apiUser);
+    detailUrl.searchParams.set('api-key', cfg.apiKey);
+    detailUrl.searchParams.set('domain-name', domain);
+    detailUrl.searchParams.set('options', 'OrderDetails');
+
+    const res = await fetch(detailUrl.toString(), { method: 'GET' });
+    const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    if (!res.ok || String(data.status || '').toUpperCase() === 'ERROR') {
+      return {
+        ok: false,
+        configured: true,
+        mode: 'live',
+        provider: 'resellerclub',
+        statusCode: res.ok ? 422 : res.status,
+        message: String(data.message || 'ResellerClub transfer status lookup failed'),
+        error: String(data.message || 'ResellerClub transfer status lookup failed'),
+      };
+    }
+
+    const rawState = String(
+      data.currentstatus || data.orderstatus || data.actionstatus || 'PendingTransfer'
+    );
+    const lower = rawState.toLowerCase();
+    let mapped: RegistrarTransferStatusData;
+
+    if (lower === 'active' || lower.includes('completed') || lower === 'transferred') {
+      mapped = {
+        currentStep: 5,
+        status: 'completed',
+        eppStatus: rawState,
+        statusMessage: 'Registry transfer finalized cleanly. +1 year added to domain expiry.',
+        completed: true,
+      };
+    } else if (lower.includes('lock')) {
+      mapped = {
+        currentStep: 2,
+        status: 'locked_at_source',
+        eppStatus: rawState,
+        statusMessage: `Transfer halted: domain locked at source (${rawState}).`,
+        completed: false,
+      };
+    } else if (lower.includes('fail') || lower.includes('reject') || lower.includes('auth') || lower.includes('secret')) {
+      mapped = {
+        currentStep: 2,
+        status: 'rejected_invalid_epp',
+        eppStatus: rawState,
+        statusMessage: `Losing registrar rejected transfer (${rawState}). Update EPP code and retry.`,
+        completed: false,
+      };
+    } else if (lower.includes('registry')) {
+      mapped = {
+        currentStep: 4,
+        status: 'awaiting_losing_registrar',
+        eppStatus: rawState,
+        statusMessage: `Registry migration in progress (${rawState}).`,
+        completed: false,
+      };
+    } else if (lower.includes('awaiting') || lower.includes('pending') || lower.includes('inprogress')) {
+      mapped = {
+        currentStep: 3,
+        status: 'awaiting_losing_registrar',
+        eppStatus: rawState,
+        statusMessage: `ICANN registrar handshake active (${rawState}).`,
+        completed: false,
+      };
+    } else {
+      mapped = {
+        currentStep: 2,
+        status: 'verifying_epp',
+        eppStatus: rawState,
+        statusMessage: `Transfer validation in progress (${rawState}).`,
+        completed: false,
+      };
+    }
+
+    return {
+      ok: true,
+      configured: true,
+      mode: 'live',
+      provider: 'resellerclub',
+      orderId: String(data.orderid || transferId || ''),
+      message: mapped.statusMessage,
+      data: mapped,
+    };
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      configured: true,
+      mode: 'live',
+      provider: cfg.provider,
+      statusCode: 502,
+      message: err instanceof Error ? err.message : 'Transfer status check error',
+      error: err instanceof Error ? err.message : 'Transfer status check error',
+    };
+  }
+}
+
 export async function setRegistrarNameservers(
   domainRaw: string,
   nameservers: string[]

@@ -742,3 +742,110 @@ export async function deleteCloudflareRedirectRule(
   );
   return { ok: del.ok, error: del.error };
 }
+
+/**
+ * Validates that a custom domain / subdomain string is a syntactically safe public hostname
+ * (rejecting IP literals, localhost, .local, .internal, path chars, and wildcards).
+ */
+export function isValidCustomHostname(rawHost: string): boolean {
+  const clean = rawHost.trim().toLowerCase();
+  if (!clean || clean.length > 253 || clean.includes('..') || clean.startsWith('*') || clean.endsWith('.')) {
+    return false;
+  }
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(clean) || clean.includes(':')) {
+    return false;
+  }
+  if (
+    clean === 'localhost' ||
+    clean.endsWith('.localhost') ||
+    clean.endsWith('.local') ||
+    clean.endsWith('.internal') ||
+    clean.endsWith('.arpa')
+  ) {
+    return false;
+  }
+  const labels = clean.split('.');
+  if (labels.length < 2) return false;
+  const labelRegex = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+  if (!labels.every((lbl) => labelRegex.test(lbl))) return false;
+  const tld = labels[labels.length - 1];
+  return tld.length >= 2 && /[a-z]/.test(tld);
+}
+
+function normalizeTxtAnswerData(raw: string): string {
+  return raw
+    .trim()
+    .replace(/^"(.*)"$/, '$1')
+    .replace(/"\s+"/g, '')
+    .trim();
+}
+
+export async function verifyDomainTxtRecord(
+  recordName: string,
+  expectedTokenValue: string
+): Promise<{
+  verified: boolean;
+  observedValues: string[];
+  provider: string;
+  error?: string;
+}> {
+  const cleanName = recordName.trim().toLowerCase().replace(/\.$/, '');
+  const expected = expectedTokenValue.trim();
+  const providers: Array<{ name: string; url: string }> = [
+    {
+      name: 'cloudflare_doh',
+      url: `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(cleanName)}&type=TXT`,
+    },
+    {
+      name: 'google_doh',
+      url: `https://dns.google/resolve?name=${encodeURIComponent(cleanName)}&type=TXT`,
+    },
+  ];
+
+  const observed: string[] = [];
+  let lastErr: string | undefined;
+
+  for (const prov of providers) {
+    try {
+      const res = await fetch(prov.url, {
+        method: 'GET',
+        headers: { Accept: 'application/dns-json' },
+      });
+      if (!res.ok) {
+        lastErr = `${prov.name} returned HTTP ${res.status}`;
+        continue;
+      }
+      const json = (await res.json().catch(() => ({}))) as {
+        Status?: number;
+        Answer?: Array<{ type?: number; data?: string }>;
+      };
+      const answers = Array.isArray(json.Answer) ? json.Answer : [];
+      for (const ans of answers) {
+        if ((ans.type === 16 || ans.type === undefined) && typeof ans.data === 'string') {
+          const val = normalizeTxtAnswerData(ans.data);
+          if (val && !observed.includes(val)) {
+            observed.push(val);
+          }
+        }
+      }
+      if (observed.includes(expected)) {
+        return {
+          verified: true,
+          observedValues: observed,
+          provider: prov.name,
+        };
+      }
+    } catch (err: unknown) {
+      lastErr = err instanceof Error ? err.message : `${prov.name} DNS query failed`;
+    }
+  }
+
+  return {
+    verified: false,
+    observedValues: observed,
+    provider: 'doh_consensus',
+    error:
+      lastErr ||
+      `TXT record "${cleanName}" did not return "${expected}".`,
+  };
+}

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Server,
   GitBranch,
@@ -8,30 +8,21 @@ import {
   Database,
   History,
   Clock,
-  Shield,
   Key,
   Plus,
   Trash2,
   Copy,
-  Check,
   RotateCcw,
   Sparkles,
-  ExternalLink,
   Eye,
   EyeOff,
   AlertTriangle,
   Play,
-  Pause,
   UploadCloud,
-  FileCode,
   CheckCircle2,
-  ChevronDown,
-  Layers,
   Cpu,
   RefreshCw,
-  HardDrive,
   X,
-  Lock,
 } from 'lucide-react';
 import { useSudoGate } from '@/components/security/SudoGateModal';
 import {
@@ -47,13 +38,90 @@ import CloudWorkspaceExpansionStudio, {
   WorkspaceExpansionTab,
 } from '@/components/hosting/CloudWorkspaceExpansionStudio';
 
+type ControlStudioActiveTab =
+  | 'overview'
+  | 'git'
+  | 'databases'
+  | 'domains_staging'
+  | 'backups'
+  | 'cron_logs';
+
+interface EnvVarItem {
+  id: string;
+  env_key: string;
+  masked_preview: string;
+  target_environment: string;
+  is_secret?: boolean;
+}
+
+interface DeploymentItem {
+  id: string;
+  commit_sha: string;
+  commit_message: string;
+  is_current_production?: boolean;
+  author_name?: string;
+  duration_seconds?: number | string;
+  artifact_size_mb?: number | string;
+  created_at: string;
+  build_logs?: string;
+}
+
+interface DatabaseItem {
+  id: string;
+  db_name: string;
+  db_engine: string;
+  db_username: string;
+  tables_count?: number;
+  size_mb?: number;
+  remote_access_ips?: string[];
+}
+
+interface BackupItem {
+  id: string;
+  snapshot_label: string;
+  scope: string;
+  size_mb: number;
+  storage_location: string;
+  created_at: string;
+}
+
+interface CronJobItem {
+  id: string;
+  job_label: string;
+  cron_expression: string;
+  command: string;
+  is_active?: boolean;
+  last_output_log?: string;
+}
+
+interface StackProvisionUiResult {
+  stack?: { name?: string };
+  runtimeVersion?: string;
+  deploymentCommitHash?: string;
+  provisionedDatabase?: {
+    engine?: string;
+    dbName?: string;
+    connectionUriMasked?: string;
+  } | null;
+  injectedEnvKeys?: Array<{ key: string }>;
+}
+
 interface HostingProjectControlStudioProps {
   serviceId: string;
   serviceDomain: string;
   cpanelUser: string;
   serverIp?: string;
-  activeTab?: 'overview' | 'git' | 'databases' | 'domains_staging' | 'backups' | 'cron_logs';
-  onTabChange?: (tab: any) => void;
+  activeTab?: ControlStudioActiveTab;
+  onTabChange?: (tab: ControlStudioActiveTab) => void;
+}
+
+function mapActiveTabToControlTab(
+  tab: ControlStudioActiveTab
+): 'settings_env' | 'deployments' | 'databases' | 'backups_cron' | 'stack_installer' | 'cloud_workspace' {
+  if (tab === 'databases') return 'databases';
+  if (tab === 'domains_staging') return 'cloud_workspace';
+  if (tab === 'backups' || tab === 'cron_logs') return 'backups_cron';
+  return 'deployments';
 }
 
 export default function HostingProjectControlStudio({
@@ -67,6 +135,7 @@ export default function HostingProjectControlStudio({
   const { requireSudo } = useSudoGate();
 
   // Navigation SubTab
+  const [prevActiveTab, setPrevActiveTab] = useState<ControlStudioActiveTab>(activeTab);
   const [currentTab, setCurrentTab] = useState<
     | 'settings_env'
     | 'deployments'
@@ -74,22 +143,30 @@ export default function HostingProjectControlStudio({
     | 'backups_cron'
     | 'stack_installer'
     | 'cloud_workspace'
-  >('deployments');
-  const [workspaceSubTab, setWorkspaceSubTab] = useState<WorkspaceExpansionTab>('files');
+  >(() => mapActiveTabToControlTab(activeTab));
+  const [workspaceSubTab, setWorkspaceSubTab] = useState<WorkspaceExpansionTab>(
+    activeTab === 'domains_staging' ? 'previews' : 'files'
+  );
   const [selectedInstallSlug, setSelectedInstallSlug] = useState<string>('nextjs-15-standalone');
   const [isInstallingStack, setIsInstallingStack] = useState<boolean>(false);
-  const [lastProvisionResult, setLastProvisionResult] = useState<any | null>(null);
+  const [lastProvisionResult, setLastProvisionResult] = useState<StackProvisionUiResult | null>(null);
 
-  // Sync with parent prop if provided
-  useEffect(() => {
-    if (activeTab === 'git') setCurrentTab('deployments');
-    else if (activeTab === 'databases') setCurrentTab('databases');
-    else if (activeTab === 'domains_staging') {
-      setCurrentTab('cloud_workspace');
-      setWorkspaceSubTab('previews');
-    } else if (activeTab === 'backups') setCurrentTab('backups_cron');
-    else if (activeTab === 'cron_logs') setCurrentTab('backups_cron');
-  }, [activeTab]);
+  // Sync with parent prop if provided without effect cascading renders
+  if (activeTab !== prevActiveTab) {
+    setPrevActiveTab(activeTab);
+    if (
+      activeTab === 'git' ||
+      activeTab === 'databases' ||
+      activeTab === 'domains_staging' ||
+      activeTab === 'backups' ||
+      activeTab === 'cron_logs'
+    ) {
+      setCurrentTab(mapActiveTabToControlTab(activeTab));
+      if (activeTab === 'domains_staging') {
+        setWorkspaceSubTab('previews');
+      }
+    }
+  }
 
   const [toast, setToast] = useState<string | null>(null);
   const showToast = (msg: string) => {
@@ -113,7 +190,7 @@ export default function HostingProjectControlStudio({
   const [redisCache, setRedisCache] = useState(true);
 
   // Env Vars
-  const [envVars, setEnvVars] = useState<any[]>([]);
+  const [envVars, setEnvVars] = useState<EnvVarItem[]>([]);
   const [revealedSecrets, setRevealedSecrets] = useState<Record<string, string>>({});
   const [newEnvKey, setNewEnvKey] = useState('');
   const [newEnvVal, setNewEnvVal] = useState('');
@@ -123,26 +200,49 @@ export default function HostingProjectControlStudio({
   const [settingsError, setSettingsError] = useState<string | null>(null);
 
   // ---------------------------------------------------------------------------
-  // TAB 2: DEPLOYMENTS & LIVE LOGS
+  // TAB 2: DEPLOYMENTS & LIVE LOGS + PHASE 5 COMPUTE RUNTIME
   // ---------------------------------------------------------------------------
-  const [deployments, setDeployments] = useState<any[]>([]);
+  const [deployments, setDeployments] = useState<DeploymentItem[]>([]);
   const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
   const [isDeploying, setIsDeploying] = useState(false);
+  const [computeRuntime, setComputeRuntime] = useState<{
+    target?: {
+      runtimeFamily?: string;
+      stackSlug?: string;
+      containerId?: string | null;
+      deploymentMode?: string | null;
+      livePreviewUrl?: string | null;
+    };
+    computePlane?: {
+      driver?: string;
+      agentConfigured?: boolean;
+      storageQueue?: { r2Mode?: string; queueMode?: string };
+    };
+    telemetry?: {
+      status?: string;
+      cpuPercent?: number;
+      ramUsedMb?: number;
+      ramLimitMb?: number;
+      httpStatus?: number;
+      source?: string;
+    } | null;
+  } | null>(null);
+  const [isComputeActionBusy, setIsComputeActionBusy] = useState(false);
 
   // ---------------------------------------------------------------------------
   // TAB 3: DATABASES & REMOTE ACCESS
   // ---------------------------------------------------------------------------
-  const [databases, setDatabases] = useState<any[]>([]);
+  const [databases, setDatabases] = useState<DatabaseItem[]>([]);
   const [newDbSuffix, setNewDbSuffix] = useState('');
   const [newDbEngine, setNewDbEngine] = useState('MySQL 8.0');
   const [newDbPassword, setNewDbPassword] = useState('');
-  const [newDbIps, setNewDbIps] = useState('103.151.102.45, 127.0.0.1');
+  const [newDbIps] = useState('103.151.102.45, 127.0.0.1');
 
   // ---------------------------------------------------------------------------
   // TAB 4: JETBACKUP & CRON JOBS
   // ---------------------------------------------------------------------------
-  const [backups, setBackups] = useState<any[]>([]);
-  const [cronJobs, setCronJobs] = useState<any[]>([]);
+  const [backups, setBackups] = useState<BackupItem[]>([]);
+  const [cronJobs, setCronJobs] = useState<CronJobItem[]>([]);
   const [newCronLabel, setNewCronLabel] = useState('');
   const [newCronExpr, setNewCronExpr] = useState('0 * * * *');
   const [newCronCmd, setNewCronCmd] = useState('');
@@ -150,7 +250,7 @@ export default function HostingProjectControlStudio({
   const [cronOutputLog, setCronOutputLog] = useState<{ id: string; log: string } | null>(null);
 
   // Load live data from Edge APIs
-  const fetchAllData = async () => {
+  const fetchAllData = useCallback(async () => {
     if (!serviceId) return;
     try {
       // 1. Fetch Project & Env
@@ -194,14 +294,33 @@ export default function HostingProjectControlStudio({
         if (Array.isArray(bcData.backups)) setBackups(bcData.backups);
         if (Array.isArray(bcData.cronJobs)) setCronJobs(bcData.cronJobs);
       }
+
+      // 5. Fetch Phase 5 Compute Plane Telemetry
+      const cmpRes = await fetch(`/api/compute?serviceId=${encodeURIComponent(serviceId)}`);
+      if (cmpRes.ok) {
+        const cmpData = await cmpRes.json();
+        if (cmpData.success) {
+          setComputeRuntime({
+            target: cmpData.target,
+            computePlane: cmpData.computePlane,
+            telemetry: cmpData.telemetry,
+          });
+        }
+      }
     } catch (err) {
       console.warn('Using baseline state for project controls:', err);
     }
-  };
+  }, [serviceId]);
 
   useEffect(() => {
-    fetchAllData();
-  }, [serviceId]);
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (!cancelled) void fetchAllData();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchAllData]);
 
   // Handle Preset Change
   const handleFrameworkChange = (presetKey: string) => {
@@ -242,8 +361,8 @@ export default function HostingProjectControlStudio({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       showToast('Project build settings updated.');
-    } catch (err: any) {
-      setSettingsError(err.message);
+    } catch (err: unknown) {
+      setSettingsError(err instanceof Error ? err.message : 'Failed to save settings');
     }
   };
 
@@ -279,8 +398,8 @@ export default function HostingProjectControlStudio({
       setNewEnvKey('');
       setNewEnvVal('');
       showToast(`Key ${newEnvKey} encrypted into AES-256 vault.`);
-    } catch (err: any) {
-      alert(err.message);
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Failed to add environment variable');
     }
   };
 
@@ -305,13 +424,13 @@ export default function HostingProjectControlStudio({
       setBulkEnvText('');
       showToast(data.message || 'Bulk environment variables imported.');
       fetchAllData();
-    } catch (err: any) {
-      alert(err.message);
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Failed to add environment variable');
     }
   };
 
   // Reveal Secret (Guarded by Sudo)
-  const handleRevealSecret = (envItem: any) => {
+  const handleRevealSecret = (envItem: EnvVarItem) => {
     if (revealedSecrets[envItem.id]) {
       setRevealedSecrets((prev) => {
         const copy = { ...prev };
@@ -362,8 +481,8 @@ export default function HostingProjectControlStudio({
       if (!res.ok) throw new Error(data.error);
       showToast('New production build deployed!');
       fetchAllData();
-    } catch (err: any) {
-      alert(err.message);
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Deployment trigger failed');
     } finally {
       setIsDeploying(false);
     }
@@ -386,10 +505,34 @@ export default function HostingProjectControlStudio({
         if (!res.ok) throw new Error(data.error);
         showToast(`Rolled back to release ${commitSha}!`);
         fetchAllData();
-      } catch (err: any) {
-        alert(err.message);
+      } catch (err: unknown) {
+        alert(err instanceof Error ? err.message : 'Rollback failed');
       }
     }, `Execute Instant Rollback to release ${commitSha}`);
+  };
+
+  // Phase 5 Compute Container Lifecycle Control
+  const handleComputeLifecycle = async (
+    action: 'restart' | 'stop' | 'start' | 'rebuild' | 'recheck_health'
+  ) => {
+    setIsComputeActionBusy(true);
+    try {
+      const res = await fetch('/api/compute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ serviceId, action }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || `Compute action ${action} failed`);
+      }
+      showToast(data.message || `Compute action '${action}' executed.`);
+      fetchAllData();
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : `Compute action ${action} failed.`);
+    } finally {
+      setIsComputeActionBusy(false);
+    }
   };
 
   // Create Database
@@ -417,8 +560,8 @@ export default function HostingProjectControlStudio({
       setNewDbSuffix('');
       setNewDbPassword('');
       fetchAllData();
-    } catch (err: any) {
-      alert(err.message);
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Database creation failed');
     }
   };
 
@@ -438,13 +581,13 @@ export default function HostingProjectControlStudio({
       if (!res.ok) throw new Error(data.error);
       showToast('DATABASE_URL encrypted & saved into .env vault!');
       fetchAllData();
-    } catch (err: any) {
-      alert(err.message);
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Failed to sync DATABASE_URL');
     }
   };
 
   // Drop Database (Guarded by Sudo)
-  const handleDropDatabase = (dbItem: any) => {
+  const handleDropDatabase = (dbItem: DatabaseItem) => {
     requireSudo(async () => {
       try {
         const res = await fetch('/api/hosting/databases', {
@@ -460,8 +603,8 @@ export default function HostingProjectControlStudio({
         if (!res.ok) throw new Error(data.error);
         showToast(`Database ${dbItem.db_name} purged.`);
         setDatabases((prev) => prev.filter((d) => d.id !== dbItem.id));
-      } catch (err: any) {
-        alert(err.message);
+      } catch (err: unknown) {
+        alert(err instanceof Error ? err.message : 'Database drop failed');
       }
     }, `Permanently DROP production database ${dbItem.db_name}`);
   };
@@ -483,13 +626,13 @@ export default function HostingProjectControlStudio({
       if (!res.ok) throw new Error(data.error);
       showToast(data.message || 'Snapshot created!');
       fetchAllData();
-    } catch (err: any) {
-      alert(err.message);
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Snapshot creation failed');
     }
   };
 
   // Restore Snapshot (Guarded by Sudo)
-  const handleRestoreSnapshot = (backupItem: any) => {
+  const handleRestoreSnapshot = (backupItem: BackupItem) => {
     requireSudo(async () => {
       try {
         const res = await fetch('/api/hosting/backups-cron', {
@@ -504,8 +647,8 @@ export default function HostingProjectControlStudio({
         const data = await res.json();
         if (!res.ok) throw new Error(data.error);
         showToast('Point-in-Time restore finalized!');
-      } catch (err: any) {
-        alert(err.message);
+      } catch (err: unknown) {
+        alert(err instanceof Error ? err.message : 'Snapshot restore failed');
       }
     }, `Authorize Point-in-Time Restore from ${backupItem.snapshot_label}`);
   };
@@ -533,13 +676,13 @@ export default function HostingProjectControlStudio({
       setNewCronLabel('');
       setNewCronCmd('');
       fetchAllData();
-    } catch (err: any) {
-      setCronError(err.message);
+    } catch (err: unknown) {
+      setCronError(err instanceof Error ? err.message : 'Cron creation failed');
     }
   };
 
   // Test Run Cron Now
-  const handleTestRunCron = async (cronItem: any) => {
+  const handleTestRunCron = async (cronItem: CronJobItem) => {
     try {
       const res = await fetch('/api/hosting/backups-cron', {
         method: 'POST',
@@ -583,8 +726,8 @@ export default function HostingProjectControlStudio({
       setLastProvisionResult(data.result);
       showToast(data.message || 'Stack provisioned and deployed!');
       fetchAllData();
-    } catch (err: any) {
-      alert(err.message || 'Stack installation failed');
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Stack installation failed');
     } finally {
       setIsInstallingStack(false);
     }
@@ -749,6 +892,61 @@ export default function HostingProjectControlStudio({
               </button>
             </div>
           </div>
+
+          {/* Phase 5 Hybrid Compute & Build Plane Status Strip */}
+          {computeRuntime && (
+            <div className="p-4 rounded-2xl bg-slate-950 text-white border border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Cpu className="w-4 h-4 text-emerald-400" />
+                  <strong className="text-xs font-bold">
+                    Compute Plane: {computeRuntime.target?.runtimeFamily || 'nodejs_passenger'}
+                  </strong>
+                  <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-[10px] font-bold">
+                    {computeRuntime.target?.deploymentMode || computeRuntime.computePlane?.driver || 'hybrid'}
+                  </span>
+                  <span className="px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 text-[10px]">
+                    R2: {computeRuntime.computePlane?.storageQueue?.r2Mode || 'n/a'} | Queue: {computeRuntime.computePlane?.storageQueue?.queueMode || 'n/a'}
+                  </span>
+                </div>
+                <div className="text-[11px] text-slate-400 flex flex-wrap items-center gap-3">
+                  <span>Container: {computeRuntime.target?.containerId || 'auto-managed'}</span>
+                  {computeRuntime.telemetry && (
+                    <span>
+                      CPU: {computeRuntime.telemetry.cpuPercent}% • RAM: {computeRuntime.telemetry.ramUsedMb}/{computeRuntime.telemetry.ramLimitMb} MB • HTTP {computeRuntime.telemetry.httpStatus}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={isComputeActionBusy}
+                  onClick={() => handleComputeLifecycle('restart')}
+                  className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-[11px] font-semibold cursor-pointer"
+                >
+                  Restart Runtime
+                </button>
+                <button
+                  type="button"
+                  disabled={isComputeActionBusy}
+                  onClick={() => handleComputeLifecycle('rebuild')}
+                  className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-[11px] font-semibold cursor-pointer"
+                >
+                  Queue Rebuild
+                </button>
+                <button
+                  type="button"
+                  disabled={isComputeActionBusy}
+                  onClick={() => handleComputeLifecycle('recheck_health')}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-[11px] font-semibold cursor-pointer"
+                >
+                  Health Probe
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Webhook Endpoint Box */}
           <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-950/60 border border-slate-200 dark:border-white/5 space-y-2">
@@ -1020,7 +1218,7 @@ export default function HostingProjectControlStudio({
               />
               <select
                 value={newEnvTarget}
-                onChange={(e) => setNewEnvTarget(e.target.value as any)}
+                onChange={(e) => setNewEnvTarget(e.target.value as 'production' | 'staging' | 'all')}
                 className="px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white"
               >
                 <option value="all">All Environments</option>
@@ -1405,7 +1603,7 @@ export default function HostingProjectControlStudio({
                 )}
                 <div className="text-[11px] text-slate-600 dark:text-zinc-400">
                   Injected {lastProvisionResult.injectedEnvKeys?.length || 0} Encrypted .ENV Keys:{' '}
-                  {lastProvisionResult.injectedEnvKeys?.map((k: any) => k.key).join(', ')}
+                  {lastProvisionResult.injectedEnvKeys?.map((k: { key: string }) => k.key).join(', ')}
                 </div>
               </div>
             )}

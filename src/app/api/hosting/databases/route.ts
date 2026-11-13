@@ -2,13 +2,21 @@ import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, getServiceSupabase, isDevSandboxMode } from '@/lib/supabase';
 import { encryptEnvValue, getMaskedPreview } from '@/lib/projectEngine';
 import { requireServiceAccess, verifySudoToken, serviceUnavailableResponse } from '@/lib/authGuard';
+import {
+  dropDatabaseOnAgent,
+  isComputeAgentConfigured,
+  provisionDatabaseOnAgent,
+  updateDatabaseRemoteIpsOnAgent,
+} from '@/lib/computeAgentClient';
+import { resolveServiceComputeTarget } from '@/lib/computeTargetResolver';
+import { whmClient } from '@/lib/whmClient';
 
 
 async function logAudit(
   actorId: string | null,
   actionType: string,
   targetResource: string,
-  metadata: Record<string, any>,
+  metadata: Record<string, unknown>,
   ip: string = '127.0.0.1',
   riskLevel: 'low' | 'medium' | 'high' | 'critical' = 'high'
 ) {
@@ -81,8 +89,11 @@ export async function GET(request: NextRequest) {
         },
       ],
     });
-  } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+  } catch (err: unknown) {
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : 'Internal server error' },
+      { status: 500 }
+    );
   }
 }
 
@@ -130,23 +141,67 @@ export async function POST(request: NextRequest) {
       return serviceUnavailableResponse('Managed Database Engine');
     }
 
+    const sandbox = isDevSandboxMode();
+    const target = await resolveServiceComputeTarget(db, access.serviceId, userId);
+    const agentConfigured = isComputeAgentConfigured(target.agentEndpoint);
+    const whmConfigured = whmClient.getStatus().configured;
+
     // 1. CREATE DATABASE & USER
     if (action === 'create_database') {
       if (!serviceId || !dbSuffix) {
         return NextResponse.json({ success: false, error: 'Service ID and database name suffix required.' }, { status: 400 });
       }
 
-      const prefix = (cpanelUser || 'user').toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (!agentConfigured && !whmConfigured && !sandbox) {
+        return serviceUnavailableResponse('Database Compute Plane');
+      }
+
+      const prefix = (cpanelUser || target.cpanelUser || 'user').toLowerCase().replace(/[^a-z0-9]/g, '');
       const cleanSuffix = dbSuffix.toLowerCase().replace(/[^a-z0-9_]/g, '');
       const fullDbName = `${prefix}_${cleanSuffix}`;
       const fullDbUser = `${prefix}_user`;
       const plainPassword = dbPassword || `P@ss_${Math.random().toString(36).substring(2, 10)}`;
 
-      // Generate connection string
-      const host = '103.151.102.45';
+      let host = '103.151.102.45';
       const port = dbEngine.includes('PostgreSQL') ? 5432 : 3306;
       const protocol = dbEngine.includes('PostgreSQL') ? 'postgresql' : 'mysql';
+
+      if (agentConfigured || sandbox) {
+        const dbAgentRes = await provisionDatabaseOnAgent(
+          {
+            serviceId: access.serviceId,
+            cpanelUser: prefix,
+            dbEngine,
+            dbName: fullDbName,
+            dbUsername: fullDbUser,
+            dbPassword: plainPassword,
+            remoteIps: remoteIps || ['127.0.0.1'],
+          },
+          target.agentEndpoint || undefined
+        );
+        if (agentConfigured && !dbAgentRes.ok) {
+          return NextResponse.json(
+            { success: false, error: dbAgentRes.error || 'Compute node refused database creation.' },
+            { status: 502 }
+          );
+        }
+        if (dbAgentRes.data?.host) {
+          host = dbAgentRes.data.host;
+        }
+      } else if (whmConfigured) {
+        const whmDbRes = await whmClient.createDatabase({
+          cpanelUser: prefix,
+          dbName: fullDbName,
+          dbUsername: fullDbUser,
+          dbPassword: plainPassword,
+        });
+        if (!whmDbRes.success) {
+          return NextResponse.json({ success: false, error: whmDbRes.message }, { status: 502 });
+        }
+      }
+
       const generatedConnStr = `${protocol}://${fullDbUser}:${plainPassword}@${host}:${port}/${fullDbName}`;
+      const encryptedHash = await encryptEnvValue(plainPassword);
 
       let newId = `db_${Date.now()}`;
       if (db) {
@@ -158,7 +213,7 @@ export async function POST(request: NextRequest) {
             db_engine: dbEngine,
             db_name: fullDbName,
             db_username: fullDbUser,
-            db_password_hash: `sha256_${plainPassword.substring(0, 4)}••••`,
+            db_password_hash: encryptedHash,
             privileges: 'ALL PRIVILEGES',
             size_mb: 0.1,
             tables_count: 0,
@@ -228,6 +283,36 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ success: false, error: 'Database ID and IP list array required.' }, { status: 400 });
       }
 
+      if (!agentConfigured && !sandbox) {
+        return serviceUnavailableResponse('Database Compute Plane');
+      }
+
+      const dbRow = db
+        ? (
+            await db
+              .from('hosting_databases')
+              .select('db_name, db_username')
+              .eq('id', databaseId)
+              .maybeSingle()
+          ).data
+        : null;
+
+      const wlRes = await updateDatabaseRemoteIpsOnAgent(
+        {
+          serviceId: access.serviceId,
+          dbName: String(dbRow?.db_name || databaseId),
+          dbUsername: String(dbRow?.db_username || target.cpanelUser),
+          remoteIps,
+        },
+        target.agentEndpoint || undefined
+      );
+      if (agentConfigured && !wlRes.ok) {
+        return NextResponse.json(
+          { success: false, error: wlRes.error || 'Failed to push database IP whitelist.' },
+          { status: 502 }
+        );
+      }
+
       if (db) {
         const { error } = await db
           .from('hosting_databases')
@@ -261,6 +346,35 @@ export async function POST(request: NextRequest) {
         }, { status: 403 });
       }
 
+      if (!agentConfigured && !sandbox) {
+        return serviceUnavailableResponse('Database Compute Plane');
+      }
+
+      const dbRow = db
+        ? (
+            await db
+              .from('hosting_databases')
+              .select('db_name, db_engine')
+              .eq('id', databaseId)
+              .maybeSingle()
+          ).data
+        : null;
+
+      const dropRes = await dropDatabaseOnAgent(
+        {
+          serviceId: access.serviceId,
+          dbName: String(dbRow?.db_name || databaseId),
+          dbEngine: String(dbRow?.db_engine || dbEngine),
+        },
+        target.agentEndpoint || undefined
+      );
+      if (agentConfigured && !dropRes.ok) {
+        return NextResponse.json(
+          { success: false, error: dropRes.error || 'Failed to drop database on compute node.' },
+          { status: 502 }
+        );
+      }
+
       if (db) {
         const { error } = await db
           .from('hosting_databases')
@@ -279,7 +393,10 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json({ success: false, error: 'Invalid action provided.' }, { status: 400 });
-  } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+  } catch (err: unknown) {
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : 'Internal server error' },
+      { status: 500 }
+    );
   }
 }

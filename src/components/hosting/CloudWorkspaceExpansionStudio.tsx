@@ -159,7 +159,13 @@ export default function CloudWorkspaceExpansionStudio({
   }, [serviceId, domain, selectedFilePath]);
 
   useEffect(() => {
-    loadFiles();
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (!cancelled) void loadFiles();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [loadFiles]);
 
   const handleSelectFile = (file: VirtualFileItem) => {
@@ -300,7 +306,13 @@ export default function CloudWorkspaceExpansionStudio({
   }, [serviceId]);
 
   useEffect(() => {
-    loadConsoleMetadata();
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (!cancelled) void loadConsoleMetadata();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [loadConsoleMetadata]);
 
   const handleRunSshCommand = async (cmdOverride?: string) => {
@@ -437,7 +449,13 @@ export default function CloudWorkspaceExpansionStudio({
   }, [serviceId, domain]);
 
   useEffect(() => {
-    loadPreviews();
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (!cancelled) void loadPreviews();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [loadPreviews]);
 
   const handleCreatePreview = async () => {
@@ -529,7 +547,13 @@ export default function CloudWorkspaceExpansionStudio({
   }, [serviceId, domain]);
 
   useEffect(() => {
-    loadEmails();
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (!cancelled) void loadEmails();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [loadEmails]);
 
   const handleCreateMailbox = async () => {
@@ -553,7 +577,11 @@ export default function CloudWorkspaceExpansionStudio({
         }),
       });
       const data = await res.json();
-      if (data.success && data.mailbox) {
+      if (!res.ok || !data.success) {
+        onNotify(data.error || 'Failed to provision mailbox.');
+        return;
+      }
+      if (data.mailbox) {
         setMailboxes((prev) => [...prev, data.mailbox]);
         setNewMailboxLocal('');
         setNewMailboxForward('');
@@ -578,10 +606,12 @@ export default function CloudWorkspaceExpansionStudio({
         }),
       });
       const data = await res.json();
-      if (data.success) {
-        setDeliverability(data.deliverability);
-        onNotify(data.message);
+      if (!res.ok || !data.success) {
+        onNotify(data.error || 'Failed to apply deliverability DNS records.');
+        return;
       }
+      setDeliverability(data.deliverability);
+      onNotify(data.message);
     } finally {
       setEmailBusy(false);
     }
@@ -599,10 +629,12 @@ export default function CloudWorkspaceExpansionStudio({
       }),
     });
     const data = await res.json();
-    if (data.success) {
-      setActiveWebmailSessionUrl(data.ssoUrl);
-      onNotify(data.message);
+    if (!res.ok || !data.success) {
+      onNotify(data.error || 'Webmail SSO session unavailable.');
+      return;
     }
+    setActiveWebmailSessionUrl(data.ssoUrl);
+    onNotify(data.message);
   };
 
   // ---------------------------------------------------------------------------
@@ -645,7 +677,13 @@ export default function CloudWorkspaceExpansionStudio({
   }, [serviceId, maxBudgetCapBdt, walletBalanceBDT]);
 
   useEffect(() => {
-    loadAutoscaler();
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (!cancelled) void loadAutoscaler();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [loadAutoscaler]);
 
   const handleSaveAutoscalerRules = async () => {

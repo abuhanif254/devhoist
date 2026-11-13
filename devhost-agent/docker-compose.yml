@@ -1,0 +1,64 @@
+services:
+  devhost-agent:
+    build: .
+    container_name: devhost-agent
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    environment:
+      AGENT_PORT: "8787"
+      WORKSPACES_ROOT: "/var/devhost/apps"
+      CADDY_SITES_DIR: "/etc/caddy/conf.d"
+      DEVHOST_COMPUTE_AGENT_SECRET: "${DEVHOST_COMPUTE_AGENT_SECRET}"
+      POSTGRES_ADMIN_URL: "postgresql://postgres:${POSTGRES_PASSWORD}@devhost-postgres:5432/postgres"
+      MYSQL_ADMIN_HOST: "devhost-mysql"
+      MYSQL_ADMIN_USER: "root"
+      MYSQL_ADMIN_PASS: "${MYSQL_ROOT_PASSWORD}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - devhost_apps:/var/devhost/apps
+      - caddy_sites:/etc/caddy/conf.d
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: devhost-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_sites:/etc/caddy/conf.d
+      - caddy_data:/data
+
+  devhost-postgres:
+    image: postgres:16-alpine
+    container_name: devhost-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+
+  devhost-mysql:
+    image: mysql:8.0
+    container_name: devhost-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD}"
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+  devhost-redis:
+    image: redis:7-alpine
+    container_name: devhost-redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+
+volumes:
+  devhost_apps:
+  caddy_sites:
+  caddy_data:
+  pg_data:
+  mysql_data:
+  redis_data:

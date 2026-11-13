@@ -43,10 +43,10 @@ export async function POST(request: NextRequest) {
       message: result.message,
       healingResult: result,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('[Self-Heal API Error]', error);
     return NextResponse.json(
-      { error: error?.message || 'Failed to execute self-healing sequence.' },
+      { error: error instanceof Error ? error.message : 'Failed to execute self-healing sequence.' },
       { status: 500 }
     );
   }

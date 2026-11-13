@@ -1,13 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, getServiceSupabase, isDevSandboxMode } from '@/lib/supabase';
 import { requireServiceAccess, serviceUnavailableResponse } from '@/lib/authGuard';
+import {
+  deployStaticEdgeRelease,
+  enqueueBuildJob,
+  isBuildQueueConfigured,
+  isR2ArtifactsConfigured,
+  putR2Artifact,
+} from '@/lib/cloudflareStorageQueue';
+import {
+  dispatchBuildAndDeploy,
+  dispatchRollbackRelease,
+  getComputeNodeConfig,
+  isComputeAgentConfigured,
+} from '@/lib/computeAgentClient';
+import { loadDecryptedEnvMap, resolveServiceComputeTarget } from '@/lib/computeTargetResolver';
 
 
 async function logAudit(
   actorId: string | null,
   actionType: string,
   targetResource: string,
-  metadata: Record<string, any>,
+  metadata: Record<string, unknown>,
   ip: string = '127.0.0.1',
   riskLevel: string = 'medium'
 ) {
@@ -99,8 +113,11 @@ export async function GET(request: NextRequest) {
         },
       ],
     });
-  } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+  } catch (err: unknown) {
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : 'Internal server error' },
+      { status: 500 }
+    );
   }
 }
 
@@ -129,27 +146,141 @@ export async function POST(request: NextRequest) {
     }
 
     const db = isSupabaseConfigured() ? getServiceSupabase() : null;
+    const sandbox = isDevSandboxMode();
+    const target = await resolveServiceComputeTarget(db, serviceId, resolvedUserId);
 
     // 1. MANUAL TRIGGER BUILD
     if (action === 'trigger_manual') {
       const commitSha = Math.random().toString(36).substring(2, 9);
-      const buildLogs = `[${new Date().toISOString()}] Initiating Manual Production Deploy...
-[00:00:01] Syncing Git workspace...
-[00:00:02] Running install_command: npm ci (cached)
-[00:00:04] Executing build_command: npm run build (Turbopack standalone)
-[00:00:06] Optimizing production static assets
-[00:00:07] Copying standalone runtime into Phusion Passenger root
-[00:00:08] Gracefully restarting Passenger worker threads
-[00:00:08] Health check passed (HTTP 200 OK) - Live production deployment active!`;
+      const releaseId = `rel_${commitSha}_${Date.now()}`;
+      const jobId = `bld_${commitSha}_${Date.now()}`;
+
+      let buildLogs = '';
+      let r2ArtifactKey: string | null = null;
+      let containerId: string | null = target.containerId;
+      let liveUrl: string = `https://${target.domain}`;
+      let buildJobId: string | null = null;
+      let deployStatus: 'live_production' | 'building' = 'live_production';
+      let durationSeconds = 3;
+
+      if (target.runtimeFamily === 'static_edge') {
+        if (!isR2ArtifactsConfigured() && !sandbox) {
+          return serviceUnavailableResponse('Cloudflare R2 Artifacts Plane');
+        }
+
+        const staticRes = await deployStaticEdgeRelease({
+          serviceId,
+          domain: target.domain,
+          stackSlug: target.stackSlug,
+          stackName: target.stackSlug,
+          releaseId,
+        });
+        if (!staticRes.ok) {
+          return NextResponse.json(
+            { success: false, error: staticRes.error || 'Static Edge deployment failed.' },
+            { status: 502 }
+          );
+        }
+
+        r2ArtifactKey = staticRes.artifactKey;
+        liveUrl = staticRes.liveUrl;
+        durationSeconds = 2;
+        buildLogs = [
+          `[${new Date().toISOString()}] Edge Static Build initialized for ${target.domain}`,
+          `[00:01.00] Uploaded ${staticRes.filesUploaded} assets (${staticRes.totalBytes} bytes) to R2 key ${staticRes.artifactKey}`,
+          `[00:01.80] Updated Edge manifest at ${staticRes.manifestKey} (Edge Router: ${staticRes.edgeRouterUrl}) — LIVE`,
+        ].join('\n');
+      } else {
+        const agentConfigured = isComputeAgentConfigured(target.agentEndpoint);
+        const queueConfigured = isBuildQueueConfigured();
+        if (!agentConfigured && !queueConfigured && !sandbox) {
+          return serviceUnavailableResponse('Compute & Build Plane');
+        }
+
+        const envVars = await loadDecryptedEnvMap(db, serviceId, 'production');
+        const nodeCfg = getComputeNodeConfig(target.agentEndpoint);
+
+        if (queueConfigured || sandbox) {
+          const qRes = await enqueueBuildJob({
+            jobId,
+            serviceId,
+            userId: resolvedUserId,
+            domain: target.domain,
+            cpanelUser: target.cpanelUser,
+            stackSlug: target.stackSlug,
+            runtimeFamily: target.runtimeFamily,
+            runtimeVersion: target.runtimeVersion,
+            triggerSource: 'manual_dashboard',
+            gitRepoUrl: target.gitRepoUrl,
+            gitBranch: target.gitBranch,
+            commitSha,
+            installCommand: target.installCommand,
+            buildCommand: target.buildCommand,
+            startupFile: target.startupFile,
+            outputDirectory: target.outputDirectory,
+            envVars,
+            ramMb: target.ramLimitMb,
+            cpuCores: target.cpuCores,
+            diskGb: target.diskLimitGb,
+            targetAgentEndpoint: target.agentEndpoint || undefined,
+            requestedAt: new Date().toISOString(),
+          });
+          if (qRes.ok) {
+            buildJobId = qRes.jobId;
+          }
+        }
+
+        if (agentConfigured || sandbox) {
+          const agentRes = await dispatchBuildAndDeploy(
+            {
+              jobId,
+              serviceId,
+              cpanelUser: target.cpanelUser,
+              domain: target.domain,
+              stackSlug: target.stackSlug,
+              runtimeFamily: target.runtimeFamily,
+              runtimeVersion: target.runtimeVersion,
+              gitRepoUrl: target.gitRepoUrl,
+              gitBranch: target.gitBranch,
+              commitSha,
+              installCommand: target.installCommand,
+              buildCommand: target.buildCommand,
+              startupFile: target.startupFile,
+              outputDirectory: target.outputDirectory,
+              envVars,
+              callbackUrl: nodeCfg.controlPlaneCallbackUrl,
+            },
+            target.agentEndpoint || undefined
+          );
+          if (!agentRes.ok) {
+            return NextResponse.json(
+              { success: false, error: agentRes.error || 'Compute agent build failed.' },
+              { status: 502 }
+            );
+          }
+
+          containerId = agentRes.data?.containerId || containerId;
+          liveUrl = agentRes.data?.liveUrl || liveUrl;
+          durationSeconds = agentRes.data?.durationSeconds || 3;
+          buildLogs = agentRes.data?.buildLogs || `[Agent] Live production deployment active on ${liveUrl}`;
+          if (agentRes.data?.queuedAsync) {
+            deployStatus = 'building';
+          }
+        } else {
+          deployStatus = 'building';
+          buildLogs = `[Queue] Enqueued build job ${jobId} into DEVHOST_BUILD_QUEUE.`;
+        }
+      }
 
       let newId = `dep_${Date.now()}`;
       if (db) {
-        // Demote previous current production releases to superseded
-        await db
-          .from('project_deployments')
-          .update({ is_current_production: false, status: 'superseded' })
-          .eq('service_id', serviceId)
-          .eq('is_current_production', true);
+        if (deployStatus === 'live_production') {
+          await db
+            .from('project_deployments')
+            .update({ is_current_production: false, status: 'superseded' })
+            .eq('service_id', serviceId)
+            .eq('is_current_production', true);
+        }
 
         const { data, error } = await db
           .from('project_deployments')
@@ -158,15 +289,19 @@ export async function POST(request: NextRequest) {
             user_id: resolvedUserId,
             commit_sha: commitSha,
             commit_message: commitMessage || 'Manual production deploy via dashboard',
-            branch: 'main',
-            author_name: 'Developer (Dashboard)',
+            branch: target.gitBranch || 'main',
+            author_name: access.user.email || 'Developer (Dashboard)',
             trigger_source: 'manual_dashboard',
-            status: 'live_production',
-            is_current_production: true,
+            status: deployStatus,
+            is_current_production: deployStatus === 'live_production',
             artifact_size_mb: 14.5,
             inodes_count: 1890,
-            duration_seconds: 2.8,
+            duration_seconds: durationSeconds,
             build_logs: buildLogs,
+            r2_artifact_key: r2ArtifactKey,
+            container_id: containerId,
+            build_job_id: buildJobId,
+            live_url: liveUrl,
           })
           .select('id')
           .single();
@@ -174,7 +309,32 @@ export async function POST(request: NextRequest) {
         if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
         if (data) newId = data.id;
 
-        // Prune older releases beyond 3 to save Reseller NVMe quota
+        if (buildJobId) {
+          try {
+            await db.from('compute_build_jobs').upsert(
+              {
+                id: buildJobId,
+                service_id: serviceId,
+                user_id: resolvedUserId,
+                runtime_family: target.runtimeFamily,
+                stack_slug: target.stackSlug,
+                git_repo_url: target.gitRepoUrl,
+                git_branch: target.gitBranch,
+                commit_sha: commitSha,
+                status: deployStatus === 'live_production' ? 'live' : 'queued',
+                container_id: containerId,
+                r2_artifact_key: r2ArtifactKey,
+                live_url: liveUrl,
+                build_logs: buildLogs,
+                completed_at: deployStatus === 'live_production' ? new Date().toISOString() : null,
+              },
+              { onConflict: 'id' }
+            );
+          } catch {
+            // Optional table during partial mocks
+          }
+        }
+
         const { data: allReleases } = await db
           .from('project_deployments')
           .select('id')
@@ -182,18 +342,21 @@ export async function POST(request: NextRequest) {
           .order('created_at', { ascending: false });
 
         if (allReleases && allReleases.length > 5) {
-          const idsToDelete = allReleases.slice(5).map((r: any) => r.id);
+          const idsToDelete = allReleases.slice(5).map((r: { id: string }) => r.id);
           await db.from('project_deployments').delete().in('id', idsToDelete);
         }
       }
 
-      await logAudit(userId, 'DEPLOYMENT_TRIGGERED', `service:${serviceId}`, { commitSha }, ip);
+      await logAudit(resolvedUserId, 'DEPLOYMENT_TRIGGERED', `service:${serviceId}`, { commitSha, buildJobId, r2ArtifactKey }, ip);
 
       return NextResponse.json({
         success: true,
-        message: 'Deployment compiled and live in production!',
+        message: 'Deployment compiled and dispatched to compute plane!',
         deploymentId: newId,
         commitSha,
+        buildJobId,
+        r2ArtifactKey,
+        liveUrl,
       });
     }
 
@@ -201,6 +364,53 @@ export async function POST(request: NextRequest) {
     if (action === 'rollback') {
       if (!targetDeploymentId) {
         return NextResponse.json({ success: false, error: 'Target deployment ID required.' }, { status: 400 });
+      }
+
+      const targetDepRow = db
+        ? (
+            await db
+              .from('project_deployments')
+              .select('id, commit_sha, r2_artifact_key')
+              .eq('id', targetDeploymentId)
+              .maybeSingle()
+          ).data
+        : null;
+
+      if (target.runtimeFamily === 'static_edge') {
+        if (!isR2ArtifactsConfigured() && !sandbox) {
+          return serviceUnavailableResponse('Cloudflare R2 Artifacts Plane');
+        }
+        const rollbackRelease = String(targetDepRow?.r2_artifact_key || '').split('/')[3] || `rel_${targetDepRow?.commit_sha || 'rollback'}`;
+        await putR2Artifact(
+          `sites/${serviceId}/current.json`,
+          JSON.stringify({
+            serviceId,
+            domain: target.domain,
+            releaseId: rollbackRelease,
+            rolledBackFromDeploymentId: targetDeploymentId,
+            publishedAt: new Date().toISOString(),
+          }),
+          'application/json'
+        );
+      } else {
+        if (!isComputeAgentConfigured(target.agentEndpoint) && !sandbox) {
+          return serviceUnavailableResponse('Compute Agent Node');
+        }
+        const rbRes = await dispatchRollbackRelease(
+          {
+            serviceId,
+            domain: target.domain,
+            releaseId: targetDeploymentId,
+            commitSha: targetDepRow?.commit_sha || undefined,
+          },
+          target.agentEndpoint || undefined
+        );
+        if (!rbRes.ok) {
+          return NextResponse.json(
+            { success: false, error: rbRes.error || 'Compute rollback failed.' },
+            { status: 502 }
+          );
+        }
       }
 
       if (db) {
@@ -223,7 +433,7 @@ export async function POST(request: NextRequest) {
         if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
       }
 
-      await logAudit(userId, 'INSTANT_ROLLBACK_EXECUTED', `service:${serviceId}`, { targetDeploymentId }, ip, 'high');
+      await logAudit(userId || resolvedUserId, 'INSTANT_ROLLBACK_EXECUTED', `service:${serviceId}`, { targetDeploymentId }, ip, 'high');
 
       return NextResponse.json({
         success: true,
@@ -232,7 +442,10 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json({ success: false, error: 'Invalid action provided.' }, { status: 400 });
-  } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+  } catch (err: unknown) {
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : 'Internal server error' },
+      { status: 500 }
+    );
   }
 }

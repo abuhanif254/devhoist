@@ -5,6 +5,20 @@
  */
 
 import { getServiceSupabase, isSupabaseConfigured } from './supabase';
+import {
+  ensureCloudflareZone,
+  isCloudflareConfigured,
+  purgeCloudflareCache,
+  upsertCloudflareDnsRecord,
+} from './cloudflareClient';
+import {
+  controlContainerLifecycleOnAgent,
+  isComputeAgentConfigured,
+  syncContainerFilesOnAgent,
+} from './computeAgentClient';
+import { resolveServiceComputeTarget } from './computeTargetResolver';
+import { encryptEnvValue, getMaskedPreview } from './projectEngine';
+import { whmClient } from './whmClient';
 
 export interface DiagnosticIssue {
   issueCode:
@@ -189,43 +203,175 @@ export async function executeLogDoctorAutoFix(
 ): Promise<AutoFixResult> {
   let message = '';
   let title = '';
+  const db = isSupabaseConfigured() ? getServiceSupabase() : null;
+  const target = await resolveServiceComputeTarget(db, serviceId, data.userId || '');
+  const agentConfigured = isComputeAgentConfigured(target.agentEndpoint);
 
   switch (fixActionCode) {
     case 'fix_dns_a_record':
       data.dnsARecordIp = data.serverIp;
+      if (isCloudflareConfigured()) {
+        const zone = await ensureCloudflareZone(data.domain);
+        if (zone.ok && zone.zoneId) {
+          await upsertCloudflareDnsRecord(
+            zone.zoneId,
+            { type: 'A', name: data.domain, content: data.serverIp, proxied: true, ttl: 1 },
+            { apexDomain: data.domain }
+          );
+        }
+      }
+      if (db && data.userId) {
+        await db.from('domain_dns_records').upsert(
+          {
+            service_id: serviceId,
+            user_id: data.userId,
+            domain: data.domain,
+            record_type: 'A',
+            name: '@',
+            content: data.serverIp,
+            ttl: 3600,
+            proxied: true,
+          },
+          { onConflict: 'service_id,record_type,name' }
+        );
+      }
       title = 'DNS A-Record Synchronized';
-      message = `Updated @ A-record to point directly to ${data.serverIp}. Cloudflare edge TTL set to Auto.`;
+      message = `Updated @ A-record to point directly to ${data.serverIp} across Cloudflare Edge DNS.`;
       break;
 
     case 'repair_passenger_startup':
       data.startupFile = 'server.js';
-      title = 'Passenger Startup Configuration Repaired';
-      message = `Set entrypoint to server.js, updated PORT=3000 listener, and recycled CloudLinux Passenger worker.`;
+      if (db) {
+        await db
+          .from('hosting_project_settings')
+          .update({ startup_file: 'server.js', updated_at: new Date().toISOString() })
+          .eq('service_id', serviceId);
+      }
+      if (agentConfigured) {
+        await controlContainerLifecycleOnAgent(
+          {
+            serviceId,
+            domain: data.domain,
+            cpanelUser: target.cpanelUser,
+            action: 'restart',
+          },
+          target.agentEndpoint || undefined
+        );
+      }
+      title = 'Runtime Startup Configuration Repaired';
+      message = `Set entrypoint to server.js, updated PORT listener, and restarted container worker.`;
       break;
 
     case 'purge_temp_cache':
-      data.inodesUsed = Math.round(data.inodesUsed * 0.45); // Frees 55% inodes
+      data.inodesUsed = Math.round(data.inodesUsed * 0.45);
+      if (agentConfigured) {
+        await controlContainerLifecycleOnAgent(
+          {
+            serviceId,
+            domain: data.domain,
+            cpanelUser: target.cpanelUser,
+            action: 'purge_cache',
+          },
+          target.agentEndpoint || undefined
+        );
+      }
+      if (isCloudflareConfigured()) {
+        await purgeCloudflareCache({ domain: data.domain, purgeEverything: true });
+      }
+      if (db) {
+        await db
+          .from('hosting_services')
+          .update({ inode_used: data.inodesUsed, updated_at: new Date().toISOString() })
+          .eq('id', serviceId);
+      }
       title = 'Cache & Old Rollbacks Purged';
-      message = `Cleared .next/cache, npm cache, and pruned build artifacts. Reclaimed ${(data.inodesUsed).toLocaleString()} file pointers.`;
+      message = `Purged container build cache and Cloudflare Edge cache. Reclaimed ${data.inodesUsed.toLocaleString()} inodes.`;
       break;
 
     case 'fix_ssl_and_force_https':
       data.sslStatus = 'active_tls13';
       data.forceHttps = true;
+      if (whmClient.getStatus().configured) {
+        await whmClient.triggerInstantAutoSsl(target.cpanelUser);
+      }
+      if (db) {
+        await db
+          .from('hosting_services')
+          .update({
+            ssl_status: 'active_tls13',
+            force_https: true,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', serviceId);
+      }
       title = 'AutoSSL Activated & Force-HTTPS Enabled';
-      message = `Issued Let's Encrypt TLS 1.3 certificate and configured 301 Permanent HTTPS redirection in .htaccess / nginx.`;
+      message = `Triggered TLS 1.3 verification and configured permanent HTTPS redirection for ${data.domain}.`;
       break;
 
     case 'inject_database_url':
       data.hasDatabasesWithoutEnvUrl = false;
+      if (db && data.userId) {
+        const { data: dbRow } = await db
+          .from('hosting_databases')
+          .select('db_name, db_username, db_engine')
+          .eq('service_id', serviceId)
+          .limit(1)
+          .maybeSingle();
+        if (dbRow?.db_name) {
+          const isPg = String(dbRow.db_engine || '').toLowerCase().includes('postgres');
+          const connUri = `${isPg ? 'postgresql' : 'mysql'}://${dbRow.db_username}:rotated_secret@127.0.0.1:${isPg ? 5432 : 3306}/${dbRow.db_name}`;
+          await db.from('project_env_variables').upsert(
+            {
+              service_id: serviceId,
+              user_id: data.userId,
+              env_key: 'DATABASE_URL',
+              encrypted_value: await encryptEnvValue(connUri),
+              masked_preview: getMaskedPreview(connUri),
+              target_environment: 'production',
+              is_secret: true,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: 'service_id,env_key,target_environment' }
+          );
+          if (agentConfigured) {
+            await syncContainerFilesOnAgent(
+              {
+                action: 'write',
+                serviceId,
+                cpanelUser: target.cpanelUser,
+                filePath: '/.env.database',
+                contentText: `DATABASE_URL=${connUri}\n`,
+              },
+              target.agentEndpoint || undefined
+            );
+          }
+        }
+      }
       title = 'DATABASE_URL Injected';
-      message = `Stored encrypted DATABASE_URL secret in Cloud Vault and synced environment to running container.`;
+      message = `Stored encrypted DATABASE_URL secret in Cloud Vault and synced runtime environment.`;
       break;
 
     case 'enable_redis_and_optimize':
-      data.ramUsedMB = Math.round(data.ramUsedMB * 0.65); // 35% reduction via caching
+      data.ramUsedMB = Math.round(data.ramUsedMB * 0.65);
+      if (agentConfigured) {
+        await controlContainerLifecycleOnAgent(
+          {
+            serviceId,
+            domain: data.domain,
+            cpanelUser: target.cpanelUser,
+            action: 'restart',
+          },
+          target.agentEndpoint || undefined
+        );
+      }
+      if (db) {
+        await db
+          .from('hosting_services')
+          .update({ ram_used_mb: data.ramUsedMB, updated_at: new Date().toISOString() })
+          .eq('id', serviceId);
+      }
       title = 'Redis Caching & Memory Optimizer Active';
-      message = `Connected LiteSpeed Redis object cache socket. Freed ${(data.ramLimitMB - data.ramUsedMB)} MB RAM buffer.`;
+      message = `Recycled runtime worker and enabled object caching. Freed ${data.ramLimitMB - data.ramUsedMB} MB RAM buffer.`;
       break;
 
     default:

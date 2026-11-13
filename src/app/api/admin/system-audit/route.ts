@@ -7,6 +7,8 @@ import { getActiveWafRules, getSecurityLockdown } from '@/lib/wafEngine';
 import { requireAdmin } from '@/lib/authGuard';
 import { getCloudflareConfig, verifyCloudflareToken } from '@/lib/cloudflareClient';
 import { getRegistrarHealthStatus } from '@/lib/registrarClient';
+import { getStorageAndQueueStatus } from '@/lib/cloudflareStorageQueue';
+import { getComputeNodeConfig, pingComputeAgent } from '@/lib/computeAgentClient';
 
 
 export interface AuditCheckResult {
@@ -488,6 +490,63 @@ export async function GET(req: NextRequest) {
       status: 'FAILED',
       latencyMs: Date.now() - tReg,
       message: `Registrar health probe failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
+    });
+  }
+
+  // =========================================================================
+  // CHECK 11: PHASE 5 COMPUTE, BUILD QUEUE & R2 ARTIFACT PLANE
+  // =========================================================================
+  const tCompute = Date.now();
+  try {
+    const storageQueue = getStorageAndQueueStatus();
+    const nodeCfg = getComputeNodeConfig();
+    const pingRes = nodeCfg.configured ? await pingComputeAgent(nodeCfg.agentUrl) : null;
+
+    const anyConfigured =
+      storageQueue.r2Configured || storageQueue.queueConfigured || nodeCfg.configured;
+    const allLiveHealthy =
+      storageQueue.r2Configured &&
+      storageQueue.queueConfigured &&
+      nodeCfg.configured &&
+      Boolean(pingRes?.ok);
+
+    checks.push({
+      id: 'compute_build_plane',
+      name: 'Phase 5 Hybrid Compute Agent, Build Queue & Cloudflare R2 Plane',
+      category: 'SYSTEM',
+      status: !anyConfigured
+        ? 'WARNING'
+        : nodeCfg.configured && !pingRes?.ok
+          ? 'FAILED'
+          : allLiveHealthy
+            ? 'PASSED'
+            : 'WARNING',
+      latencyMs: Date.now() - tCompute,
+      message: allLiveHealthy
+        ? `R2 (${storageQueue.r2Mode}), Build Queue (${storageQueue.queueMode}), and Compute Agent (${pingRes?.data?.version || 'online'}) operational.`
+        : !anyConfigured
+          ? 'Phase 5 compute agent, R2 bucket, and build queue not configured in environment.'
+          : `Partial compute plane active: R2=${storageQueue.r2Mode}, Queue=${storageQueue.queueMode}, Agent=${pingRes?.ok ? 'healthy' : nodeCfg.configured ? pingRes?.error || 'unreachable' : 'unconfigured'}.`,
+      details: {
+        driver: nodeCfg.driver,
+        agentConfigured: nodeCfg.configured,
+        agentHealthy: pingRes?.ok ?? null,
+        agentVersion: pingRes?.data?.version || null,
+        r2Configured: storageQueue.r2Configured,
+        r2Mode: storageQueue.r2Mode,
+        r2BucketName: storageQueue.r2BucketName,
+        queueConfigured: storageQueue.queueConfigured,
+        queueMode: storageQueue.queueMode,
+      },
+    });
+  } catch (err: unknown) {
+    checks.push({
+      id: 'compute_build_plane',
+      name: 'Phase 5 Hybrid Compute Agent, Build Queue & Cloudflare R2 Plane',
+      category: 'SYSTEM',
+      status: 'FAILED',
+      latencyMs: Date.now() - tCompute,
+      message: `Compute & build plane audit failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
     });
   }
 

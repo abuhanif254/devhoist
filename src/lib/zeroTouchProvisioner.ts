@@ -240,8 +240,11 @@ export async function executeZeroTouchProvisioning(
     stepsCompleted.push('Step 1: Atomic Invoice & Financial Profit Ledger Locked');
 
     // =========================================================================
-    // STEP 2 — AUTOMATED CPANEL & CLOUDLINUX CONTAINER CREATION
+    // STEP 2 — AUTOMATED CPANEL & CLOUDLINUX / HYBRID COMPUTE CONTAINER CREATION
     // =========================================================================
+    let selectedNodeAgentEndpoint: string | null = null;
+    let selectedNodeDriver: string = 'whm_cpanel';
+
     // Smart Multi-Node Bin-Packing Placement
     if (db) {
       try {
@@ -261,6 +264,8 @@ export async function executeZeroTouchProvisioning(
           const selectedNode = balancerResult.selectedNode;
           serverNodeCode = selectedNode.node_code || 'sg1';
           serverIp = selectedNode.ipv4_address || defaultIp;
+          selectedNodeAgentEndpoint = selectedNode.agent_endpoint || null;
+          selectedNodeDriver = selectedNode.node_driver || 'whm_cpanel';
           serverNameservers = [
             selectedNode.primary_nameserver || 'ns1.devhost.cloud',
             selectedNode.secondary_nameserver || 'ns2.devhost.cloud',
@@ -547,9 +552,13 @@ export async function executeZeroTouchProvisioning(
           stackSlug: targetStackSlug,
           domain: cleanDomain,
           cpanelUser,
+          agentEndpoint: selectedNodeAgentEndpoint,
+          ramMb: selectedNodeDriver === 'devhost_docker' ? 2048 : 2048,
+          cpuCores: 2,
+          diskGb: 5,
         });
         stepsCompleted.push(
-          `Step 4a: Universal Stack Blueprint Provisioned (${stackProvision.stack.name} | ${stackProvision.runtimeVersion})`
+          `Step 4a: Universal Stack Blueprint Provisioned (${stackProvision.stack.name} | ${stackProvision.runtimeVersion} | Mode: ${stackProvision.deploymentMode || 'whm_cpanel'})`
         );
       } catch (gitErr) {
         console.warn('[ZeroTouch Warning] Universal stack provisioning fallback:', gitErr);

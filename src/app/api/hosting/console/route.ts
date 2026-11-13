@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServiceSupabase } from '@/lib/supabase';
+import { getServiceSupabase, isDevSandboxMode } from '@/lib/supabase';
 import { validateCronCommand, logSecurityAudit } from '@/lib/security';
-import { requireServiceAccess } from '@/lib/authGuard';
+import { requireServiceAccess, serviceUnavailableResponse } from '@/lib/authGuard';
+import {
+  execContainerCommandOnAgent,
+  execSqlQueryOnAgent,
+  isComputeAgentConfigured,
+} from '@/lib/computeAgentClient';
+import { resolveServiceComputeTarget } from '@/lib/computeTargetResolver';
 
 export interface SqlTableSchema {
   tableName: string;
@@ -419,6 +425,10 @@ export async function GET(req: NextRequest) {
     if (!access.ok) return access.response;
 
     const supabaseAdmin = getServiceSupabase();
+    if (!supabaseAdmin && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Console Service');
+    }
+
     let logs: unknown[] = [];
 
     if (supabaseAdmin) {
@@ -454,6 +464,7 @@ export async function POST(req: NextRequest) {
       username = 'dev_container',
       consoleType,
       commandOrQuery,
+      dbName,
     } = body as {
       serviceId: string;
       userId?: string;
@@ -461,6 +472,7 @@ export async function POST(req: NextRequest) {
       username?: string;
       consoleType: 'jailed_ssh' | 'sql_runner';
       commandOrQuery: string;
+      dbName?: string;
     };
 
     if (!serviceId || !commandOrQuery || !commandOrQuery.trim()) {
@@ -475,6 +487,10 @@ export async function POST(req: NextRequest) {
     const userId = access.user.id;
 
     const supabaseAdmin = getServiceSupabase();
+    if (!supabaseAdmin && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Console Service');
+    }
+    const target = await resolveServiceComputeTarget(supabaseAdmin, serviceId, userId);
 
     if (consoleType === 'jailed_ssh') {
       const check = validateCronCommand(commandOrQuery);
@@ -510,7 +526,31 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      const result = executeJailedSshCommand(commandOrQuery, domain, username);
+      const agentConfigured = isComputeAgentConfigured(target.agentEndpoint);
+      if (!agentConfigured && !isDevSandboxMode()) {
+        return serviceUnavailableResponse('Live Compute SSH Agent');
+      }
+
+      const result = agentConfigured
+        ? await execContainerCommandOnAgent(
+            {
+              serviceId,
+              cpanelUser: target.cpanelUser || username,
+              domain: target.domain || domain,
+              command: commandOrQuery,
+            },
+            target.agentEndpoint || undefined
+          )
+        : null;
+
+      if (agentConfigured && (!result || !result.ok || !result.data)) {
+        return NextResponse.json(
+          { success: false, error: result?.error || 'Live SSH command failed on compute agent.' },
+          { status: 502 }
+        );
+      }
+
+      const execRes = result?.data || executeJailedSshCommand(commandOrQuery, domain, username);
 
       if (supabaseAdmin && userId) {
         await supabaseAdmin.from('terminal_and_sql_logs').insert({
@@ -519,16 +559,17 @@ export async function POST(req: NextRequest) {
           console_type: 'jailed_ssh',
           command_or_query: commandOrQuery,
           execution_status: 'executed',
-          output_preview: result.output.slice(0, 500),
-          execution_time_ms: result.executionTimeMs,
+          output_preview: execRes.output.slice(0, 500),
+          execution_time_ms: execRes.executionTimeMs,
         });
       }
 
       return NextResponse.json({
         success: true,
         consoleType: 'jailed_ssh',
-        output: result.output,
-        executionTimeMs: result.executionTimeMs,
+        source: agentConfigured ? 'live_agent' : 'sandbox',
+        output: execRes.output,
+        executionTimeMs: execRes.executionTimeMs,
       });
     }
 
@@ -545,7 +586,31 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const sqlResult = executeSqlRunnerQuery(commandOrQuery);
+    const agentConfiguredForSql = isComputeAgentConfigured(target.agentEndpoint);
+    if (!agentConfiguredForSql && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Live Compute SQL Agent');
+    }
+
+    const liveSqlRes = agentConfiguredForSql
+      ? await execSqlQueryOnAgent(
+          {
+            serviceId,
+            cpanelUser: target.cpanelUser || username,
+            dbName,
+            query: commandOrQuery,
+          },
+          target.agentEndpoint || undefined
+        )
+      : null;
+
+    if (agentConfiguredForSql && (!liveSqlRes || !liveSqlRes.ok || !liveSqlRes.data)) {
+      return NextResponse.json(
+        { success: false, error: liveSqlRes?.error || 'Live SQL query failed on compute agent.' },
+        { status: 502 }
+      );
+    }
+
+    const sqlResult = liveSqlRes?.data || executeSqlRunnerQuery(commandOrQuery);
 
     if (supabaseAdmin && userId) {
       await supabaseAdmin.from('terminal_and_sql_logs').insert({
@@ -562,6 +627,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true,
       consoleType: 'sql_runner',
+      source: agentConfiguredForSql ? 'live_agent' : 'sandbox',
       columns: sqlResult.columns,
       rows: sqlResult.rows,
       rowCount: sqlResult.rowCount,

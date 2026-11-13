@@ -20,6 +20,21 @@
 	"images": {
 		"binding": "IMAGES"
 	},
+	"r2_buckets": [
+		{
+			"binding": "DEVHOST_ARTIFACTS_BUCKET",
+			"bucket_name": "devhost-artifacts",
+			"preview_bucket_name": "devhost-artifacts-preview"
+		}
+	],
+	"queues": {
+		"producers": [
+			{
+				"binding": "DEVHOST_BUILD_QUEUE",
+				"queue": "devhost-build-queue"
+			}
+		]
+	},
 	"vars": {
 		"NEXT_PUBLIC_SUPABASE_URL": "https://senlgfzhomodiyhnclfg.supabase.co",
 		"NEXT_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_6gzAgaJBxEW53W7hfUhA4Q_v1A3ZX_I",

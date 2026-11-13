@@ -4,8 +4,10 @@ import {
   executeLogDoctorAutoFix,
   ServiceDiagnosticInput,
 } from '@/lib/logDoctorEngine';
-import { getServiceSupabase, isSupabaseConfigured } from '@/lib/supabase';
-import { requireServiceAccess } from '@/lib/authGuard';
+import { getServiceSupabase, isDevSandboxMode, isSupabaseConfigured } from '@/lib/supabase';
+import { requireServiceAccess, serviceUnavailableResponse } from '@/lib/authGuard';
+import { fetchContainerTelemetryAndLogs, isComputeAgentConfigured } from '@/lib/computeAgentClient';
+import { resolveServiceComputeTarget } from '@/lib/computeTargetResolver';
 
 
 export async function GET(request: NextRequest) {
@@ -17,7 +19,11 @@ export async function GET(request: NextRequest) {
     const access = await requireServiceAccess(request, serviceId, 'logs:read');
     if (!access.ok) return access.response;
 
-    let diagnosticInput: ServiceDiagnosticInput = {
+    if (!isSupabaseConfigured() && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Log Doctor Diagnostics');
+    }
+
+    const diagnosticInput: ServiceDiagnosticInput = {
       serviceId,
       domain,
       serverIp: searchParams.get('serverIp') || '103.151.102.45',
@@ -41,9 +47,59 @@ export async function GET(request: NextRequest) {
           diagnosticInput.serverIp = srv.ip_address || '103.151.102.45';
           diagnosticInput.inodesUsed = srv.inode_used || 38400;
           diagnosticInput.inodeLimit = srv.inode_limit || 250000;
+          diagnosticInput.sslStatus = srv.ssl_status || diagnosticInput.sslStatus;
+          diagnosticInput.forceHttps = srv.force_https ?? diagnosticInput.forceHttps;
           diagnosticInput.ramUsedMB = srv.ram_used_mb || 420;
           diagnosticInput.ramLimitMB = srv.ram_limit_mb || 2048;
           diagnosticInput.userId = srv.user_id;
+        }
+
+        const { data: aRecord } = await db
+          .from('domain_dns_records')
+          .select('content')
+          .eq('service_id', serviceId)
+          .eq('record_type', 'A')
+          .in('name', ['@', diagnosticInput.domain])
+          .limit(1)
+          .maybeSingle();
+        if (aRecord?.content) {
+          diagnosticInput.dnsARecordIp = aRecord.content;
+        }
+
+        const { data: settingsRow } = await db
+          .from('hosting_project_settings')
+          .select('startup_file')
+          .eq('service_id', serviceId)
+          .maybeSingle();
+        if (settingsRow?.startup_file) {
+          diagnosticInput.startupFile = settingsRow.startup_file;
+        }
+
+        const [{ data: dbList }, { data: dbUrlEnv }] = await Promise.all([
+          db.from('hosting_databases').select('id').eq('service_id', serviceId).limit(1),
+          db
+            .from('project_env_variables')
+            .select('id')
+            .eq('service_id', serviceId)
+            .eq('env_key', 'DATABASE_URL')
+            .limit(1),
+        ]);
+        if (dbList && dbList.length > 0 && (!dbUrlEnv || dbUrlEnv.length === 0)) {
+          diagnosticInput.hasDatabasesWithoutEnvUrl = true;
+        }
+
+        const target = await resolveServiceComputeTarget(db, serviceId, access.user.id);
+        if (isComputeAgentConfigured(target.agentEndpoint)) {
+          const liveTel = await fetchContainerTelemetryAndLogs(
+            serviceId,
+            diagnosticInput.domain,
+            target.agentEndpoint || undefined
+          );
+          if (liveTel.ok && liveTel.data) {
+            diagnosticInput.ramUsedMB = liveTel.data.ramUsedMb;
+            diagnosticInput.ramLimitMB = liveTel.data.ramLimitMb;
+            diagnosticInput.inodesUsed = liveTel.data.inodesUsed;
+          }
         }
       } catch (err) {
         console.warn('[LogDoctor DB lookup fallback]:', err);
@@ -52,9 +108,12 @@ export async function GET(request: NextRequest) {
 
     const report = diagnoseServiceHealth(diagnosticInput);
     return NextResponse.json({ success: true, report });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('[Log Doctor Scan Error]', error);
-    return NextResponse.json({ error: error?.message || 'Failed to run diagnostic scan' }, { status: 500 });
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Failed to run diagnostic scan' },
+      { status: 500 }
+    );
   }
 }
 
@@ -97,8 +156,11 @@ export async function POST(request: NextRequest) {
       autoFixResult,
       updatedHealthScore: autoFixResult.healthScoreAfterFix,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('[Log Doctor Auto-Fix Error]', error);
-    return NextResponse.json({ error: error?.message || 'Auto-fix action failed' }, { status: 500 });
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Auto-fix action failed' },
+      { status: 500 }
+    );
   }
 }

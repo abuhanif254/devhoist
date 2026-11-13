@@ -2,13 +2,19 @@ import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, getServiceSupabase, isDevSandboxMode } from '@/lib/supabase';
 import { validateShellCommand, describeCronExpression } from '@/lib/projectEngine';
 import { requireServiceAccess, verifySudoToken, serviceUnavailableResponse } from '@/lib/authGuard';
+import {
+  isComputeAgentConfigured,
+  manageCronJobOnAgent,
+  triggerBackupSnapshotOnAgent,
+} from '@/lib/computeAgentClient';
+import { resolveServiceComputeTarget } from '@/lib/computeTargetResolver';
 
 
 async function logAudit(
   actorId: string | null,
   actionType: string,
   targetResource: string,
-  metadata: Record<string, any>,
+  metadata: Record<string, unknown>,
   ip: string = '127.0.0.1',
   riskLevel: 'low' | 'medium' | 'high' | 'critical' = 'high'
 ) {
@@ -49,8 +55,8 @@ export async function GET(request: NextRequest) {
     if (isSupabaseConfigured()) {
       const db = getServiceSupabase();
 
-      let backups: any[] = [];
-      let cronJobs: any[] = [];
+      let backups: Record<string, unknown>[] = [];
+      let cronJobs: Record<string, unknown>[] = [];
 
       if (type === 'backups' || type === 'both') {
         const { data } = await db
@@ -111,8 +117,11 @@ export async function GET(request: NextRequest) {
         },
       ],
     });
-  } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+  } catch (err: unknown) {
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : 'Internal server error' },
+      { status: 500 }
+    );
   }
 }
 
@@ -170,14 +179,42 @@ export async function POST(request: NextRequest) {
       return serviceUnavailableResponse('Backups & Cron Scheduler');
     }
 
+    const sandbox = isDevSandboxMode();
+    const target = await resolveServiceComputeTarget(db, access.serviceId, userId);
+    const agentConfigured = isComputeAgentConfigured(target.agentEndpoint);
+
     // 1. CREATE JETBACKUP SNAPSHOT
     if (action === 'create_snapshot') {
       if (!serviceId) {
         return NextResponse.json({ success: false, error: 'Service ID is required.' }, { status: 400 });
       }
 
+      if (!agentConfigured && !sandbox) {
+        return serviceUnavailableResponse('Compute Backup Agent');
+      }
+
       const snapshotLabel = label || `Manual Snapshot (${new Date().toLocaleDateString()})`;
-      const estimatedSize = scope === 'files_only' ? 84.0 : scope === 'database_only' ? 14.5 : 152.0;
+      const snapshotKey = `snap_${Date.now()}`;
+      const bkRes = await triggerBackupSnapshotOnAgent(
+        {
+          action: 'create',
+          serviceId: access.serviceId,
+          cpanelUser: target.cpanelUser,
+          snapshotId: snapshotKey,
+          scope,
+          r2ObjectKey: `backups/${access.serviceId}/${snapshotKey}.tar.gz`,
+        },
+        target.agentEndpoint || undefined
+      );
+      if (agentConfigured && !bkRes.ok) {
+        return NextResponse.json(
+          { success: false, error: bkRes.error || 'Backup snapshot failed on compute node.' },
+          { status: 502 }
+        );
+      }
+
+      const estimatedSize = bkRes.data?.sizeMb ?? (scope === 'files_only' ? 84.0 : scope === 'database_only' ? 14.5 : 152.0);
+      const r2ObjectKey = bkRes.data?.r2ObjectKey || `backups/${access.serviceId}/${snapshotKey}.tar.gz`;
 
       let newId = `bk_${Date.now()}`;
       if (db) {
@@ -190,6 +227,8 @@ export async function POST(request: NextRequest) {
             backup_type: 'manual_snapshot',
             scope,
             size_mb: estimatedSize,
+            r2_object_key: r2ObjectKey,
+            checksum_sha256: bkRes.data?.checksumSha256 || null,
             status: 'completed',
             expires_at: new Date(Date.now() + 14 * 86400000).toISOString(),
           })
@@ -200,12 +239,13 @@ export async function POST(request: NextRequest) {
         if (data) newId = data.id;
       }
 
-      await logAudit(userId, 'BACKUP_SNAPSHOT_CREATED', `service:${serviceId}`, { scope, size_mb: estimatedSize }, ip);
+      await logAudit(userId, 'BACKUP_SNAPSHOT_CREATED', `service:${serviceId}`, { scope, size_mb: estimatedSize, r2ObjectKey }, ip);
 
       return NextResponse.json({
         success: true,
-        message: `JetBackup snapshot '${snapshotLabel}' generated and synced to offsite S3 vault!`,
+        message: `Snapshot '${snapshotLabel}' generated and synced to offsite R2 vault (${r2ObjectKey})!`,
         id: newId,
+        r2ObjectKey,
       });
     }
 
@@ -222,6 +262,38 @@ export async function POST(request: NextRequest) {
           error: '2FA Sudo Step-Up Verification required to restore server filesystem from snapshot.',
           requireSudo: true,
         }, { status: 403 });
+      }
+
+      if (!agentConfigured && !sandbox) {
+        return serviceUnavailableResponse('Compute Backup Agent');
+      }
+
+      const bkRow = db
+        ? (
+            await db
+              .from('hosting_backups')
+              .select('scope, r2_object_key')
+              .eq('id', snapshotId)
+              .maybeSingle()
+          ).data
+        : null;
+
+      const restoreRes = await triggerBackupSnapshotOnAgent(
+        {
+          action: 'restore',
+          serviceId: access.serviceId,
+          cpanelUser: target.cpanelUser,
+          snapshotId,
+          scope: String(bkRow?.scope || 'full_account'),
+          r2ObjectKey: (bkRow?.r2_object_key as string | undefined) || undefined,
+        },
+        target.agentEndpoint || undefined
+      );
+      if (agentConfigured && !restoreRes.ok) {
+        return NextResponse.json(
+          { success: false, error: restoreRes.error || 'Backup restore failed on compute agent.' },
+          { status: 502 }
+        );
       }
 
       if (db) {
@@ -261,6 +333,10 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ success: false, error: firewallCheck.reason }, { status: 403 });
       }
 
+      if (!agentConfigured && !sandbox) {
+        return serviceUnavailableResponse('Compute Cron Scheduler Agent');
+      }
+
       let newId = `cron_${Date.now()}`;
       if (db) {
         const { data, error } = await db
@@ -278,6 +354,25 @@ export async function POST(request: NextRequest) {
 
         if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
         if (data) newId = data.id;
+      }
+
+      const cronAgentRes = await manageCronJobOnAgent(
+        {
+          action: 'upsert',
+          serviceId: access.serviceId,
+          cpanelUser: target.cpanelUser,
+          cronId: newId,
+          cronExpression: cronExpression.trim(),
+          command: command.trim(),
+          isActive: true,
+        },
+        target.agentEndpoint || undefined
+      );
+      if (agentConfigured && !cronAgentRes.ok) {
+        return NextResponse.json(
+          { success: false, error: cronAgentRes.error || 'Failed to register cron on compute node.' },
+          { status: 502 }
+        );
       }
 
       await logAudit(userId, 'CRON_JOB_CREATED', `service:${serviceId}`, { cron: cronExpression }, ip);
@@ -301,17 +396,38 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ success: false, error: firewallCheck.reason }, { status: 403 });
       }
 
-      const testLog = `[${new Date().toISOString()}] Spawned isolated worker container (PID 9102)...
-$ ${command}
-[STDOUT] Execution initialized with environment NODE_ENV=production
-[STDOUT] Completed task in 38ms. Exit code: 0 (SUCCESS)`;
+      if (!agentConfigured && !sandbox) {
+        return serviceUnavailableResponse('Compute Cron Runner Agent');
+      }
+
+      const runRes = await manageCronJobOnAgent(
+        {
+          action: 'run_now',
+          serviceId: access.serviceId,
+          cpanelUser: target.cpanelUser,
+          cronId: cronId || `adhoc_${Date.now()}`,
+          command: command.trim(),
+        },
+        target.agentEndpoint || undefined
+      );
+      if (agentConfigured && !runRes.ok) {
+        return NextResponse.json(
+          { success: false, error: runRes.error || 'Failed to execute cron on compute agent.' },
+          { status: 502 }
+        );
+      }
+
+      const exitCode = runRes.data?.exitCode ?? 0;
+      const testLog =
+        runRes.data?.outputLog ||
+        `[${new Date().toISOString()}] Executed ${command} (Exit code: ${exitCode})`;
 
       if (db && cronId) {
         await db
           .from('hosting_cron_jobs')
           .update({
             last_run_at: new Date().toISOString(),
-            last_exit_code: 0,
+            last_exit_code: exitCode,
             last_output_log: testLog,
           })
           .eq('id', cronId);
@@ -319,7 +435,7 @@ $ ${command}
 
       return NextResponse.json({
         success: true,
-        exitCode: 0,
+        exitCode,
         outputLog: testLog,
       });
     }
@@ -327,6 +443,27 @@ $ ${command}
     // 5. TOGGLE CRON ACTIVE STATUS
     if (action === 'toggle_cron') {
       if (!cronId) return NextResponse.json({ success: false, error: 'Cron ID required.' }, { status: 400 });
+
+      if (!agentConfigured && !sandbox) {
+        return serviceUnavailableResponse('Compute Cron Scheduler Agent');
+      }
+
+      const togRes = await manageCronJobOnAgent(
+        {
+          action: 'toggle',
+          serviceId: access.serviceId,
+          cpanelUser: target.cpanelUser,
+          cronId,
+          isActive: Boolean(isActive),
+        },
+        target.agentEndpoint || undefined
+      );
+      if (agentConfigured && !togRes.ok) {
+        return NextResponse.json(
+          { success: false, error: togRes.error || 'Failed to toggle cron on compute agent.' },
+          { status: 502 }
+        );
+      }
 
       if (db) {
         await db
@@ -342,8 +479,11 @@ $ ${command}
     }
 
     return NextResponse.json({ success: false, error: 'Invalid action provided.' }, { status: 400 });
-  } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+  } catch (err: unknown) {
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : 'Internal server error' },
+      { status: 500 }
+    );
   }
 }
 
@@ -377,6 +517,35 @@ export async function DELETE(request: NextRequest) {
       return serviceUnavailableResponse('Backups & Cron Scheduler');
     }
 
+    const target = await resolveServiceComputeTarget(db, access.serviceId, userId);
+    const agentConfigured = isComputeAgentConfigured(target.agentEndpoint);
+    if (!agentConfigured && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Compute Agent Node');
+    }
+
+    if (itemType === 'backup') {
+      await triggerBackupSnapshotOnAgent(
+        {
+          action: 'delete',
+          serviceId: access.serviceId,
+          cpanelUser: target.cpanelUser,
+          snapshotId: id,
+          scope: 'full_account',
+        },
+        target.agentEndpoint || undefined
+      );
+    } else {
+      await manageCronJobOnAgent(
+        {
+          action: 'delete',
+          serviceId: access.serviceId,
+          cpanelUser: target.cpanelUser,
+          cronId: id,
+        },
+        target.agentEndpoint || undefined
+      );
+    }
+
     if (db) {
       if (itemType === 'backup') {
         await db.from('hosting_backups').delete().eq('id', id).eq('service_id', access.serviceId);
@@ -391,7 +560,10 @@ export async function DELETE(request: NextRequest) {
       success: true,
       message: `${itemType === 'backup' ? 'Backup snapshot' : 'Cron job'} removed.`,
     });
-  } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+  } catch (err: unknown) {
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : 'Internal server error' },
+      { status: 500 }
+    );
   }
 }

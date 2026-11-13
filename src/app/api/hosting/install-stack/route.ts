@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServiceSupabase } from '@/lib/supabase';
-import { requireAdmin, requireServiceAccess } from '@/lib/authGuard';
+import { getServiceSupabase, isDevSandboxMode } from '@/lib/supabase';
+import { requireAdmin, requireServiceAccess, serviceUnavailableResponse } from '@/lib/authGuard';
 import {
     fetchMarketplaceStacksFromDbOrFallback,
     getStackBlueprintBySlug,
     provisionMarketplaceStack,
     evaluateStackHardwareCompatibility,
 } from '@/lib/stackProvisioner';
+import { isBuildQueueConfigured, isR2ArtifactsConfigured } from '@/lib/cloudflareStorageQueue';
+import { isComputeAgentConfigured } from '@/lib/computeAgentClient';
+import { whmClient } from '@/lib/whmClient';
 
 export async function GET(request: NextRequest) {
     try {
@@ -60,6 +63,9 @@ export async function POST(request: NextRequest) {
                 );
             }
             if (!supabaseAdmin) {
+                if (!isDevSandboxMode()) {
+                    return serviceUnavailableResponse('Supabase Service');
+                }
                 return NextResponse.json({ success: true, blueprint: stackData });
             }
 
@@ -84,7 +90,6 @@ export async function POST(request: NextRequest) {
         // Action 2: Provision Stack onto an Existing or Newly Created Hosting Service
         const {
             serviceId,
-            userId: bodyUserId,
             stackSlug,
             domain: bodyDomain,
             cpanelUser: bodyCpanelUser,
@@ -113,16 +118,47 @@ export async function POST(request: NextRequest) {
               ).data
             : null;
 
+        const nodeRow = supabaseAdmin && serviceRow?.server_node
+            ? (
+                  await supabaseAdmin
+                      .from('whm_server_nodes')
+                      .select('agent_endpoint, node_driver')
+                      .eq('node_code', serviceRow.server_node)
+                      .maybeSingle()
+              ).data
+            : null;
+
+        const agentEndpoint = (nodeRow?.agent_endpoint as string | null | undefined) || null;
+        const blueprint = getStackBlueprintBySlug(stackSlug);
+
+        if (!isDevSandboxMode()) {
+            if (!supabaseAdmin) {
+                return serviceUnavailableResponse('Supabase Service');
+            }
+            if (blueprint?.runtime_family === 'static_edge') {
+                if (!isR2ArtifactsConfigured()) {
+                    return serviceUnavailableResponse('Cloudflare R2 Artifacts Plane');
+                }
+            } else if (
+                !isComputeAgentConfigured(agentEndpoint) &&
+                !isBuildQueueConfigured() &&
+                !whmClient.getStatus().configured
+            ) {
+                return serviceUnavailableResponse('Compute & Build Plane');
+            }
+        }
+
         const resolvedUserId = serviceRow?.user_id || access.user.id;
         const resolvedDomain = bodyDomain || serviceRow?.domain || 'app.devhost.cloud';
         const resolvedCpanelUser = bodyCpanelUser || serviceRow?.cpanel_username || 'dvhst';
 
         // Hardware compatibility check if service has a known RAM allocation
-        if (serviceRow?.ram_mb) {
+        const serviceRamMb = serviceRow?.ram_limit_mb ?? serviceRow?.ram_mb;
+        if (serviceRamMb) {
             const compat = evaluateStackHardwareCompatibility(
                 stackSlug,
-                Number(serviceRow.ram_mb),
-                Number(serviceRow.cpu_cores || 1)
+                Number(serviceRamMb),
+                Number(serviceRow.cpu_cores || 2)
             );
             if (!compat.compatible) {
                 return NextResponse.json(
@@ -144,6 +180,10 @@ export async function POST(request: NextRequest) {
             cpanelUser: resolvedCpanelUser,
             gitRepoUrl,
             gitBranch,
+            agentEndpoint,
+            ramMb: serviceRamMb ? Number(serviceRamMb) : undefined,
+            diskGb: serviceRow?.disk_limit_gb ? Number(serviceRow.disk_limit_gb) : undefined,
+            inodeLimit: serviceRow?.inode_limit ? Number(serviceRow.inode_limit) : undefined,
         });
 
         return NextResponse.json({

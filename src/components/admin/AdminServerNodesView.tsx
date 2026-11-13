@@ -1,26 +1,17 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Server,
   Plus,
   RefreshCw,
   CheckCircle2,
-  AlertTriangle,
-  HardDrive,
-  Cpu,
   Layers,
   Copy,
   Check,
-  Shield,
-  Activity,
-  DollarSign,
   Edit2,
   X,
-  ExternalLink,
   Zap,
-  Loader2,
-  Sparkles,
 } from 'lucide-react';
 import { useSudoGate } from '@/components/security/SudoGateModal';
 import AdminNodeBalancerCard from '@/components/admin/AdminNodeBalancerCard';
@@ -44,6 +35,25 @@ interface ServerNodeItem {
   auto_provision_enabled: boolean;
   is_healthy: boolean;
   status_message: string;
+  node_driver?: 'whm_cpanel' | 'devhost_docker' | 'cloudflare_edge' | 'hybrid';
+  agent_endpoint?: string | null;
+  agent_region?: string | null;
+  agent_version?: string | null;
+  last_heartbeat_at?: string | null;
+}
+
+interface TestProvisioningDiagnosticResult {
+  success: boolean;
+  message?: string;
+  diagnostic?: {
+    durationMs?: number;
+    domain?: string;
+    cpanelUsername?: string;
+    serverNode?: string;
+    serverIp?: string;
+    sslStatus?: string;
+    stepsCompleted?: string[];
+  };
 }
 
 export default function AdminServerNodesView() {
@@ -56,7 +66,7 @@ export default function AdminServerNodesView() {
   const [isSyncingPackages, setIsSyncingPackages] = useState(false);
   const [syncPackagesStatus, setSyncPackagesStatus] = useState<string | null>(null);
   const [isTestingProvisioning, setIsTestingProvisioning] = useState(false);
-  const [testProvisioningResult, setTestProvisioningResult] = useState<any | null>(null);
+  const [testProvisioningResult, setTestProvisioningResult] = useState<TestProvisioningDiagnosticResult | null>(null);
 
   // Add/Edit Modal
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -73,8 +83,11 @@ export default function AdminServerNodesView() {
   const [monthlyCostBdt, setMonthlyCostBdt] = useState(3500);
   const [maxSlots, setMaxSlots] = useState(50);
   const [maxDiskGb, setMaxDiskGb] = useState(100);
+  const [nodeDriver, setNodeDriver] = useState<'whm_cpanel' | 'devhost_docker' | 'cloudflare_edge' | 'hybrid'>('hybrid');
+  const [agentEndpoint, setAgentEndpoint] = useState('');
+  const [pingingNodeId, setPingingNodeId] = useState<string | null>(null);
 
-  const fetchNodes = async () => {
+  const fetchNodes = useCallback(async () => {
     setIsLoading(true);
     try {
       const res = await fetch('/api/admin/nodes-crm');
@@ -87,10 +100,26 @@ export default function AdminServerNodesView() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    fetchNodes();
+    let active = true;
+    fetch('/api/admin/nodes-crm')
+      .then((res) => res.json())
+      .then((data) => {
+        if (active && data.success && data.nodes) {
+          setNodes(data.nodes);
+        }
+      })
+      .catch((err) => {
+        console.warn('Failed to load server nodes:', err);
+      })
+      .finally(() => {
+        if (active) setIsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
   }, []);
 
   const triggerCopy = (text: string, key: string) => {
@@ -111,6 +140,8 @@ export default function AdminServerNodesView() {
     setMonthlyCostBdt(3500);
     setMaxSlots(50);
     setMaxDiskGb(100);
+    setNodeDriver('hybrid');
+    setAgentEndpoint('');
     setIsModalOpen(true);
   };
 
@@ -126,6 +157,8 @@ export default function AdminServerNodesView() {
     setMonthlyCostBdt(Number(node.monthly_node_cost_bdt) || 3500);
     setMaxSlots(node.max_cpanel_slots);
     setMaxDiskGb(Number(node.max_disk_gb) || 100);
+    setNodeDriver(node.node_driver || 'hybrid');
+    setAgentEndpoint(node.agent_endpoint || '');
     setIsModalOpen(true);
   };
 
@@ -150,6 +183,8 @@ export default function AdminServerNodesView() {
               monthlyCostBdt,
               maxSlots,
               maxDiskGb,
+              nodeDriver,
+              agentEndpoint: agentEndpoint.trim() || null,
             },
           }),
         });
@@ -159,10 +194,38 @@ export default function AdminServerNodesView() {
         setIsModalOpen(false);
         fetchNodes();
         alert(data.message || 'Server node saved successfully!');
-      } catch (err: any) {
-        alert(err.message);
+      } catch (err: unknown) {
+        alert(err instanceof Error ? err.message : 'Failed to save server node');
       }
-    }, `Save WHM Cluster Node ${nodeCode}`);
+    }, `Save Cluster Node ${nodeCode}`);
+  };
+
+  const handlePingAgent = async (node: ServerNodeItem) => {
+    setPingingNodeId(node.id);
+    try {
+      const res = await fetch('/api/admin/nodes-crm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'ping_node',
+          nodeId: node.id,
+          agentEndpoint: node.agent_endpoint || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        alert(data.error || 'Compute agent ping failed');
+        return;
+      }
+      fetchNodes();
+      alert(
+        `Agent Healthy (${data.health?.version || 'devhost-agent'}) · Active containers: ${data.health?.activeContainers ?? 0} · Latency: ${data.health?.latencyMs ?? 0}ms`
+      );
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Ping error');
+    } finally {
+      setPingingNodeId(null);
+    }
   };
 
   const handleToggleProvision = async (node: ServerNodeItem) => {
@@ -183,8 +246,8 @@ export default function AdminServerNodesView() {
           prev.map((n) => (n.id === node.id ? { ...n, auto_provision_enabled: !n.auto_provision_enabled } : n))
         );
       }
-    } catch (err: any) {
-      alert(err.message);
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Failed to toggle node provisioning');
     }
   };
 
@@ -203,8 +266,8 @@ export default function AdminServerNodesView() {
       } else {
         setSyncPackagesStatus(`WHM Sync Notice: ${data.message || 'Packages registered'}`);
       }
-    } catch (err: any) {
-      setSyncPackagesStatus(`Sync Error: ${err.message}`);
+    } catch (err: unknown) {
+      setSyncPackagesStatus(`Sync Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       setIsSyncingPackages(false);
       setTimeout(() => setSyncPackagesStatus(null), 10000);
@@ -222,10 +285,10 @@ export default function AdminServerNodesView() {
       });
       const data = await res.json();
       setTestProvisioningResult(data);
-    } catch (err: any) {
+    } catch (err: unknown) {
       setTestProvisioningResult({
         success: false,
-        message: err.message,
+        message: err instanceof Error ? err.message : 'Pipeline test failed',
       });
     } finally {
       setIsTestingProvisioning(false);
@@ -400,6 +463,15 @@ export default function AdminServerNodesView() {
                 </div>
 
                 <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handlePingAgent(node)}
+                    disabled={pingingNodeId === node.id}
+                    className="px-2 py-0.5 rounded-lg bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 text-[10px] font-bold hover:bg-blue-100 cursor-pointer disabled:opacity-50"
+                    title="Ping DevHost Compute Agent"
+                  >
+                    {pingingNodeId === node.id ? 'Pinging...' : 'Ping Agent'}
+                  </button>
                   <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                     node.is_healthy
                       ? 'bg-emerald-50 dark:bg-emerald-950 text-emerald-600'
@@ -617,6 +689,36 @@ export default function AdminServerNodesView() {
                   placeholder="whm_api_token_..."
                   className="w-full mt-1 px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-white/10"
                 />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[11px] text-slate-500 font-bold">Compute Driver:</label>
+                  <select
+                    value={nodeDriver}
+                    onChange={(e) =>
+                      setNodeDriver(
+                        e.target.value as 'whm_cpanel' | 'devhost_docker' | 'cloudflare_edge' | 'hybrid'
+                      )
+                    }
+                    className="w-full mt-1 px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-white/10"
+                  >
+                    <option value="hybrid">Hybrid (Docker Agent + WHM)</option>
+                    <option value="devhost_docker">DevHost Docker / Caddy Agent</option>
+                    <option value="whm_cpanel">WHM / cPanel Only</option>
+                    <option value="cloudflare_edge">Cloudflare Edge Only</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[11px] text-slate-500 font-bold">Compute Agent URL (Optional):</label>
+                  <input
+                    type="url"
+                    value={agentEndpoint}
+                    onChange={(e) => setAgentEndpoint(e.target.value)}
+                    placeholder="https://sg1-agent.devhost.cloud"
+                    className="w-full mt-1 px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-white/10"
+                  />
+                </div>
               </div>
 
               <div className="grid grid-cols-3 gap-3">

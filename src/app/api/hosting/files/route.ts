@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServiceSupabase } from '@/lib/supabase';
+import { getServiceSupabase, isDevSandboxMode } from '@/lib/supabase';
 import { normalizeAndValidateFilePath, logSecurityAudit } from '@/lib/security';
-import { requireServiceAccess } from '@/lib/authGuard';
+import { requireServiceAccess, serviceUnavailableResponse } from '@/lib/authGuard';
+import { isComputeAgentConfigured, syncContainerFilesOnAgent } from '@/lib/computeAgentClient';
+import { resolveServiceComputeTarget } from '@/lib/computeTargetResolver';
 
 export { normalizeAndValidateFilePath };
 
@@ -126,6 +128,33 @@ export async function GET(req: NextRequest) {
     if (!access.ok) return access.response;
 
     const supabaseAdmin = getServiceSupabase();
+    if (!supabaseAdmin && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Container Filesystem Service');
+    }
+
+    if (searchParams.get('source') === 'live') {
+      const target = await resolveServiceComputeTarget(supabaseAdmin, serviceId, access.user.id);
+      if (isComputeAgentConfigured(target.agentEndpoint)) {
+        const liveRes = await syncContainerFilesOnAgent(
+          {
+            action: 'list',
+            serviceId,
+            cpanelUser: target.cpanelUser,
+            filePath: '/public_html',
+          },
+          target.agentEndpoint || undefined
+        );
+        if (liveRes.ok && liveRes.data) {
+          return NextResponse.json({
+            success: true,
+            files: [],
+            liveAgentSync: liveRes.data,
+            source: 'live_agent',
+          });
+        }
+      }
+    }
+
     if (supabaseAdmin) {
       const { data, error } = await supabaseAdmin
         .from('hosting_virtual_filesystem')
@@ -213,9 +242,36 @@ export async function POST(req: NextRequest) {
         : '0644';
 
     const supabaseAdmin = getServiceSupabase();
+    if (!supabaseAdmin && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Container Filesystem Service');
+    }
+    const target = await resolveServiceComputeTarget(supabaseAdmin, serviceId, actorUserId);
+    const agentConfigured = isComputeAgentConfigured(target.agentEndpoint);
+    if (!agentConfigured && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Live Compute Filesystem Agent');
+    }
+
     const now = new Date().toISOString();
 
     if (action === 'delete_file') {
+      if (agentConfigured || isDevSandboxMode()) {
+        const delSync = await syncContainerFilesOnAgent(
+          {
+            action: 'delete',
+            serviceId,
+            cpanelUser: target.cpanelUser,
+            filePath: pathCheck.normalizedPath,
+          },
+          target.agentEndpoint || undefined
+        );
+        if (agentConfigured && !delSync.ok) {
+          return NextResponse.json(
+            { success: false, error: delSync.error || 'Agent file deletion failed.' },
+            { status: 502 }
+          );
+        }
+      }
+
       if (supabaseAdmin) {
         await supabaseAdmin
           .from('hosting_virtual_filesystem')
@@ -225,7 +281,7 @@ export async function POST(req: NextRequest) {
       }
 
       await logSecurityAudit({
-        actorId: userId,
+        actorId: actorUserId,
         actorRole: 'client',
         actionType: 'CONTAINER_FILE_DELETED',
         targetResource: `${serviceId}:${pathCheck.normalizedPath}`,
@@ -234,6 +290,7 @@ export async function POST(req: NextRequest) {
 
       return NextResponse.json({
         success: true,
+        source: agentConfigured ? 'live_agent' : 'sandbox',
         deletedPath: pathCheck.normalizedPath,
         message: `Deleted ${pathCheck.normalizedPath} from container filesystem.`,
       });
@@ -242,10 +299,28 @@ export async function POST(req: NextRequest) {
     const safeContent = typeof contentText === 'string' ? contentText : '';
     const sizeBytes = new TextEncoder().encode(safeContent).length;
 
+    const syncRes = await syncContainerFilesOnAgent(
+      {
+        action: action === 'chmod' ? 'chmod' : 'write',
+        serviceId,
+        cpanelUser: target.cpanelUser,
+        filePath: pathCheck.normalizedPath,
+        contentText: safeContent,
+        permissionsOctal: validOctal,
+      },
+      target.agentEndpoint || undefined
+    );
+    if (agentConfigured && !syncRes.ok) {
+      return NextResponse.json(
+        { success: false, error: syncRes.error || 'Live file sync failed on compute agent.' },
+        { status: 502 }
+      );
+    }
+
     const record: VirtualFileEntry = {
       id: `vf-${Date.now()}`,
       service_id: serviceId,
-      user_id: userId,
+      user_id: actorUserId || userId,
       file_path: pathCheck.normalizedPath,
       file_name: pathCheck.fileName,
       is_directory: false,
@@ -256,13 +331,13 @@ export async function POST(req: NextRequest) {
       updated_at: now,
     };
 
-    if (supabaseAdmin && userId) {
+    if (supabaseAdmin && actorUserId) {
       const { data: upserted } = await supabaseAdmin
         .from('hosting_virtual_filesystem')
         .upsert(
           {
             service_id: serviceId,
-            user_id: userId,
+            user_id: actorUserId,
             file_path: pathCheck.normalizedPath,
             file_name: pathCheck.fileName,
             is_directory: false,
@@ -284,12 +359,13 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
+      source: agentConfigured ? 'live_agent' : 'sandbox',
       file: record,
-      passengerReloaded: action === 'save_file',
+      passengerReloaded: syncRes.data?.reloaded ?? action === 'save_file',
       message:
         action === 'chmod'
           ? `Permissions updated to ${validOctal} on ${pathCheck.normalizedPath}`
-          : `Saved ${pathCheck.normalizedPath} (${sizeBytes} bytes) & signaled Phusion Passenger graceful reload.`,
+          : `Saved ${pathCheck.normalizedPath} (${sizeBytes} bytes) & synced to compute container.`,
     });
   } catch (err) {
     console.error('[Files API POST Error]:', err);

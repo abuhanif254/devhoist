@@ -5,6 +5,25 @@
 
 import { isDevSandboxMode } from '@/lib/supabase';
 
+interface WhmApiPayload {
+  metadata?: { result?: number; reason?: string };
+  status?: number;
+  result?: {
+    status?: number;
+    errors?: unknown[];
+    data?: unknown;
+  };
+  data?: {
+    ip?: string;
+    nameserver?: string;
+    url?: string;
+    expires?: number;
+    acct?: Array<Record<string, unknown>>;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
 export interface WhmAccountParams {
   username: string;
   domain: string;
@@ -59,6 +78,12 @@ export interface WhmSsoResult {
   error?: string;
 }
 
+export interface WhmUapiActionResult {
+  success: boolean;
+  message: string;
+  data?: unknown;
+}
+
 export interface WhmListedAccount {
   user: string;
   domain: string;
@@ -104,7 +129,10 @@ export class WhmClient {
   /**
    * Internal WHM Request Dispatcher using Fetch & Authorization: whm user:token
    */
-  private async executeWhmApi(endpoint: string, params: Record<string, string> = {}): Promise<any> {
+  private async executeWhmApi(
+    endpoint: string,
+    params: Record<string, string> = {}
+  ): Promise<WhmApiPayload | null> {
     if (!this.isConfigured) {
       return null;
     }
@@ -136,10 +164,13 @@ export class WhmClient {
         throw new Error(`WHM API responded with HTTP status ${response.status}`);
       }
 
-      return await response.json();
-    } catch (error: any) {
+      return (await response.json()) as WhmApiPayload;
+    } catch (error: unknown) {
       clearTimeout(timeoutId);
-      console.warn(`[WHM API Warning] Call to ${endpoint} failed:`, error?.message || error);
+      console.warn(
+        `[WHM API Warning] Call to ${endpoint} failed:`,
+        error instanceof Error ? error.message : error
+      );
       throw error;
     }
   }
@@ -189,10 +220,10 @@ export class WhmClient {
         nameservers: data?.data?.nameserver ? [data.data.nameserver] : ['ns1.devhost.net', 'ns2.devhost.net'],
         raw: data,
       };
-    } catch (err: any) {
+    } catch (err: unknown) {
       return {
         success: false,
-        message: err?.message || 'Connection to WHM reseller server failed',
+        message: err instanceof Error ? err.message : 'Connection to WHM reseller server failed',
       };
     }
   }
@@ -241,12 +272,12 @@ export class WhmClient {
       }
 
       throw new Error(data?.metadata?.reason || 'No session URL returned by WHM');
-    } catch (err: any) {
+    } catch (err: unknown) {
       return {
         success: false,
         url: '',
         service,
-        error: err?.message || 'WHM create_user_session request failed',
+        error: err instanceof Error ? err.message : 'WHM create_user_session request failed',
       };
     }
   }
@@ -271,8 +302,8 @@ export class WhmClient {
         success: data?.metadata?.result === 1,
         message: data?.metadata?.reason || 'Suspended successfully',
       };
-    } catch (err: any) {
-      return { success: false, message: err?.message || 'Failed to suspend account' };
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed to suspend account' };
     }
   }
 
@@ -295,8 +326,8 @@ export class WhmClient {
         success: data?.metadata?.result === 1,
         message: data?.metadata?.reason || 'Unsuspended successfully',
       };
-    } catch (err: any) {
-      return { success: false, message: err?.message || 'Failed to unsuspend account' };
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed to unsuspend account' };
     }
   }
 
@@ -341,19 +372,20 @@ export class WhmClient {
       const rawAccts = data?.data?.acct || [];
       let totalMb = 0;
 
-      const accounts: WhmListedAccount[] = rawAccts.map((a: any) => {
-        const mb = parseInt(String(a.diskused).replace(/[^0-9]/g, '')) || 0;
+      const accounts: WhmListedAccount[] = rawAccts.map((a: Record<string, unknown>) => {
+        const diskUsedStr = String(a.diskused ?? '0');
+        const mb = parseInt(diskUsedStr.replace(/[^0-9]/g, ''), 10) || 0;
         totalMb += mb;
         return {
-          user: a.user,
-          domain: a.domain,
-          email: a.email,
-          plan: a.plan,
-          diskused: a.diskused,
-          disklimit: a.disklimit,
+          user: String(a.user ?? ''),
+          domain: String(a.domain ?? ''),
+          email: String(a.email ?? ''),
+          plan: String(a.plan ?? ''),
+          diskused: diskUsedStr,
+          disklimit: String(a.disklimit ?? ''),
           suspended: Boolean(a.suspended),
-          ip: a.ip,
-          startdate: a.startdate,
+          ip: String(a.ip ?? ''),
+          startdate: String(a.startdate ?? ''),
         };
       });
 
@@ -362,7 +394,7 @@ export class WhmClient {
         accounts,
         totalDiskUsedMb: totalMb,
       };
-    } catch (err: any) {
+    } catch {
       return {
         success: false,
         accounts: [],
@@ -433,12 +465,12 @@ export class WhmClient {
         message: editData?.metadata?.reason || (isUpdated ? `Package ${pkgName} updated on WHM server.` : 'Failed to sync package to WHM'),
         raw: editData,
       };
-    } catch (err: any) {
+    } catch (err: unknown) {
       return {
         success: false,
         action: 'created',
         packageName: pkgName,
-        message: err?.message || `Failed to sync package ${pkgName} to WHM`,
+        message: err instanceof Error ? err.message : `Failed to sync package ${pkgName} to WHM`,
       };
     }
   }
@@ -496,14 +528,171 @@ export class WhmClient {
         message: data?.metadata?.reason || (isStarted ? `Instant AutoSSL check started for ${cleanUser}` : 'AutoSSL queue triggered'),
         raw: data,
       };
-    } catch (err: any) {
-      console.warn(`[AutoSSL Error] WHM AutoSSL trigger for ${cleanUser}:`, err?.message);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'WHM server timeout';
+      console.warn(`[AutoSSL Error] WHM AutoSSL trigger for ${cleanUser}:`, msg);
       return {
         success: false,
         username: cleanUser,
-        message: `AutoSSL failed: ${err?.message || 'WHM server timeout'}`,
+        message: `AutoSSL failed: ${msg}`,
       };
     }
+  }
+
+  /**
+   * 9. CPANEL UAPI PROXY CALL (via WHM /json-api/cpanel v3)
+   */
+  public async executeCpanelUapi(
+    cpanelUser: string,
+    moduleName: string,
+    funcName: string,
+    args: Record<string, string | number> = {}
+  ): Promise<WhmUapiActionResult> {
+    const cleanUser = cpanelUser.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 16);
+    if (!this.isConfigured) {
+      if (!isDevSandboxMode()) {
+        return {
+          success: false,
+          message: 'WHM reseller server is not configured (cPanel UAPI unavailable).',
+        };
+      }
+      return {
+        success: true,
+        message: `Simulated UAPI ${moduleName}::${funcName} for ${cleanUser}.`,
+        data: { simulated: true, module: moduleName, func: funcName },
+      };
+    }
+
+    try {
+      const stringArgs: Record<string, string> = {
+        cpanel_jsonapi_user: cleanUser,
+        cpanel_jsonapi_apiversion: '3',
+        cpanel_jsonapi_module: moduleName,
+        cpanel_jsonapi_func: funcName,
+      };
+      for (const [k, v] of Object.entries(args)) {
+        stringArgs[k] = String(v);
+      }
+
+      const data = await this.executeWhmApi('cpanel', stringArgs);
+      const uapiResult = data?.result;
+      const ok = uapiResult?.status === 1 || data?.metadata?.result === 1;
+      const errorMsg = Array.isArray(uapiResult?.errors) && uapiResult.errors.length > 0
+        ? String(uapiResult.errors[0])
+        : data?.metadata?.reason || 'cPanel UAPI call completed';
+
+      return {
+        success: Boolean(ok),
+        message: ok ? `UAPI ${moduleName}::${funcName} succeeded.` : errorMsg,
+        data: uapiResult?.data ?? data,
+      };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'WHM UAPI request failed';
+      return {
+        success: false,
+        message,
+      };
+    }
+  }
+
+  /**
+   * 10. CREATE MYSQL DATABASE & GRANT USER VIA CPANEL UAPI (Mysql::create_database / set_privileges_on_database)
+   */
+  public async createDatabase(params: {
+    cpanelUser: string;
+    dbName: string;
+    dbUsername: string;
+    dbPassword: string;
+  }): Promise<WhmUapiActionResult> {
+    if (!this.isConfigured) {
+      if (!isDevSandboxMode()) {
+        return {
+          success: false,
+          message: 'WHM server not configured for live MySQL UAPI provisioning.',
+        };
+      }
+      return {
+        success: true,
+        message: `MySQL database ${params.dbName} simulated via cPanel UAPI.`,
+        data: { simulated: true, dbName: params.dbName },
+      };
+    }
+
+    const dbRes = await this.executeCpanelUapi(params.cpanelUser, 'Mysql', 'create_database', {
+      name: params.dbName,
+    });
+    if (!dbRes.success) return dbRes;
+
+    const userRes = await this.executeCpanelUapi(params.cpanelUser, 'Mysql', 'create_user', {
+      name: params.dbUsername,
+      password: params.dbPassword,
+    });
+    if (!userRes.success) return userRes;
+
+    return this.executeCpanelUapi(params.cpanelUser, 'Mysql', 'set_privileges_on_database', {
+      user: params.dbUsername,
+      database: params.dbName,
+      privileges: 'ALL PRIVILEGES',
+    });
+  }
+
+  /**
+   * 11. CREATE MAILBOX VIA CPANEL UAPI (Email::add_pop)
+   */
+  public async createEmailAccount(params: {
+    cpanelUser: string;
+    domain: string;
+    localPart: string;
+    password: string;
+    quotaMb?: number;
+  }): Promise<WhmUapiActionResult> {
+    if (!this.isConfigured) {
+      if (!isDevSandboxMode()) {
+        return {
+          success: false,
+          message: 'WHM server not configured for live cPanel mailbox provisioning.',
+        };
+      }
+      return {
+        success: true,
+        message: `Mailbox ${params.localPart}@${params.domain} simulated via cPanel UAPI.`,
+        data: { simulated: true },
+      };
+    }
+
+    return this.executeCpanelUapi(params.cpanelUser, 'Email', 'add_pop', {
+      email: params.localPart,
+      domain: params.domain,
+      password: params.password,
+      quota: params.quotaMb ?? 1024,
+    });
+  }
+
+  /**
+   * 12. DELETE MAILBOX VIA CPANEL UAPI (Email::delete_pop)
+   */
+  public async deleteEmailAccount(params: {
+    cpanelUser: string;
+    domain: string;
+    localPart: string;
+  }): Promise<WhmUapiActionResult> {
+    if (!this.isConfigured) {
+      if (!isDevSandboxMode()) {
+        return {
+          success: false,
+          message: 'WHM server not configured for live cPanel mailbox deletion.',
+        };
+      }
+      return {
+        success: true,
+        message: `Mailbox deletion simulated for ${params.localPart}@${params.domain}.`,
+      };
+    }
+
+    return this.executeCpanelUapi(params.cpanelUser, 'Email', 'delete_pop', {
+      email: `${params.localPart}@${params.domain}`,
+      domain: params.domain,
+    });
   }
 }
 

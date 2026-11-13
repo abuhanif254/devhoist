@@ -1,0 +1,13 @@
+{
+  "name": "devhost-agent",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "DevHost Cloud Compute, Docker/Caddy Build Agent & Telemetry Daemon for SG1/US1 NVMe VPS Nodes",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

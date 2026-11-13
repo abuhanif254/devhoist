@@ -9,6 +9,18 @@ import {
   purgeCloudflareCache,
   upsertCloudflareDnsRecord,
 } from '@/lib/cloudflareClient';
+import {
+  deployStaticEdgeRelease,
+  enqueueBuildJob,
+  isBuildQueueConfigured,
+  isR2ArtifactsConfigured,
+} from '@/lib/cloudflareStorageQueue';
+import {
+  dispatchBuildAndDeploy,
+  getComputeNodeConfig,
+  isComputeAgentConfigured,
+} from '@/lib/computeAgentClient';
+import { loadDecryptedEnvMap, resolveServiceComputeTarget } from '@/lib/computeTargetResolver';
 
 
 // Edge-native in-memory sliding window rate limiter (30 req / min)
@@ -161,11 +173,12 @@ export async function POST(request: NextRequest) {
     }
 
     const db = getServiceSupabase();
-    if (serviceId) {
+    let resolvedServiceId = String(serviceId || '');
+    if (resolvedServiceId) {
       const { data: srv } = await db
         .from('hosting_services')
         .select('id, user_id')
-        .eq('id', serviceId)
+        .eq('id', resolvedServiceId)
         .maybeSingle();
       if (!srv || srv.user_id !== patAuth.userId) {
         return NextResponse.json(
@@ -181,6 +194,9 @@ export async function POST(request: NextRequest) {
         .eq('domain', cleanHost)
         .eq('user_id', patAuth.userId)
         .maybeSingle();
+      if (srv?.id) {
+        resolvedServiceId = String(srv.id);
+      }
       const { data: dom } = await db
         .from('domains')
         .select('id, user_id')
@@ -200,6 +216,9 @@ export async function POST(request: NextRequest) {
     const resolvedDomain = String(targetDomain || 'app.devhost.cloud').trim().toLowerCase();
     let cloudflareZoneId: string | null = null;
     let cloudflareRecordId: string | null = null;
+    let buildJobId: string | null = null;
+    let r2ArtifactKey: string | null = null;
+    let liveUrl: string | null = null;
 
     switch (action) {
       case 'cache_purge': {
@@ -311,9 +330,155 @@ export async function POST(request: NextRequest) {
       }
 
       case 'deploy':
-      default:
-        message = `Zero-downtime Git pipeline triggered for ${resolvedDomain} (branch: ${body.branch || 'main'}). Passenger workers rolling reload scheduled.`;
+      default: {
+        const sandbox = isDevSandboxMode();
+        const target = resolvedServiceId
+          ? await resolveServiceComputeTarget(db, resolvedServiceId, patAuth.userId)
+          : await resolveServiceComputeTarget(null, `dom_${Date.now()}`, patAuth.userId);
+        const deployDomain = resolvedDomain || target.domain;
+        const commitSha = String(body.commitSha || Date.now().toString(16)).slice(0, 7);
+        const branch = String(body.branch || target.gitBranch || 'main');
+
+        if (target.runtimeFamily === 'static_edge') {
+          if (!isR2ArtifactsConfigured() && !sandbox) {
+            return serviceUnavailableResponse('Cloudflare R2 Artifacts Plane');
+          }
+          const releaseId = `rel_${commitSha}_${Date.now()}`;
+          const staticRes = await deployStaticEdgeRelease({
+            serviceId: resolvedServiceId || target.serviceId,
+            domain: deployDomain,
+            stackSlug: target.stackSlug,
+            stackName: target.stackSlug,
+            releaseId,
+          });
+          if (!staticRes.ok) {
+            return NextResponse.json(
+              { error: staticRes.error || 'Edge static release failed.' },
+              { status: 502 }
+            );
+          }
+          r2ArtifactKey = staticRes.artifactKey;
+          liveUrl = staticRes.liveUrl;
+          if (db && resolvedServiceId) {
+            await db.from('project_deployments').insert({
+              service_id: resolvedServiceId,
+              user_id: patAuth.userId,
+              commit_sha: commitSha,
+              commit_message: String(body.commitMessage || 'CI/CD Public API v1 Edge Deploy'),
+              branch,
+              author_name: 'Public API v1 (PAT)',
+              trigger_source: 'api_deploy',
+              status: 'live_production',
+              is_current_production: true,
+              duration_seconds: 2,
+              r2_artifact_key: r2ArtifactKey,
+              live_url: liveUrl,
+              build_logs: `[API v1] Uploaded ${staticRes.filesUploaded} assets to ${r2ArtifactKey}`,
+            });
+          }
+          message = `Static Edge deployment published to R2 (${r2ArtifactKey}) for ${deployDomain}.`;
+          break;
+        }
+
+        const agentConfigured = isComputeAgentConfigured(target.agentEndpoint);
+        const queueConfigured = isBuildQueueConfigured();
+        if (!agentConfigured && !queueConfigured && !sandbox) {
+          return serviceUnavailableResponse('Compute & Build Plane');
+        }
+
+        const envVars = resolvedServiceId
+          ? await loadDecryptedEnvMap(db, resolvedServiceId, 'production')
+          : {};
+        const jobId = `bld_${commitSha}_${Date.now()}`;
+        const nodeCfg = getComputeNodeConfig(target.agentEndpoint);
+
+        if (queueConfigured || sandbox) {
+          const qRes = await enqueueBuildJob({
+            jobId,
+            serviceId: resolvedServiceId || target.serviceId,
+            userId: patAuth.userId,
+            domain: deployDomain,
+            cpanelUser: target.cpanelUser,
+            stackSlug: target.stackSlug,
+            runtimeFamily: target.runtimeFamily,
+            runtimeVersion: target.runtimeVersion,
+            triggerSource: 'api_deploy',
+            gitRepoUrl: target.gitRepoUrl,
+            gitBranch: branch,
+            commitSha,
+            installCommand: target.installCommand,
+            buildCommand: target.buildCommand,
+            startupFile: target.startupFile,
+            outputDirectory: target.outputDirectory,
+            envVars,
+            ramMb: target.ramLimitMb,
+            cpuCores: target.cpuCores,
+            diskGb: target.diskLimitGb,
+            targetAgentEndpoint: target.agentEndpoint || undefined,
+            requestedAt: new Date().toISOString(),
+          });
+          if (qRes.ok) buildJobId = qRes.jobId;
+        }
+
+        let agentBuildLogs = `[Queue] Enqueued build job ${jobId} for ${deployDomain}`;
+        let containerId: string | null = target.containerId;
+        let deployStatus: 'live_production' | 'building' = 'building';
+        if (agentConfigured || sandbox) {
+          const deployRes = await dispatchBuildAndDeploy(
+            {
+              jobId,
+              serviceId: resolvedServiceId || target.serviceId,
+              cpanelUser: target.cpanelUser,
+              domain: deployDomain,
+              stackSlug: target.stackSlug,
+              runtimeFamily: target.runtimeFamily,
+              runtimeVersion: target.runtimeVersion,
+              gitRepoUrl: target.gitRepoUrl,
+              gitBranch: branch,
+              commitSha,
+              installCommand: target.installCommand,
+              buildCommand: target.buildCommand,
+              startupFile: target.startupFile,
+              outputDirectory: target.outputDirectory,
+              envVars,
+              callbackUrl: nodeCfg.controlPlaneCallbackUrl,
+            },
+            target.agentEndpoint || undefined
+          );
+          if (!deployRes.ok) {
+            return NextResponse.json(
+              { error: deployRes.error || 'Compute deploy failed.' },
+              { status: 502 }
+            );
+          }
+          containerId = deployRes.data?.containerId || containerId;
+          liveUrl = deployRes.data?.liveUrl || `https://${deployDomain}`;
+          agentBuildLogs = deployRes.data?.buildLogs || agentBuildLogs;
+          deployStatus = deployRes.data?.queuedAsync ? 'building' : 'live_production';
+        }
+
+        if (db && resolvedServiceId) {
+          await db.from('project_deployments').insert({
+            service_id: resolvedServiceId,
+            user_id: patAuth.userId,
+            commit_sha: commitSha,
+            commit_message: String(body.commitMessage || 'CI/CD Public API v1 Deploy'),
+            branch,
+            author_name: 'Public API v1 (PAT)',
+            trigger_source: 'api_deploy',
+            status: deployStatus,
+            is_current_production: deployStatus === 'live_production',
+            duration_seconds: 3,
+            build_job_id: buildJobId,
+            container_id: containerId,
+            live_url: liveUrl || `https://${deployDomain}`,
+            build_logs: agentBuildLogs,
+          });
+        }
+
+        message = `CI/CD pipeline dispatched for ${deployDomain} (branch: ${branch}, job: ${buildJobId || jobId}).`;
         break;
+      }
     }
 
     const durationMs = Date.now() - startTime + 35;
@@ -341,8 +506,11 @@ export async function POST(request: NextRequest) {
       status: 'success',
       action,
       domain: resolvedDomain,
-      serviceId: serviceId || null,
+      serviceId: resolvedServiceId || null,
       deploymentId,
+      buildJobId,
+      r2ArtifactKey,
+      liveUrl,
       cloudflareZoneId,
       cloudflareRecordId,
       durationMs,

@@ -25,6 +25,14 @@ export interface WhmServerNodeRecord {
   auto_provision_enabled: boolean;
   is_healthy: boolean;
   status_message?: string;
+  node_driver?: 'whm_cpanel' | 'devhost_docker' | 'cloudflare_edge' | 'hybrid';
+  agent_endpoint?: string | null;
+  agent_region?: string | null;
+  max_ram_mb?: number;
+  allocated_ram_mb?: number;
+  cpu_cores?: number;
+  agent_version?: string | null;
+  last_heartbeat_at?: string | null;
 }
 
 export interface NodeSelectionCandidate {

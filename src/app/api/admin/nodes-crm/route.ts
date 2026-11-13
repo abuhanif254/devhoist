@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, getServiceSupabase, isDevSandboxMode } from '@/lib/supabase';
 import { requireAdmin, verifySudoToken, serviceUnavailableResponse } from '@/lib/authGuard';
+import { isComputeAgentConfigured, pingComputeAgent } from '@/lib/computeAgentClient';
 
 
 async function logNodeAudit(
   actionType: string,
   targetResource: string,
-  metadata: Record<string, any>,
+  metadata: Record<string, unknown>,
   riskLevel: 'low' | 'medium' | 'high' | 'critical' = 'medium',
   ip: string = '127.0.0.1'
 ) {
@@ -121,8 +122,11 @@ export async function GET(req: NextRequest) {
       nodes,
       customers: customersWithServices,
     });
-  } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+  } catch (err: unknown) {
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : 'Internal server error' },
+      { status: 500 }
+    );
   }
 }
 
@@ -162,6 +166,11 @@ export async function POST(req: NextRequest) {
         monthlyCostBdt = 3500,
         maxSlots = 50,
         maxDiskGb = 100,
+        nodeDriver = 'whm_cpanel',
+        agentEndpoint = null,
+        agentRegion = null,
+        maxRamMb = 65536,
+        cpuCores = 16,
       } = nodeData;
 
       if (!nodeCode || !nodeName || !ipv4Address || !whmHostname || !whmUsername) {
@@ -182,16 +191,66 @@ export async function POST(req: NextRequest) {
             monthly_node_cost_bdt: monthlyCostBdt,
             max_cpanel_slots: maxSlots,
             max_disk_gb: maxDiskGb,
+            node_driver: nodeDriver,
+            agent_endpoint: agentEndpoint ? String(agentEndpoint).trim() : null,
+            agent_region: agentRegion ? String(agentRegion).trim() : null,
+            max_ram_mb: Number(maxRamMb) || 65536,
+            cpu_cores: Number(cpuCores) || 16,
           },
           { onConflict: 'node_code' }
         );
       }
 
-      await logNodeAudit('SERVER_NODE_SAVED', `node:${nodeCode}`, { nodeName, ipv4Address }, 'high', ip);
+      await logNodeAudit('SERVER_NODE_SAVED', `node:${nodeCode}`, { nodeName, ipv4Address, nodeDriver, agentEndpoint }, 'high', ip);
 
       return NextResponse.json({
         success: true,
-        message: `WHM Server Node ${nodeCode} configured and ready.`,
+        message: `Server Node ${nodeCode} (${nodeDriver}) configured and ready.`,
+      });
+    }
+
+    if (action === 'ping_node') {
+      const { nodeId, agentEndpoint } = body;
+      let resolvedEndpoint = (agentEndpoint as string | undefined) || undefined;
+      if (!resolvedEndpoint && nodeId && isSupabaseConfigured()) {
+        const db = getServiceSupabase();
+        const { data: nodeRow } = await db
+          .from('whm_server_nodes')
+          .select('agent_endpoint')
+          .eq('id', nodeId)
+          .maybeSingle();
+        resolvedEndpoint = (nodeRow?.agent_endpoint as string | undefined) || undefined;
+      }
+
+      if (!isComputeAgentConfigured(resolvedEndpoint) && !isDevSandboxMode()) {
+        return serviceUnavailableResponse('Compute Agent Endpoint');
+      }
+
+      const pingRes = await pingComputeAgent(resolvedEndpoint);
+      if (isSupabaseConfigured() && nodeId && pingRes.ok && pingRes.data) {
+        const db = getServiceSupabase();
+        await db
+          .from('whm_server_nodes')
+          .update({
+            is_healthy: pingRes.data.healthy,
+            agent_version: pingRes.data.version,
+            last_heartbeat_at: new Date().toISOString(),
+            status_message: `${pingRes.data.version} · Docker=${pingRes.data.dockerAvailable ? 'OK' : 'DOWN'} · Active=${pingRes.data.activeContainers} · Latency=${pingRes.data.latencyMs}ms`,
+          })
+          .eq('id', nodeId);
+      }
+
+      if (!pingRes.ok) {
+        return NextResponse.json(
+          { success: false, error: pingRes.error || 'Compute agent ping failed', health: pingRes },
+          { status: 502 }
+        );
+      }
+
+      return NextResponse.json({
+        success: true,
+        health: pingRes.data,
+        mode: pingRes.mode,
       });
     }
 
@@ -208,8 +267,11 @@ export async function POST(req: NextRequest) {
     }
 
     return NextResponse.json({ success: false, error: 'Invalid action provided.' }, { status: 400 });
-  } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+  } catch (err: unknown) {
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : 'Internal server error' },
+      { status: 500 }
+    );
   }
 }
 
@@ -367,7 +429,10 @@ export async function PUT(req: NextRequest) {
     }
 
     return NextResponse.json({ success: false, error: 'Invalid action provided.' }, { status: 400 });
-  } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+  } catch (err: unknown) {
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : 'Internal server error' },
+      { status: 500 }
+    );
   }
 }

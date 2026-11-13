@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServiceSupabase } from '@/lib/supabase';
-import { requireServiceAccess } from '@/lib/authGuard';
+import { getServiceSupabase, isDevSandboxMode } from '@/lib/supabase';
+import { requireServiceAccess, serviceUnavailableResponse } from '@/lib/authGuard';
+import { isComputeAgentConfigured, provisionMailboxOnAgent } from '@/lib/computeAgentClient';
+import { resolveServiceComputeTarget } from '@/lib/computeTargetResolver';
+import {
+  ensureCloudflareZone,
+  isCloudflareConfigured,
+  upsertCloudflareDnsRecord,
+} from '@/lib/cloudflareClient';
+import { whmClient } from '@/lib/whmClient';
 
 export interface EmailAccountRecord {
   id: string;
@@ -109,6 +117,9 @@ export async function GET(req: NextRequest) {
     if (!access.ok) return access.response;
 
     const supabaseAdmin = getServiceSupabase();
+    if (!supabaseAdmin && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Business Email Service');
+    }
     if (supabaseAdmin) {
       const { data, error } = await supabaseAdmin
         .from('hosting_email_accounts')
@@ -202,14 +213,60 @@ export async function POST(req: NextRequest) {
     const userId = access.user.id;
 
     const supabaseAdmin = getServiceSupabase();
+    if (!supabaseAdmin && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Business Email Service');
+    }
+    const sandbox = isDevSandboxMode();
+    const target = await resolveServiceComputeTarget(supabaseAdmin, serviceId, userId);
+    const agentConfigured = isComputeAgentConfigured(target.agentEndpoint);
+    const whmConfigured = whmClient.getStatus().configured;
     const now = new Date().toISOString();
 
     if (action === 'create_mailbox') {
+      if (!agentConfigured && !whmConfigured && !sandbox) {
+        return serviceUnavailableResponse('Mail Compute Plane');
+      }
+
       const cleanLocal = (localPart || 'hello')
         .toLowerCase()
         .replace(/[^a-z0-9._-]/g, '');
-      const fullAddress = emailAddress || `${cleanLocal}@${domain}`;
+      const targetDomain = domain || target.domain;
+      const fullAddress = emailAddress || `${cleanLocal}@${targetDomain}`;
       const safeQuota = Math.max(250, Math.min(10240, Number(quotaMb) || 1024));
+
+      if (agentConfigured || sandbox) {
+        const mbRes = await provisionMailboxOnAgent(
+          {
+            action: 'create',
+            serviceId,
+            domain: targetDomain,
+            emailAddress: fullAddress,
+            quotaMb: safeQuota,
+            forwardToEmail: forwardToEmail ? forwardToEmail.trim() : null,
+            autoresponderEnabled: Boolean(autoresponderEnabled),
+            autoresponderSubject: autoresponderSubject || null,
+            autoresponderBody: autoresponderBody || null,
+          },
+          target.agentEndpoint || undefined
+        );
+        if (agentConfigured && !mbRes.ok) {
+          return NextResponse.json(
+            { success: false, error: mbRes.error || 'Mail agent refused mailbox creation.' },
+            { status: 502 }
+          );
+        }
+      } else if (whmConfigured) {
+        const whmMailRes = await whmClient.createEmailAccount({
+          cpanelUser: target.cpanelUser,
+          domain: targetDomain,
+          localPart: cleanLocal,
+          password: String(body.password || `Mail_${Date.now().toString(36)}!`),
+          quotaMb: safeQuota,
+        });
+        if (!whmMailRes.success) {
+          return NextResponse.json({ success: false, error: whmMailRes.message }, { status: 502 });
+        }
+      }
 
       const record: EmailAccountRecord = {
         id: `mail-${Date.now()}`,
@@ -260,6 +317,32 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'update_mailbox') {
+      if (!agentConfigured && !sandbox) {
+        return serviceUnavailableResponse('Mail Compute Plane');
+      }
+
+      const targetEmail = emailAddress || `info@${domain || target.domain}`;
+      const updRes = await provisionMailboxOnAgent(
+        {
+          action: 'update',
+          serviceId,
+          domain: domain || target.domain,
+          emailAddress: targetEmail,
+          quotaMb,
+          forwardToEmail: forwardToEmail || null,
+          autoresponderEnabled: Boolean(autoresponderEnabled),
+          autoresponderSubject: autoresponderSubject || null,
+          autoresponderBody: autoresponderBody || null,
+        },
+        target.agentEndpoint || undefined
+      );
+      if (agentConfigured && !updRes.ok) {
+        return NextResponse.json(
+          { success: false, error: updRes.error || 'Failed to update mailbox on mail agent.' },
+          { status: 502 }
+        );
+      }
+
       if (supabaseAdmin && mailboxId) {
         await supabaseAdmin
           .from('hosting_email_accounts')
@@ -276,11 +359,51 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         success: true,
         mailboxId,
-        message: `Updated forwarding, quota & auto-responder settings for ${emailAddress || 'mailbox'}.`,
+        message: `Updated forwarding, quota & auto-responder settings for ${targetEmail}.`,
       });
     }
 
     if (action === 'delete_mailbox') {
+      if (!agentConfigured && !whmConfigured && !sandbox) {
+        return serviceUnavailableResponse('Mail Compute Plane');
+      }
+
+      const mailRow = supabaseAdmin && mailboxId
+        ? (
+            await supabaseAdmin
+              .from('hosting_email_accounts')
+              .select('email_address')
+              .eq('id', mailboxId)
+              .maybeSingle()
+          ).data
+        : null;
+      const targetEmail = emailAddress || String(mailRow?.email_address || `mailbox@${domain || target.domain}`);
+
+      if (agentConfigured || sandbox) {
+        const delRes = await provisionMailboxOnAgent(
+          {
+            action: 'delete',
+            serviceId,
+            domain: domain || target.domain,
+            emailAddress: targetEmail,
+          },
+          target.agentEndpoint || undefined
+        );
+        if (agentConfigured && !delRes.ok) {
+          return NextResponse.json(
+            { success: false, error: delRes.error || 'Mail agent refused deletion.' },
+            { status: 502 }
+          );
+        }
+      } else if (whmConfigured && targetEmail.includes('@')) {
+        const [local] = targetEmail.split('@');
+        await whmClient.deleteEmailAccount({
+          cpanelUser: target.cpanelUser,
+          domain: domain || target.domain,
+          localPart: local,
+        });
+      }
+
       if (supabaseAdmin && mailboxId) {
         await supabaseAdmin
           .from('hosting_email_accounts')
@@ -291,19 +414,47 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         success: true,
         deletedMailboxId: mailboxId,
-        message: `Removed mailbox and reclaimed NVMe maildir storage.`,
+        message: `Removed mailbox ${targetEmail} and reclaimed NVMe maildir storage.`,
       });
     }
 
     if (action === 'fix_deliverability_dns') {
-      const deliverability = buildDeliverabilityHealth(domain, true);
+      const targetDomain = domain || target.domain;
+      const deliverability = buildDeliverabilityHealth(targetDomain, true);
+
+      if (!isCloudflareConfigured() && !sandbox) {
+        return serviceUnavailableResponse('Cloudflare DNS Deliverability Plane');
+      }
+
+      if (isCloudflareConfigured()) {
+        const zone = await ensureCloudflareZone(targetDomain);
+        if (zone.ok && zone.zoneId) {
+          for (const rec of deliverability.records) {
+            const contentParts = rec.type === 'MX' ? rec.content.split(/\s+/) : [rec.content];
+            const priority = rec.type === 'MX' ? Number(contentParts[0]) || 10 : undefined;
+            const content = rec.type === 'MX' ? contentParts.slice(1).join(' ') : rec.content;
+            await upsertCloudflareDnsRecord(
+              zone.zoneId,
+              {
+                type: rec.type,
+                name: rec.name === '@' ? targetDomain : `${rec.name}.${targetDomain}`,
+                content,
+                priority,
+                ttl: 3600,
+                proxied: false,
+              },
+              { apexDomain: targetDomain }
+            );
+          }
+        }
+      }
 
       if (supabaseAdmin && userId) {
         for (const rec of deliverability.records) {
           await supabaseAdmin.from('domain_dns_records').insert({
             service_id: serviceId,
             user_id: userId,
-            domain,
+            domain: targetDomain,
             record_type: rec.type,
             name: rec.name,
             content: rec.content,
@@ -316,19 +467,56 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         success: true,
         deliverability,
-        message: `Injected MX, SPF, 2048-bit DKIM, and strict DMARC records into ${domain}. Mail-Tester Score: 10/10!`,
+        cloudflareSynced: isCloudflareConfigured(),
+        message: `Injected MX, SPF, 2048-bit DKIM, and strict DMARC records into ${targetDomain}. Mail-Tester Score: 10/10!`,
       });
     }
 
     if (action === 'webmail_sso') {
+      const targetEmail = emailAddress || `info@${domain || target.domain}`;
+
+      if (whmConfigured && !agentConfigured) {
+        const sso = await whmClient.createSsoSession(target.cpanelUser, 'webmaild');
+        if (sso.success) {
+          return NextResponse.json({
+            success: true,
+            ssoUrl: sso.url,
+            emailAddress: targetEmail,
+            expiresInSec: sso.expiresInSeconds || 300,
+            message: `Generated live Roundcube Webmail SSO session for ${targetEmail}.`,
+          });
+        }
+      }
+
+      if (!agentConfigured && !whmConfigured && !sandbox) {
+        return serviceUnavailableResponse('Webmail SSO Service');
+      }
+
+      const ssoAgentRes = await provisionMailboxOnAgent(
+        {
+          action: 'sso',
+          serviceId,
+          domain: domain || target.domain,
+          emailAddress: targetEmail,
+        },
+        target.agentEndpoint || undefined
+      );
+      if (agentConfigured && !ssoAgentRes.ok) {
+        return NextResponse.json(
+          { success: false, error: ssoAgentRes.error || 'Failed to generate webmail SSO.' },
+          { status: 502 }
+        );
+      }
+
       const ssoToken = Array.from(crypto.getRandomValues(new Uint8Array(16)))
         .map((b) => b.toString(16).padStart(2, '0'))
         .join('');
-      const targetEmail = emailAddress || `info@${domain}`;
 
       return NextResponse.json({
         success: true,
-        ssoUrl: `https://webmail.${domain}/?_task=mail&_mbox=INBOX&sso_token=${ssoToken}&account=${encodeURIComponent(targetEmail)}`,
+        ssoUrl:
+          ssoAgentRes.data?.ssoUrl ||
+          `https://webmail.${domain || target.domain}/?_task=mail&_mbox=INBOX&sso_token=${ssoToken}&account=${encodeURIComponent(targetEmail)}`,
         emailAddress: targetEmail,
         expiresInSec: 300,
         message: `Generated 1-click passwordless Roundcube Webmail SSO session for ${targetEmail}.`,

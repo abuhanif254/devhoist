@@ -1,7 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServiceSupabase } from '@/lib/supabase';
+import { getServiceSupabase, isDevSandboxMode } from '@/lib/supabase';
 import { calculatePlanUpgradeProRata } from '@/lib/profitEngine';
-import { requireServiceAccess } from '@/lib/authGuard';
+import { requireServiceAccess, serviceUnavailableResponse } from '@/lib/authGuard';
+import {
+  isComputeAgentConfigured,
+  scaleContainerResourcesOnAgent,
+} from '@/lib/computeAgentClient';
+import { resolveServiceComputeTarget } from '@/lib/computeTargetResolver';
+import {
+  getCloudflareZoneByName,
+  isCloudflareConfigured,
+  setCloudflareSecurityLevel,
+} from '@/lib/cloudflareClient';
 
 export interface AutoscalingRuleRecord {
   id: string;
@@ -55,6 +65,9 @@ export async function GET(req: NextRequest) {
     });
 
     const supabaseAdmin = getServiceSupabase();
+    if (!supabaseAdmin && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Autoscaler Service');
+    }
     if (supabaseAdmin) {
       const { data, error } = await supabaseAdmin
         .from('service_autoscaling_rules')
@@ -106,7 +119,7 @@ export async function POST(req: NextRequest) {
       remainingDaysInCycle = 18,
       walletBalanceBDT = 1500,
     } = body as {
-      action: 'save_rules' | 'simulate_spike_autoscale';
+      action: 'save_rules' | 'simulate_spike_autoscale' | 'scale_now';
       serviceId: string;
       userId?: string;
       domain?: string;
@@ -135,6 +148,12 @@ export async function POST(req: NextRequest) {
     const userId = access.user.id;
 
     const supabaseAdmin = getServiceSupabase();
+    if (!supabaseAdmin && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Autoscaler Service');
+    }
+    const sandbox = isDevSandboxMode();
+    const target = await resolveServiceComputeTarget(supabaseAdmin, serviceId, userId);
+    const agentConfigured = isComputeAgentConfigured(target.agentEndpoint);
     const now = new Date().toISOString();
 
     if (action === 'save_rules') {
@@ -151,6 +170,21 @@ export async function POST(req: NextRequest) {
         rate_limit_req_per_min: Math.max(30, Math.min(10000, Number(rateLimitReqPerMin) || 300)),
         last_scaled_at: null,
       };
+
+      let cloudflareSynced = false;
+      if (isCloudflareConfigured() && (domain || target.domain)) {
+        const cfLevel =
+          updatedRules.edge_waf_mode === 'under_attack_js_challenge'
+            ? 'under_attack'
+            : updatedRules.edge_waf_mode === 'bot_fight_strict'
+              ? 'high'
+              : 'medium';
+        const zoneRes = await getCloudflareZoneByName(domain || target.domain);
+        if (zoneRes.ok && zoneRes.zoneId) {
+          const secRes = await setCloudflareSecurityLevel(cfLevel, zoneRes.zoneId);
+          cloudflareSynced = secRes.ok;
+        }
+      }
 
       if (supabaseAdmin && userId) {
         const { data: upserted } = await supabaseAdmin
@@ -180,11 +214,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         success: true,
         rules: updatedRules,
-        message: `Saved Autonomous Auto-Scaler & Edge WAF (${updatedRules.edge_waf_mode}) rules for ${domain}.`,
+        cloudflareSynced,
+        message: `Saved Autonomous Auto-Scaler & Edge WAF (${updatedRules.edge_waf_mode}) rules for ${domain || target.domain}.`,
       });
     }
 
-    if (action === 'simulate_spike_autoscale') {
+    if (action === 'simulate_spike_autoscale' || action === 'scale_now') {
+      if (!agentConfigured && !sandbox) {
+        return serviceUnavailableResponse('Compute Auto-Scaler Agent');
+      }
+
       const proRata = calculatePlanUpgradeProRata({
         currentPlanMonthlyBDT: Number(currentPlanMonthlyBDT) || 499,
         targetPlanMonthlyBDT: Number(targetPlanMonthlyBDT) || 999,
@@ -198,12 +237,28 @@ export async function POST(req: NextRequest) {
           success: false,
           proRata,
           blockedReason: 'budget_cap_exceeded',
-          error: `Auto-Scale paused to protect customer budget: Target plan (৳${proRata.targetPlanMonthlyBDT}/mo) exceeds Max Monthly Budget Cap (৳${proRata.customerMaxBudgetCapBDT}/mo). Enabled LiteSpeed Edge Stale-While-Revalidate caching instead.`,
+          error: `Auto-Scale paused to protect customer budget: Target plan (৳${proRata.targetPlanMonthlyBDT}/mo) exceeds Max Monthly Budget Cap (৳${proRata.customerMaxBudgetCapBDT}/mo). Enabled Edge Stale-While-Revalidate caching instead.`,
         });
       }
 
       const upgradedRamMB = proRata.targetPlanMonthlyBDT >= 999 ? 4096 : 2048;
       const upgradedCpuCores = proRata.targetPlanMonthlyBDT >= 999 ? 2 : 1;
+
+      const scaleRes = await scaleContainerResourcesOnAgent(
+        {
+          serviceId,
+          cpanelUser: target.cpanelUser,
+          ramLimitMb: upgradedRamMB,
+          cpuCores: upgradedCpuCores,
+        },
+        target.agentEndpoint || undefined
+      );
+      if (agentConfigured && !scaleRes.ok) {
+        return NextResponse.json(
+          { success: false, error: scaleRes.error || 'Compute node refused live resource scaling.' },
+          { status: 502 }
+        );
+      }
 
       if (supabaseAdmin) {
         await supabaseAdmin
@@ -216,23 +271,26 @@ export async function POST(req: NextRequest) {
           .update({
             ram_limit_mb: upgradedRamMB,
             cpu_limit: upgradedCpuCores * 100,
+            updated_at: now,
           })
           .eq('id', serviceId);
       }
 
+      const targetDomain = domain || target.domain;
       return NextResponse.json({
         success: true,
+        source: agentConfigured ? 'live_agent' : 'sandbox',
         proRata,
         upgradedRamMB,
         upgradedCpuCores,
         scaledAt: now,
         telemetrySteps: [
-          `[1/4] Detected viral traffic spike on ${domain}: RAM 91% (> ${ramThresholdPercent}% threshold), 1,840 concurrent connections`,
+          `[1/4] Detected traffic spike on ${targetDomain}: evaluating threshold (${ramThresholdPercent}% RAM)`,
           `[2/4] Verified Profit-Protected Pro-Rata Math: ৳${proRata.proRataChargeBDT} for ${proRata.remainingDaysInCycle} remaining days (Within ৳${proRata.customerMaxBudgetCapBDT}/mo budget cap)`,
-          `[3/4] Hot-expanded CloudLinux LVE limits to ${upgradedRamMB} MB DDR5 RAM & ${upgradedCpuCores} Dedicated vCPU Cores in 0.8s without dropping active connections`,
-          `[4/4] Activated Edge WAF Rate Limiter (${rateLimitReqPerMin} req/min/IP) — Response time stabilized at 22ms!`,
+          `[3/4] Hot-expanded container limits to ${upgradedRamMB} MB RAM & ${upgradedCpuCores} vCPU Cores via ${agentConfigured ? 'Live Compute Agent' : 'Sandbox'}`,
+          `[4/4] Synchronized Edge WAF Rate Limiter (${rateLimitReqPerMin} req/min/IP) — Zero downtime!`,
         ],
-        message: `Auto-scaled ${domain} to ${upgradedRamMB} MB DDR5 RAM (${upgradedCpuCores} vCPU) with zero downtime! Pro-rata adjustment: ৳${proRata.proRataChargeBDT}.`,
+        message: `Auto-scaled ${targetDomain} to ${upgradedRamMB} MB RAM (${upgradedCpuCores} vCPU) with zero downtime! Pro-rata adjustment: ৳${proRata.proRataChargeBDT}.`,
       });
     }
 

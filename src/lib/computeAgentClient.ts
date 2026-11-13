@@ -66,6 +66,11 @@ export interface AgentProvisionResult {
   buildLogs: string;
   durationSeconds: number;
   nodeVersion?: string;
+  metrics?: {
+    diskUsedGb?: number;
+    inodesUsed?: number;
+    ramUsedMb?: number;
+  };
 }
 
 export interface ContainerTelemetryPayload {
@@ -375,6 +380,13 @@ export async function dispatchBuildAndDeploy(
     startupFile?: string;
     outputDirectory?: string;
     r2ArtifactKey?: string;
+    artifactDownloadUrl?: string;
+    releaseId?: string;
+    deploymentId?: string;
+    startCommand?: string;
+    ramLimitMb?: number;
+    cpuCores?: number;
+    diskLimitGb?: number;
     envVars: Record<string, string>;
     callbackUrl: string;
   },

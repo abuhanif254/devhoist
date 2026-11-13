@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import zlib from 'node:zlib';
 import { pathToFileURL } from 'node:url';
 
 const DEFAULT_PORT = Number(process.env.AGENT_PORT || process.env.PORT || 8787);
@@ -92,6 +93,260 @@ export class AgentValidationError extends Error {
     this.name = 'AgentValidationError';
     this.statusCode = statusCode;
   }
+}
+
+const MAX_ZIP_ENTRIES = 10000;
+const MAX_ZIP_SINGLE_FILE_BYTES = 50 * 1024 * 1024;
+const MAX_ZIP_UNCOMPRESSED_BYTES = 250 * 1024 * 1024;
+const MAX_ZIP_EXPANSION_RATIO = 100;
+const ZIP_BOMB_RATIO_FLOOR_BYTES = 5 * 1024 * 1024;
+const IGNORED_OS_FILES = new Set(['.ds_store', 'thumbs.db', 'desktop.ini']);
+
+function sanitizeZipEntryPath(rawPath) {
+  if (!rawPath || typeof rawPath !== 'string') {
+    throw new AgentValidationError('Empty ZIP entry path rejected.', 422);
+  }
+  if (rawPath.includes('\0') || rawPath.includes('\\') || rawPath.length > 512) {
+    throw new AgentValidationError(`Unsafe ZIP entry path rejected: "${rawPath}"`, 422);
+  }
+  if (rawPath.startsWith('/') || /^[a-zA-Z]:/.test(rawPath)) {
+    throw new AgentValidationError(`Absolute ZIP path rejected: "${rawPath}"`, 422);
+  }
+
+  const isDirectory = rawPath.endsWith('/');
+  const trimmed = rawPath.replace(/\/+$/, '');
+  if (!trimmed) return { normalized: '', isDirectory: true, ignore: true };
+
+  const segments = trimmed.split('/');
+  const cleanSegments = [];
+  for (let i = 0; i < segments.length; i += 1) {
+    const seg = segments[i];
+    if (!seg || seg === '..') {
+      throw new AgentValidationError(`Zip-Slip traversal rejected: "${rawPath}"`, 422);
+    }
+    if (seg === '.') {
+      if (i === 0 && cleanSegments.length === 0) continue;
+      throw new AgentValidationError(`Relative "." path segment rejected: "${rawPath}"`, 422);
+    }
+    cleanSegments.push(seg);
+  }
+
+  if (cleanSegments.length === 0) {
+    return { normalized: '', isDirectory: true, ignore: true };
+  }
+
+  const normalized = cleanSegments.join('/');
+  const lowerSegs = cleanSegments.map((s) => s.toLowerCase());
+  const baseLower = lowerSegs[lowerSegs.length - 1];
+
+  for (let i = 0; i < lowerSegs.length - 1; i += 1) {
+    if ((lowerSegs[i] === '.git' && lowerSegs[i + 1] === 'hooks') || lowerSegs[i] === '.ssh') {
+      throw new AgentValidationError(`Forbidden security path rejected: "${normalized}"`, 422);
+    }
+  }
+  if (baseLower === 'id_rsa' || baseLower === 'id_ed25519' || baseLower === 'authorized_keys') {
+    throw new AgentValidationError(`Private key file rejected: "${normalized}"`, 422);
+  }
+
+  const ignore =
+    lowerSegs.includes('__macosx') ||
+    lowerSegs.includes('.git') ||
+    IGNORED_OS_FILES.has(baseLower);
+
+  return { normalized, isDirectory, ignore };
+}
+
+/**
+ * Hardened standalone Node built-in ZIP extractor for devhost-agent.
+ * Guards against Zip-Slip, UNIX symlinks, encrypted archives, and zip bombs
+ * before writing extracted files strictly beneath `targetDir`.
+ */
+export async function extractSafeZipBufferToDir(zipBuffer, targetDir, options = {}) {
+  const buf = Buffer.isBuffer(zipBuffer) ? zipBuffer : Buffer.from(zipBuffer);
+  if (buf.length < 22 || buf[0] !== 0x50 || buf[1] !== 0x4b) {
+    throw new AgentValidationError('Invalid ZIP archive payload.', 422);
+  }
+
+  const maxUncompressed = Math.min(
+    Number(options.maxUncompressedBytes || MAX_ZIP_UNCOMPRESSED_BYTES),
+    MAX_ZIP_UNCOMPRESSED_BYTES
+  );
+  const maxEntries = Math.min(Number(options.maxEntries || MAX_ZIP_ENTRIES), MAX_ZIP_ENTRIES);
+
+  const minSearch = Math.max(0, buf.length - 22 - 65535);
+  let eocdOffset = -1;
+  for (let i = buf.length - 22; i >= minSearch; i -= 1) {
+    if (buf.readUInt32LE(i) === 0x06054b50) {
+      const commentLen = buf.readUInt16LE(i + 20);
+      if (i + 22 + commentLen <= buf.length) {
+        eocdOffset = i;
+        break;
+      }
+    }
+  }
+  if (eocdOffset < 0) {
+    throw new AgentValidationError('Malformed ZIP archive: EOCD missing.', 422);
+  }
+
+  const totalEntries = buf.readUInt16LE(eocdOffset + 10);
+  const cdSize = buf.readUInt32LE(eocdOffset + 12);
+  const cdOffset = buf.readUInt32LE(eocdOffset + 16);
+  if (totalEntries === 0xffff || cdOffset + cdSize > eocdOffset) {
+    throw new AgentValidationError('Corrupted or unsupported ZIP64 Central Directory.', 422);
+  }
+
+  const pendingFiles = [];
+  let cursor = cdOffset;
+  let parsedEntries = 0;
+  let declaredTotalBytes = 0;
+
+  while (cursor < cdOffset + cdSize) {
+    if (cursor + 46 > cdOffset + cdSize || buf.readUInt32LE(cursor) !== 0x02014b50) {
+      throw new AgentValidationError('Invalid ZIP Central Directory record.', 422);
+    }
+
+    const flags = buf.readUInt16LE(cursor + 8);
+    const method = buf.readUInt16LE(cursor + 10);
+    const compSize = buf.readUInt32LE(cursor + 20);
+    const uncompSize = buf.readUInt32LE(cursor + 24);
+    const nameLen = buf.readUInt16LE(cursor + 28);
+    const extraLen = buf.readUInt16LE(cursor + 30);
+    const commentLen = buf.readUInt16LE(cursor + 32);
+    const externalAttrs = buf.readUInt32LE(cursor + 38);
+    const localHeaderOffset = buf.readUInt32LE(cursor + 42);
+
+    const nextCursor = cursor + 46 + nameLen + extraLen + commentLen;
+    if (nextCursor > cdOffset + cdSize) {
+      throw new AgentValidationError('Truncated ZIP Central Directory entry.', 422);
+    }
+
+    const rawName = buf.subarray(cursor + 46, cursor + 46 + nameLen).toString('utf8');
+    parsedEntries += 1;
+    if (parsedEntries > maxEntries) {
+      throw new AgentValidationError(`ZIP entry count exceeds security limit (${maxEntries}).`, 422);
+    }
+
+    if ((flags & 0x0001) !== 0) {
+      throw new AgentValidationError(`Encrypted ZIP entry rejected: "${rawName}"`, 422);
+    }
+    if (method !== 0 && method !== 8) {
+      throw new AgentValidationError(`Unsupported ZIP compression method ${method} on "${rawName}".`, 422);
+    }
+
+    const unixType = (externalAttrs >>> 16) & 0o170000;
+    if (
+      unixType === 0o120000 ||
+      unixType === 0o010000 ||
+      unixType === 0o020000 ||
+      unixType === 0o060000 ||
+      unixType === 0o140000
+    ) {
+      throw new AgentValidationError(`UNIX symlink or special file rejected: "${rawName}"`, 422);
+    }
+
+    const pathInfo = sanitizeZipEntryPath(rawName);
+    if (localHeaderOffset + 30 > buf.length || buf.readUInt32LE(localHeaderOffset) !== 0x04034b50) {
+      throw new AgentValidationError(`Invalid local ZIP header for "${rawName}".`, 422);
+    }
+
+    const localFlags = buf.readUInt16LE(localHeaderOffset + 6);
+    if ((localFlags & 0x0001) !== 0) {
+      throw new AgentValidationError(`Encrypted local ZIP entry rejected: "${rawName}"`, 422);
+    }
+
+    const localNameLen = buf.readUInt16LE(localHeaderOffset + 26);
+    const localExtraLen = buf.readUInt16LE(localHeaderOffset + 28);
+    const dataStart = localHeaderOffset + 30 + localNameLen + localExtraLen;
+    const dataEnd = dataStart + compSize;
+    if (dataEnd > eocdOffset && dataEnd > buf.length) {
+      throw new AgentValidationError(`ZIP entry out-of-bounds compressed slice: "${rawName}"`, 422);
+    }
+
+    if (!pathInfo.isDirectory && !pathInfo.ignore) {
+      if (uncompSize > MAX_ZIP_SINGLE_FILE_BYTES) {
+        throw new AgentValidationError(`ZIP entry "${pathInfo.normalized}" exceeds 50MB cap.`, 422);
+      }
+      declaredTotalBytes += uncompSize;
+      if (
+        declaredTotalBytes > maxUncompressed ||
+        (declaredTotalBytes > ZIP_BOMB_RATIO_FLOOR_BYTES &&
+          declaredTotalBytes / Math.max(buf.length, 1) > MAX_ZIP_EXPANSION_RATIO)
+      ) {
+        throw new AgentValidationError('ZIP bomb / excessive expansion ratio rejected.', 422);
+      }
+      pendingFiles.push({
+        path: pathInfo.normalized,
+        method,
+        compressedSlice: buf.subarray(dataStart, dataEnd),
+      });
+    }
+
+    cursor = nextCursor;
+  }
+
+  // Unwrap single top-level wrapper folder when uniform across all extracted files
+  let unwrappedFiles = pendingFiles;
+  if (pendingFiles.length > 0) {
+    const firstSlash = pendingFiles[0].path.indexOf('/');
+    if (firstSlash > 0) {
+      const prefix = pendingFiles[0].path.slice(0, firstSlash + 1);
+      if (pendingFiles.every((f) => f.path.startsWith(prefix) && f.path.length > prefix.length)) {
+        unwrappedFiles = pendingFiles.map((f) => ({
+          ...f,
+          path: f.path.slice(prefix.length),
+        }));
+      }
+    }
+  }
+
+  const resolvedRoot = path.resolve(targetDir);
+  await fs.mkdir(resolvedRoot, { recursive: true });
+
+  let actualTotalBytes = 0;
+  let filesWritten = 0;
+
+  for (const item of unwrappedFiles) {
+    const remainingBudget = maxUncompressed - actualTotalBytes;
+    const maxForThisFile = Math.min(MAX_ZIP_SINGLE_FILE_BYTES, remainingBudget);
+    let content;
+    if (item.method === 0) {
+      if (item.compressedSlice.length > maxForThisFile) {
+        throw new AgentValidationError('ZIP uncompressed size exceeds safety budget.', 422);
+      }
+      content = item.compressedSlice;
+    } else {
+      try {
+        content = zlib.inflateRawSync(item.compressedSlice, {
+          maxOutputLength: Math.max(1, maxForThisFile),
+        });
+      } catch (zErr) {
+        throw new AgentValidationError(
+          `ZIP inflation blocked (${zErr instanceof Error ? zErr.message : 'overflow'}) for "${item.path}".`,
+          422
+        );
+      }
+    }
+
+    actualTotalBytes += content.length;
+    if (
+      actualTotalBytes > maxUncompressed ||
+      (actualTotalBytes > ZIP_BOMB_RATIO_FLOOR_BYTES &&
+        actualTotalBytes / Math.max(buf.length, 1) > MAX_ZIP_EXPANSION_RATIO)
+    ) {
+      throw new AgentValidationError('ZIP bomb detected during bounded inflation.', 422);
+    }
+
+    const destPath = path.resolve(resolvedRoot, item.path);
+    if (destPath !== resolvedRoot && !destPath.startsWith(resolvedRoot + path.sep)) {
+      throw new AgentValidationError(`Destination path escaped target root: "${item.path}"`, 422);
+    }
+
+    await fs.mkdir(path.dirname(destPath), { recursive: true });
+    await fs.writeFile(destPath, content, { mode: 0o644 });
+    filesWritten += 1;
+  }
+
+  return { filesWritten, actualTotalBytes };
 }
 
 export function safeIdentifier(input, fallback = 'app') {
@@ -771,18 +1026,39 @@ export function createAgentHandler(options = {}) {
         await fs.mkdir(releaseDir, { recursive: true });
         await fs.mkdir(publicDir, { recursive: true });
 
-        // Clone or extract source if provided
+        // Clone or extract source if provided (supports hardened .zip or .tar.gz artifacts)
         if (body.artifactDownloadUrl) {
           const dlRes = await fetchImpl(body.artifactDownloadUrl);
           if (!dlRes.ok) {
             return sendJson(res, 502, { ok: false, error: 'Artifact download failed' });
           }
-          const archivePath = path.join(serviceDir, `${releaseId}.tar.gz`);
           const buf = Buffer.from(await dlRes.arrayBuffer());
-          await fs.writeFile(archivePath, buf);
-          const untar = await runExecFile('tar', ['-xzf', archivePath, '-C', releaseDir]);
-          if (!untar.ok) {
-            return sendJson(res, 422, { ok: false, error: `Artifact extraction failed: ${untar.stderr}` });
+          const isZipArchive =
+            (buf.length >= 4 &&
+              buf[0] === 0x50 &&
+              buf[1] === 0x4b &&
+              ((buf[2] === 0x03 && buf[3] === 0x04) || (buf[2] === 0x05 && buf[3] === 0x06))) ||
+            String(body.r2ArtifactKey || body.artifactDownloadUrl || '').toLowerCase().endsWith('.zip');
+
+          if (isZipArchive) {
+            try {
+              await extractSafeZipBufferToDir(buf, releaseDir);
+            } catch (zipErr) {
+              return sendJson(res, 422, {
+                ok: false,
+                error:
+                  zipErr instanceof Error
+                    ? `ZIP artifact rejected: ${zipErr.message}`
+                    : 'ZIP artifact extraction failed',
+              });
+            }
+          } else {
+            const archivePath = path.join(serviceDir, `${releaseId}.tar.gz`);
+            await fs.writeFile(archivePath, buf);
+            const untar = await runExecFile('tar', ['-xzf', archivePath, '-C', releaseDir]);
+            if (!untar.ok) {
+              return sendJson(res, 422, { ok: false, error: `Artifact extraction failed: ${untar.stderr}` });
+            }
           }
         } else if (body.gitRepoUrl) {
           const cleanBranch = String(body.gitBranch || 'main').replace(/[^a-zA-Z0-9._/-]/g, '');
@@ -918,11 +1194,27 @@ export function createAgentHandler(options = {}) {
           }
         }
 
+        const usage = await measureDirectoryUsage(serviceDir);
+        const diskUsedGb = Number((usage.totalBytes / (1024 * 1024 * 1024)).toFixed(4));
+        const inodesUsed = usage.inodesUsed;
+
+        let healthStatus = 'healthy';
+        if (dockerBuild.ok) {
+          try {
+            const probeRes = await fetchImpl(`http://127.0.0.1:${hostPort}/`, {
+              signal: AbortSignal.timeout(2500),
+            });
+            healthStatus = probeRes.status < 500 ? 'healthy' : 'starting';
+          } catch {
+            healthStatus = 'starting';
+          }
+        }
+
         const buildLogs =
           (dockerBuild.stdout || '') +
           '\n' +
           (dockerBuild.stderr || '') +
-          `\n[devhost-agent] Deployed hardened non-root release ${releaseId} in ${containerId}.`;
+          `\n[devhost-agent] Deployed hardened non-root release ${releaseId} in ${containerId} (${inodesUsed} inodes, ${diskUsedGb} GB).`;
 
         if (body.callbackUrl) {
           await sendSignedCallback(
@@ -939,6 +1231,10 @@ export function createAgentHandler(options = {}) {
               liveUrl,
               buildLogs: buildLogs.slice(-4000),
               durationSeconds,
+              metrics: {
+                diskUsedGb,
+                inodesUsed,
+              },
             },
             fetchImpl
           );
@@ -950,9 +1246,13 @@ export function createAgentHandler(options = {}) {
           upstreamPort,
           upstreamUrl,
           liveUrl,
-          healthStatus: 'healthy',
+          healthStatus,
           buildLogs: buildLogs.slice(-4000),
           durationSeconds,
+          metrics: {
+            diskUsedGb,
+            inodesUsed,
+          },
         });
       }
 

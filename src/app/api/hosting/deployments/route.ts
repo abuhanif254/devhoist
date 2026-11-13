@@ -4,10 +4,12 @@ import { requireServiceAccess, serviceUnavailableResponse } from '@/lib/authGuar
 import {
   deployStaticEdgeRelease,
   enqueueBuildJob,
+  getR2Artifact,
   isBuildQueueConfigured,
   isR2ArtifactsConfigured,
   putR2Artifact,
 } from '@/lib/cloudflareStorageQueue';
+import { getCloudflareConfig, purgeCloudflareCache } from '@/lib/cloudflareClient';
 import {
   dispatchBuildAndDeploy,
   dispatchRollbackRelease,
@@ -370,7 +372,7 @@ export async function POST(request: NextRequest) {
         ? (
             await db
               .from('project_deployments')
-              .select('id, commit_sha, r2_artifact_key')
+              .select('id, commit_sha, r2_artifact_key, release_id')
               .eq('id', targetDeploymentId)
               .eq('service_id', serviceId)
               .maybeSingle()
@@ -384,22 +386,53 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      if (target.runtimeFamily === 'static_edge') {
+      const isStaticEdgeRollback =
+        target.runtimeFamily === 'static_edge' ||
+        String(targetDepRow?.r2_artifact_key || '').startsWith('sites/');
+
+      if (isStaticEdgeRollback) {
         if (!isR2ArtifactsConfigured() && !sandbox) {
           return serviceUnavailableResponse('Cloudflare R2 Artifacts Plane');
         }
-        const rollbackRelease = String(targetDepRow?.r2_artifact_key || '').split('/')[3] || `rel_${targetDepRow?.commit_sha || 'rollback'}`;
+        const siteKey = (serviceId || target.domain).replace(/[^a-zA-Z0-9._-]/g, '_');
+        const rollbackRelease =
+          (typeof targetDepRow?.release_id === 'string' && targetDepRow.release_id.trim()) ||
+          String(targetDepRow?.r2_artifact_key || '').split('/')[3] ||
+          `rel_${targetDepRow?.commit_sha || 'rollback'}`;
+        const releasePrefix = `sites/${siteKey}/releases/${rollbackRelease}`;
+
+        const releaseIndexProbe = await getR2Artifact(`${releasePrefix}/index.html`);
+        const releaseKeyProbe =
+          !releaseIndexProbe.found && targetDepRow?.r2_artifact_key
+            ? await getR2Artifact(String(targetDepRow.r2_artifact_key))
+            : releaseIndexProbe;
+
+        if (isR2ArtifactsConfigured() && !releaseIndexProbe.found && !releaseKeyProbe.found) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: `Rollback target release (${rollbackRelease}) artifacts were not found in R2 storage.`,
+            },
+            { status: 404 }
+          );
+        }
+
         await putR2Artifact(
-          `sites/${serviceId}/current.json`,
+          `sites/${siteKey}/current.json`,
           JSON.stringify({
             serviceId,
             domain: target.domain,
             releaseId: rollbackRelease,
+            releasePrefix,
             rolledBackFromDeploymentId: targetDeploymentId,
             publishedAt: new Date().toISOString(),
           }),
           'application/json'
         );
+
+        if (getCloudflareConfig().configured && target.domain) {
+          await purgeCloudflareCache({ domain: target.domain, purgeEverything: true }).catch(() => null);
+        }
       } else {
         if (!isComputeAgentConfigured(target.agentEndpoint) && !sandbox) {
           return serviceUnavailableResponse('Compute Agent Node');
@@ -408,7 +441,9 @@ export async function POST(request: NextRequest) {
           {
             serviceId,
             domain: target.domain,
-            releaseId: targetDeploymentId,
+            releaseId:
+              (typeof targetDepRow?.release_id === 'string' && targetDepRow.release_id.trim()) ||
+              targetDeploymentId,
             commitSha: targetDepRow?.commit_sha || undefined,
           },
           target.agentEndpoint || undefined

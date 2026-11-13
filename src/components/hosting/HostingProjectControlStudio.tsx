@@ -37,6 +37,7 @@ import {
 import CloudWorkspaceExpansionStudio, {
   WorkspaceExpansionTab,
 } from '@/components/hosting/CloudWorkspaceExpansionStudio';
+import { DirectUploadDeployPanel } from '@/components/hosting/DirectUploadDeployPanel';
 
 type ControlStudioActiveTab =
   | 'overview'
@@ -863,6 +864,15 @@ export default function HostingProjectControlStudio({
          ======================================================================= */}
       {currentTab === 'deployments' && (
         <div className="space-y-6 animate-in fade-in duration-150 font-mono text-xs">
+          {/* Direct File / Folder / ZIP Upload & Deploy */}
+          <DirectUploadDeployPanel
+            serviceId={serviceId}
+            domain={serviceDomain}
+            onDeployed={() => {
+              void fetchAllData();
+            }}
+          />
+
           {/* Header Action Strip */}
           <div className="p-5 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>

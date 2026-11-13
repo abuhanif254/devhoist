@@ -24,6 +24,7 @@ import {
   ArrowUpRight,
   Globe,
 } from 'lucide-react';
+import { DirectUploadDeployPanel } from '@/components/hosting/DirectUploadDeployPanel';
 
 export type WorkspaceExpansionTab =
   | 'files'
@@ -826,6 +827,17 @@ export default function CloudWorkspaceExpansionStudio({
       {/* ===================================================================== */}
       {activeSubTab === 'files' && (
         <div className="rounded-2xl bg-slate-900/90 border border-slate-800 overflow-hidden">
+          <div className="p-5 border-b border-slate-800 bg-slate-950/40">
+            <DirectUploadDeployPanel
+              serviceId={serviceId}
+              domain={domain}
+              compact
+              onDeployed={() => {
+                void loadFiles();
+              }}
+              onNotify={onNotify}
+            />
+          </div>
           <div className="p-5 border-b border-slate-800 flex flex-wrap items-center justify-between gap-4">
             <div>
               <div className="flex items-center gap-2">

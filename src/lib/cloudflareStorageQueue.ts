@@ -80,6 +80,8 @@ export interface BuildQueueJobPayload {
     | 'manual_dashboard'
     | 'github_webhook'
     | 'zip_upload'
+    | 'folder_upload'
+    | 'file_upload'
     | 'rollback'
     | 'preview_promotion'
     | 'api_deploy';
@@ -95,6 +97,8 @@ export interface BuildQueueJobPayload {
   cpuCores?: number;
   diskGb?: number;
   r2ArtifactKey?: string;
+  artifactDownloadUrl?: string;
+  releaseId?: string;
   deploymentId?: string;
   targetNodeCode?: string;
   targetAgentEndpoint?: string;

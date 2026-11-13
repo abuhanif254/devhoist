@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
+import { isSupabaseConfigured, getServiceSupabase, isDevSandboxMode } from '@/lib/supabase';
 import { encryptEnvValue, getMaskedPreview } from '@/lib/projectEngine';
-import { requireServiceAccess, verifySudoToken } from '@/lib/authGuard';
+import { requireServiceAccess, verifySudoToken, serviceUnavailableResponse } from '@/lib/authGuard';
 
 
 async function logAudit(
@@ -58,7 +58,11 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ success: true, databases: data || [] });
     }
 
-    // Offline mock databases
+    if (!isDevSandboxMode()) {
+      return serviceUnavailableResponse('Managed Database Engine');
+    }
+
+    // Offline mock databases (DEV_SANDBOX_MODE only)
     return NextResponse.json({
       success: true,
       databases: [
@@ -121,6 +125,10 @@ export async function POST(request: NextRequest) {
     const access = await requireServiceAccess(request, resolvedServiceId, 'services:write');
     if (!access.ok) return access.response;
     const userId = access.user.id;
+
+    if (!isSupabaseConfigured() && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Managed Database Engine');
+    }
 
     // 1. CREATE DATABASE & USER
     if (action === 'create_database') {

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
+import { isSupabaseConfigured, getServiceSupabase, isDevSandboxMode } from '@/lib/supabase';
 import {
   validateDnsRecord,
   parseBindZone,
@@ -9,7 +9,7 @@ import {
   getDevHostServerPreset,
 } from '@/lib/dnsEngine';
 import { DnsRecord } from '@/context/PortalContext';
-import { requireDomainAccess } from '@/lib/authGuard';
+import { requireDomainAccess, serviceUnavailableResponse } from '@/lib/authGuard';
 
 
 // Helper to log actions into security_audit_logs
@@ -82,7 +82,11 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ success: true, records });
     }
 
-    // Offline / fallback mock records
+    if (!isDevSandboxMode()) {
+      return serviceUnavailableResponse('Cloudflare Anycast DNS Engine');
+    }
+
+    // Offline / fallback mock records (DEV_SANDBOX_MODE only)
     return NextResponse.json({
       success: true,
       records: [
@@ -117,6 +121,10 @@ export async function POST(request: NextRequest) {
     const access = await requireDomainAccess(request, { domainId, domainName });
     if (!access.ok) return access.response;
     const userId = access.user.id;
+
+    if (!isSupabaseConfigured() && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Cloudflare Anycast DNS Engine');
+    }
 
     const db = isSupabaseConfigured() ? getServiceSupabase() : null;
 
@@ -332,6 +340,10 @@ export async function PUT(request: NextRequest) {
     if (!access.ok) return access.response;
     const userId = access.user.id;
 
+    if (!isSupabaseConfigured() && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Cloudflare Anycast DNS Engine');
+    }
+
     const db = isSupabaseConfigured() ? getServiceSupabase() : null;
 
     let existingRecords: DnsRecord[] = [];
@@ -418,6 +430,10 @@ export async function DELETE(request: NextRequest) {
     const access = await requireDomainAccess(request, { domainId });
     if (!access.ok) return access.response;
     const userId = access.user.id;
+
+    if (!isSupabaseConfigured() && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Cloudflare Anycast DNS Engine');
+    }
 
     if (db) {
       const delQuery = db.from('domain_dns_records').delete().eq('id', recordId);

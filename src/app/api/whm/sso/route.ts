@@ -47,6 +47,17 @@ export async function POST(request: Request) {
     const ssoService = service === 'webmaild' ? 'webmaild' : 'cpaneld';
     const ssoResult = await whmClient.createSsoSession(username, ssoService);
 
+    if (!ssoResult.success || !ssoResult.url) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: ssoResult.error || 'WHM SSO service is unavailable or not configured.',
+          code: 'SERVICE_UNAVAILABLE',
+        },
+        { status: 503 }
+      );
+    }
+
     return NextResponse.json({
       success: true,
       url: ssoResult.url,

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
-import { requireServiceAccess } from '@/lib/authGuard';
+import { isSupabaseConfigured, getServiceSupabase, isDevSandboxMode } from '@/lib/supabase';
+import { requireServiceAccess, serviceUnavailableResponse } from '@/lib/authGuard';
 
 
 async function logAudit(
@@ -76,7 +76,11 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // Offline / fallback mock data
+    if (!isDevSandboxMode()) {
+      return serviceUnavailableResponse('Hosting Domains Router');
+    }
+
+    // Offline / fallback mock data (DEV_SANDBOX_MODE only)
     return NextResponse.json({
       success: true,
       domains: [
@@ -137,6 +141,10 @@ export async function POST(request: NextRequest) {
     const access = await requireServiceAccess(request, serviceId, 'services:write');
     if (!access.ok) return access.response;
     const userId = access.user.id;
+
+    if (!isSupabaseConfigured() && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Hosting Domains Router');
+    }
 
     const cleanHost = hostname.trim().toLowerCase();
     const db = isSupabaseConfigured() ? getServiceSupabase() : null;
@@ -261,6 +269,10 @@ export async function DELETE(request: NextRequest) {
     const access = await requireServiceAccess(request, serviceId, 'services:write');
     if (!access.ok) return access.response;
     const userId = access.user.id;
+
+    if (!isSupabaseConfigured() && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Hosting Domains Router');
+    }
 
     if (db) {
       const { error } = await db

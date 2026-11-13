@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
-import { requireAdmin, verifySudoToken } from '@/lib/authGuard';
+import { isSupabaseConfigured, getServiceSupabase, isDevSandboxMode } from '@/lib/supabase';
+import { requireAdmin, verifySudoToken, serviceUnavailableResponse } from '@/lib/authGuard';
+import { fulfillPaidInvoiceAndAffiliate } from '@/lib/paymentFulfillment';
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 
 async function logLedgerAudit(
   actionType: string,
   targetResource: string,
-  metadata: Record<string, any>,
+  metadata: Record<string, unknown>,
   riskLevel: 'low' | 'medium' | 'high' | 'critical' = 'medium',
   ip: string = '127.0.0.1'
 ) {
@@ -34,11 +37,18 @@ export async function GET(req: NextRequest) {
     const adminAuth = await requireAdmin(req);
     if (!adminAuth.ok) return adminAuth.response;
 
+    if (!isSupabaseConfigured() && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Financial Profit Ledger');
+    }
+
     const { searchParams } = new URL(req.url);
     const limit = parseInt(searchParams.get('limit') || '100', 10);
 
     if (!isSupabaseConfigured()) {
-      // Baseline simulated ledger data
+      if (!isDevSandboxMode()) {
+        return serviceUnavailableResponse('Financial Profit Ledger');
+      }
+      // Baseline simulated ledger data (DEV_SANDBOX_MODE only)
       const mockLedger = [
         {
           id: 'ldg-1',
@@ -160,8 +170,8 @@ export async function GET(req: NextRequest) {
         profitMarginPercent,
       },
     });
-  } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+  } catch (err: unknown) {
+    return NextResponse.json({ success: false, error: err instanceof Error ? err.message : 'Internal server error' }, { status: 500 });
   }
 }
 
@@ -172,6 +182,10 @@ export async function POST(req: NextRequest) {
   try {
     const adminAuth = await requireAdmin(req);
     if (!adminAuth.ok) return adminAuth.response;
+
+    if (!isSupabaseConfigured() && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Financial Profit Ledger');
+    }
 
     const body = await req.json();
     const { action } = body;
@@ -196,32 +210,84 @@ export async function POST(req: NextRequest) {
       if (isSupabaseConfigured()) {
         const db = getServiceSupabase();
 
+        const rawId = String(invoiceId).trim();
+        const { data: resolvedInvoice } = await (UUID_REGEX.test(rawId)
+          ? db.from('invoices').select('id, invoice_number').eq('id', rawId).maybeSingle()
+          : db.from('invoices').select('id, invoice_number').eq('invoice_number', rawId).maybeSingle());
+
+        const resolvedInvoiceUuid = resolvedInvoice?.id || (UUID_REGEX.test(rawId) ? rawId : null);
+
         // Check if an affiliate commission was recorded for this invoice
-        const { data: affCommission } = await db
-          .from('affiliate_commissions')
-          .select('*')
-          .eq('invoice_id', invoiceId)
-          .maybeSingle();
+        const { data: affCommission } = resolvedInvoiceUuid
+          ? await db
+              .from('affiliate_commissions')
+              .select('*')
+              .eq('invoice_id', resolvedInvoiceUuid)
+              .maybeSingle()
+          : await db
+              .from('affiliate_commissions')
+              .select('*')
+              .eq('invoice_number', rawId)
+              .maybeSingle();
 
         let clawbackBdt = 0;
-        if (affCommission && affCommission.status !== 'reversed') {
+        if (affCommission && affCommission.status !== 'clawed_back_refunded') {
           clawbackBdt = Number(affCommission.commission_amount_bdt) || 0;
-          await db
+        }
+
+        // Update invoice status first — DB trigger_invoice_refund_clawback automatically
+        // deducts pending_clearance_bdt / available_balance_bdt from affiliate_profiles
+        // and transitions affiliate_commissions.status -> 'clawed_back_refunded'.
+        if (resolvedInvoiceUuid) {
+          await db.from('invoices').update({ status: 'refunded' }).eq('id', resolvedInvoiceUuid);
+        } else {
+          await db.from('invoices').update({ status: 'refunded' }).eq('invoice_number', rawId);
+        }
+
+        // Fallback clawback if DB trigger was not installed on a partial schema
+        if (affCommission && clawbackBdt > 0) {
+          const { data: refreshedComm } = await db
             .from('affiliate_commissions')
-            .update({ status: 'reversed' })
-            .eq('id', affCommission.id);
+            .select('status')
+            .eq('id', affCommission.id)
+            .maybeSingle();
 
-          // Clawback from marketer balance
-          const { data: marketer } = await db
-            .from('profiles')
-            .select('wallet_balance_bdt')
-            .eq('id', affCommission.referrer_id)
-            .single();
+          if (refreshedComm && refreshedComm.status !== 'clawed_back_refunded') {
+            await db
+              .from('affiliate_commissions')
+              .update({
+                status: 'clawed_back_refunded',
+                clawed_back_at: new Date().toISOString(),
+                notes: 'Clawed back due to invoice refund',
+              })
+              .eq('id', affCommission.id);
 
-          if (marketer) {
-            const currentBalance = Number(marketer.wallet_balance_bdt) || 0;
-            const newBal = Math.max(0, currentBalance - clawbackBdt);
-            await db.from('profiles').update({ wallet_balance_bdt: newBal }).eq('id', affCommission.referrer_id);
+            const { data: affProfile } = await db
+              .from('affiliate_profiles')
+              .select('pending_clearance_bdt, available_balance_bdt')
+              .eq('user_id', affCommission.affiliate_user_id)
+              .maybeSingle();
+
+            if (affProfile) {
+              const updatedFields: Record<string, unknown> = {
+                updated_at: new Date().toISOString(),
+              };
+              if (refreshedComm.status === 'cleared_available') {
+                updatedFields.available_balance_bdt = Math.max(
+                  0,
+                  (Number(affProfile.available_balance_bdt) || 0) - clawbackBdt
+                );
+              } else {
+                updatedFields.pending_clearance_bdt = Math.max(
+                  0,
+                  (Number(affProfile.pending_clearance_bdt) || 0) - clawbackBdt
+                );
+              }
+              await db
+                .from('affiliate_profiles')
+                .update(updatedFields)
+                .eq('user_id', affCommission.affiliate_user_id);
+            }
           }
         }
 
@@ -230,7 +296,7 @@ export async function POST(req: NextRequest) {
         await db.from('financial_profit_ledger').insert({
           entry_code: entryCode,
           entry_type: 'customer_refund',
-          invoice_id: invoiceId,
+          invoice_id: resolvedInvoiceUuid,
           gateway: 'system',
           gross_amount_bdt: -Math.abs(refundAmountBdt),
           base_cogs_cost_bdt: 0,
@@ -238,9 +304,6 @@ export async function POST(req: NextRequest) {
           promo_discount_bdt: 0,
           notes: `Customer Refund issued. Reason: ${reason || 'Customer request'}. Affiliate clawback: ৳${clawbackBdt}`,
         });
-
-        // Update invoice status
-        await db.from('invoices').update({ status: 'refunded' }).eq('id', invoiceId);
       }
 
       await logLedgerAudit(
@@ -257,7 +320,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 2. Approve Manual bKash / Nagad Transaction & Activate Service
+    // 2. Approve Manual bKash / Nagad Transaction & Run Unified Fulfillment
     if (action === 'approve_trxid') {
       const { invoiceId, invoiceNumber, trxId, grossAmountBdt, cogsBdt = 0, affiliateCutBdt = 0, domain } = body;
 
@@ -272,59 +335,84 @@ export async function POST(req: NextRequest) {
       if (isSupabaseConfigured()) {
         const db = getServiceSupabase();
 
-        // Mark invoice paid
-        if (invoiceId) {
-          await db
-            .from('invoices')
-            .update({
-              status: 'paid',
-              paid_at: new Date().toISOString(),
-              trx_id: trxId,
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', invoiceId);
-        } else if (invoiceNumber) {
-          await db
-            .from('invoices')
-            .update({
-              status: 'paid',
-              paid_at: new Date().toISOString(),
-              trx_id: trxId,
-              updated_at: new Date().toISOString(),
-            })
-            .eq('invoice_number', invoiceNumber);
-        }
+        const rawId = String(invoiceId || '').trim();
+        const rawInvNum = String(invoiceNumber || '').trim();
+        const { data: invoiceRow } = await (rawId && UUID_REGEX.test(rawId)
+          ? db.from('invoices').select('*').eq('id', rawId).maybeSingle()
+          : db
+              .from('invoices')
+              .select('*')
+              .eq('invoice_number', rawInvNum || rawId)
+              .maybeSingle());
 
-        // Update transaction status
+        const { data: txRow } = trxId
+          ? await db
+              .from('transactions')
+              .select('id, gateway, raw_payload')
+              .eq('trx_id', String(trxId))
+              .maybeSingle()
+          : { data: null };
+
+        // Mark submitted TrxID as Completed
         if (trxId) {
           await db
             .from('transactions')
             .update({ status: 'Completed', updated_at: new Date().toISOString() })
-            .eq('trx_id', trxId);
+            .eq('trx_id', String(trxId));
         }
 
-        // Activate associated hosting service
-        if (domain) {
-          await db
-            .from('hosting_services')
-            .update({ status: 'active', updated_at: new Date().toISOString() })
-            .eq('domain', domain);
-        }
+        if (invoiceRow && invoiceRow.status !== 'paid') {
+          const senderPhone =
+            (txRow?.raw_payload as { sender_number?: string } | undefined)?.sender_number || undefined;
+          const settledGateway = String(
+            txRow?.gateway || invoiceRow.payment_method || 'bkash'
+          ).replace(/_manual$/i, '');
 
-        // Record in Double-Entry Profit Ledger
-        const entryCode = `LDG-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
-        await db.from('financial_profit_ledger').insert({
-          entry_code: entryCode,
-          entry_type: 'hosting_sale',
-          invoice_id: invoiceId || invoiceNumber,
-          gateway: 'bkash',
-          trx_id: trxId,
-          gross_amount_bdt: gross,
-          base_cogs_cost_bdt: cogs,
-          affiliate_commission_bdt: aff,
-          promo_discount_bdt: 0,
-          notes: `Manual TrxID approved by Admin for invoice ${invoiceNumber || invoiceId}`,
-        });
+          await fulfillPaidInvoiceAndAffiliate({
+            db,
+            invoice: invoiceRow,
+            gateway: settledGateway,
+            trxId: String(trxId || invoiceRow.trx_id || `ADM-${Date.now()}`),
+            amountBDT: Number(invoiceRow.total_bdt || gross || 0),
+            buyerIp: ip,
+            senderPhone,
+          });
+        } else {
+          // Safe fallback when invoice record wasn't linked in invoices table
+          const validUuid = invoiceRow?.id || (UUID_REGEX.test(rawId) ? rawId : null);
+          if (validUuid) {
+            await db
+              .from('invoices')
+              .update({
+                status: 'paid',
+                paid_at: new Date().toISOString(),
+                trx_id: trxId,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', validUuid);
+          }
+
+          if (domain) {
+            await db
+              .from('hosting_services')
+              .update({ status: 'active', updated_at: new Date().toISOString() })
+              .eq('domain', domain);
+          }
+
+          const entryCode = `LDG-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+          await db.from('financial_profit_ledger').insert({
+            entry_code: entryCode,
+            entry_type: 'hosting_sale',
+            invoice_id: validUuid,
+            gateway: txRow?.gateway === 'nagad' ? 'nagad' : 'bkash',
+            trx_id: trxId,
+            gross_amount_bdt: gross,
+            base_cogs_cost_bdt: cogs,
+            affiliate_commission_bdt: aff,
+            promo_discount_bdt: 0,
+            notes: `Manual TrxID approved by Admin for invoice ${invoiceNumber || invoiceId}`,
+          });
+        }
       }
 
       await logLedgerAudit(
@@ -409,7 +497,7 @@ export async function POST(req: NextRequest) {
     }
 
     return NextResponse.json({ success: false, error: 'Invalid action provided.' }, { status: 400 });
-  } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+  } catch (err: unknown) {
+    return NextResponse.json({ success: false, error: err instanceof Error ? err.message : 'Internal server error' }, { status: 500 });
   }
 }

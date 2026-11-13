@@ -2541,14 +2541,28 @@ export default function AdminCommandCenterPage() {
                       <div>
                         {p.status === 'Completed' ? (
                           <span className="px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950 text-emerald-600 text-[10px] font-bold">
-                            Paid via bKash
+                            Paid ({p.trxId})
+                          </span>
+                        ) : p.status === 'Rejected' ? (
+                          <span className="px-2 py-0.5 rounded bg-rose-50 dark:bg-rose-950 text-rose-600 text-[10px] font-bold">
+                            Rejected
                           </span>
                         ) : (
                           <button
                             type="button"
                             onClick={() => {
-                              approveAffiliatePayout(p.id);
-                              alert(`Payout ${p.id} approved and marked paid via bKash!`);
+                              requireSudo(async () => {
+                                const enteredTrx = window.prompt(
+                                  `Enter verified bKash/Nagad/Bank TrxID for ৳${p.amount.toLocaleString()} payout:`
+                                );
+                                if (!enteredTrx || !enteredTrx.trim()) return;
+                                const res = await approveAffiliatePayout(p.id, enteredTrx.trim());
+                                if (res.ok) {
+                                  alert(`Payout ${p.id} approved and settled (TrxID: ${enteredTrx.trim()}).`);
+                                } else {
+                                  alert(res.error || 'Failed to approve payout.');
+                                }
+                              });
                             }}
                             className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold cursor-pointer"
                           >
@@ -2867,11 +2881,17 @@ export default function AdminCommandCenterPage() {
                   <button
                     type="button"
                     onClick={() => {
-                      if (clawbackInputOrderId.trim()) {
-                        clawbackCommission(clawbackInputOrderId.trim());
-                        alert(`Commission for order ${clawbackInputOrderId.trim()} clawed back and marked refunded.`);
-                        setClawbackInputOrderId('');
-                      }
+                      const targetOrder = clawbackInputOrderId.trim();
+                      if (!targetOrder) return;
+                      requireSudo(async () => {
+                        const res = await clawbackCommission(targetOrder);
+                        if (res.ok) {
+                          alert(`Commission for order ${targetOrder} clawed back and marked refunded.`);
+                          setClawbackInputOrderId('');
+                        } else {
+                          alert(res.error || 'Clawback failed.');
+                        }
+                      });
                     }}
                     className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold cursor-pointer transition-all"
                   >

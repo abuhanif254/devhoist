@@ -45,6 +45,14 @@ const AUTH_COOKIE_MAX_AGE = 60 * 60 * 24 * 7; // 7 days
 
 export const hasServiceRoleKey = (): boolean => Boolean(supabaseServiceKey);
 
+/**
+ * Explicit opt-in sandbox mode for local development/preview when upstream
+ * providers (WHM, Registrar, Database) are unconfigured. Always false in production.
+ */
+export const isDevSandboxMode = (): boolean => {
+  return process.env.DEV_SANDBOX_MODE === 'true' && process.env.NODE_ENV !== 'production';
+};
+
 // Mirrors the client-side session state into lightweight, NON-SECRET cookies so the Edge
 // middleware can see "a session exists" (no tokens are ever written to these cookies).
 // Pass `null` on logout to expire both cookies immediately.

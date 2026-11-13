@@ -192,16 +192,24 @@ export async function POST(req: NextRequest) {
           .eq('id', previewId);
 
         if (userId) {
+          await supabaseAdmin
+            .from('project_deployments')
+            .update({ status: 'superseded', is_current_production: false })
+            .eq('service_id', serviceId)
+            .eq('status', 'live_production');
+
           await supabaseAdmin.from('project_deployments').insert({
             service_id: serviceId,
             user_id: userId,
             commit_sha: sha,
             commit_message: `Promoted PR Preview (${branch}) to Live Production with zero downtime`,
             branch: 'main',
+            trigger_source: 'preview_promotion',
             environment: 'production',
             status: 'live_production',
-            build_duration_sec: 4,
-            build_log: `[Promote-to-Prod] Swapped atomic symlink /public_html/current -> release-${sha}\n[LiteSpeed] Flushed LSCache & QUIC edge cache for ${domain}\n[HealthCheck] Verified HTTP 200 OK in 19ms.`,
+            is_current_production: true,
+            duration_seconds: 4,
+            build_logs: `[Promote-to-Prod] Swapped atomic symlink /public_html/current -> release-${sha}\n[LiteSpeed] Flushed LSCache & QUIC edge cache for ${domain}\n[HealthCheck] Verified HTTP 200 OK in 19ms.`,
           });
         }
       }

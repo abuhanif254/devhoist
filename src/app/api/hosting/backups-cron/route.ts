@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
+import { isSupabaseConfigured, getServiceSupabase, isDevSandboxMode } from '@/lib/supabase';
 import { validateShellCommand, describeCronExpression } from '@/lib/projectEngine';
-import { requireServiceAccess, verifySudoToken } from '@/lib/authGuard';
+import { requireServiceAccess, verifySudoToken, serviceUnavailableResponse } from '@/lib/authGuard';
 
 
 async function logAudit(
@@ -77,7 +77,11 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // Offline mock responses
+    if (!isDevSandboxMode()) {
+      return serviceUnavailableResponse('Backups & Cron Scheduler');
+    }
+
+    // Offline mock responses (DEV_SANDBOX_MODE only)
     return NextResponse.json({
       success: true,
       backups: [
@@ -161,6 +165,10 @@ export async function POST(request: NextRequest) {
     const access = await requireServiceAccess(request, resolvedServiceId, 'services:write');
     if (!access.ok) return access.response;
     const userId = access.user.id;
+
+    if (!isSupabaseConfigured() && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Backups & Cron Scheduler');
+    }
 
     // 1. CREATE JETBACKUP SNAPSHOT
     if (action === 'create_snapshot') {
@@ -364,6 +372,10 @@ export async function DELETE(request: NextRequest) {
     const access = await requireServiceAccess(request, serviceId, 'services:write');
     if (!access.ok) return access.response;
     const userId = access.user.id;
+
+    if (!isSupabaseConfigured() && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Backups & Cron Scheduler');
+    }
 
     if (db) {
       if (itemType === 'backup') {

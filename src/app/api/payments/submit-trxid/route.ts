@@ -1,173 +1,207 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
+import { NextResponse } from 'next/server';
+import { getServiceSupabase, isSupabaseConfigured, isDevSandboxMode } from '@/lib/supabase';
+import { requireUser, serviceUnavailableResponse } from '@/lib/authGuard';
+import { createFraudAlert, logSecurityAudit, validatePaymentTrxId } from '@/lib/security';
 import { notifyManualPaymentVerification } from '@/lib/adminNotifier';
-import { requireUser } from '@/lib/authGuard';
+import { checkRateLimit } from '@/lib/edgeRateLimit';
 
+export async function POST(req: Request) {
+  const rateLimit = checkRateLimit(req, 12, 60 * 1000);
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      { error: 'Too Many Requests', message: 'Manual verification attempt rate limit exceeded.' },
+      { status: 429 }
+    );
+  }
 
-const BD_PHONE_REGEX = /^01[3-9]\d{8}$/;
-const TRX_ID_REGEX = /^[A-Z0-9]{8,12}$/;
+  const clientIp = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || '127.0.0.1';
 
-export async function POST(req: NextRequest) {
   try {
     const auth = await requireUser(req);
     if (!auth.ok) return auth.response;
 
-    const body = await req.json();
-    const {
-      invoiceNumber,
-      senderNumber,
-      trxId,
-      gateway = 'bKash',
-      customerName,
-      amount,
-    } = body;
+    const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+    const invoiceNumber = String(body.invoiceNumber || '').trim();
+    const rawTrxId = String(body.trxId || '').trim();
+    const senderNumber = body.senderNumber ? String(body.senderNumber).trim() : '';
+    const gatewayRaw = String(body.gateway || 'bkash').toLowerCase().trim();
 
-    const resolvedUserId =
-      auth.role === 'admin' && typeof body.userId === 'string' && body.userId.trim()
-        ? body.userId.trim()
-        : auth.user.id;
-    const resolvedCustomerName =
-      typeof customerName === 'string' && customerName.trim()
-        ? customerName.trim()
-        : auth.profile.full_name;
-
-    if (!invoiceNumber) {
+    if (!invoiceNumber || !rawTrxId) {
       return NextResponse.json(
-        { success: false, error: 'Invoice number is required.' },
+        { error: 'Invoice Number and TrxID are required.' },
         { status: 400 }
       );
     }
 
-    // 1. Validate Sender Mobile Number
-    const cleanSender = String(senderNumber || '').trim();
-    if (!BD_PHONE_REGEX.test(cleanSender)) {
+    if (gatewayRaw !== 'bkash' && gatewayRaw !== 'nagad') {
       return NextResponse.json(
-        {
-          success: false,
-          error: 'Invalid Bangladesh mobile number. Must be 11 digits starting with 013-019 (e.g. 01712345678).',
-        },
+        { error: 'Manual TrxID submission only supports bKash or Nagad.' },
         { status: 400 }
       );
     }
 
-    // 2. Validate Transaction ID Format
-    const cleanTrx = String(trxId || '').trim().toUpperCase();
-    if (!TRX_ID_REGEX.test(cleanTrx)) {
+    const trxCheck = validatePaymentTrxId(rawTrxId, gatewayRaw);
+    if (!trxCheck.valid) {
+      if (trxCheck.isHighRisk) {
+        await createFraudAlert({
+          userId: auth.user.id,
+          alertType: 'duplicate_trxid',
+          severity: 'critical',
+          details: { invoiceNumber, trxId: trxCheck.normalizedTrxId, gateway: gatewayRaw, clientIp },
+        }).catch(() => {});
+      }
       return NextResponse.json(
-        {
-          success: false,
-          error: 'Invalid Transaction ID (trxID). Must be 8 to 12 alphanumeric characters (e.g. 9K72LM89QP).',
-        },
+        { error: trxCheck.error || 'Invalid Transaction ID format.' },
         { status: 400 }
       );
     }
 
-    let invoiceAmount = Number(amount) > 0 ? Number(amount) : 0;
+    if (!isSupabaseConfigured() && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Manual MFS Verification Queue');
+    }
 
-    if (isSupabaseConfigured()) {
-      const db = getServiceSupabase();
-
-      // 3. Block Duplicate trxID
-      const { data: existingTrx } = await db
-        .from('transactions')
-        .select('id, status')
-        .eq('trx_id', cleanTrx)
-        .maybeSingle();
-
-      if (existingTrx) {
-        return NextResponse.json(
-          {
-            success: false,
-            error: 'This Transaction ID (trxID) has already been submitted or used. If you believe this is an error, please contact support.',
-          },
-          { status: 409 }
-        );
-      }
-
-      // 4. Verify Invoice Ownership and Update Status to 'verifying_trxid'
-      const { data: invData } = await db
-        .from('invoices')
-        .select('*')
-        .eq('invoice_number', invoiceNumber)
-        .maybeSingle();
-
-      if (!invData) {
-        return NextResponse.json(
-          { success: false, error: 'Invoice not found.' },
-          { status: 404 }
-        );
-      }
-
-      if (invData.user_id !== resolvedUserId && auth.role !== 'admin') {
-        return NextResponse.json(
-          { success: false, error: 'You do not have permission to submit payment proof for this invoice.' },
-          { status: 403 }
-        );
-      }
-
-      if (invData.status === 'paid' || invData.status === 'refunded') {
-        return NextResponse.json(
-          { success: false, error: `Invoice is already '${invData.status}'.` },
-          { status: 409 }
-        );
-      }
-
-      invoiceAmount = Number(invData.total_bdt) || invoiceAmount;
-      await db
-        .from('invoices')
-        .update({
-          status: 'verifying_trxid',
-          trx_id: cleanTrx,
-          payment_method: gateway,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('invoice_number', invoiceNumber);
-
-      // 5. Update associated hosting service status to 'pending' (NEVER auto-active!)
-      await db
-        .from('hosting_services')
-        .update({ status: 'pending' })
-        .eq('domain', invData?.items?.[0]?.description?.match(/[a-z0-9-]+\.[a-z]{2,}/i)?.[0] || '');
-
-      // 6. Record in transactions queue
-      await db.from('transactions').insert({
-        trx_id: cleanTrx,
-        invoice_number: invoiceNumber,
-        user_id: invData.user_id || resolvedUserId,
-        amount_bdt: invoiceAmount,
-        gateway: gateway.toLowerCase(),
-        status: 'pending_verification',
-        raw_payload: {
-          senderNumber: cleanSender,
-          submittedAt: new Date().toISOString(),
-          customerName: resolvedCustomerName,
-        },
+    if (!isSupabaseConfigured()) {
+      return NextResponse.json({
+        success: true,
+        sandbox: true,
+        status: 'verifying_trxid',
+        invoiceNumber,
+        trxId: trxCheck.normalizedTrxId,
+        message: 'Transaction ID recorded in DEV_SANDBOX_MODE verification queue.',
       });
     }
 
-    // 7. Instant Founder Telegram Alert Notification
-    try {
-      await notifyManualPaymentVerification({
-        customerName: resolvedCustomerName,
-        invoiceId: invoiceNumber,
-        amountBDT: invoiceAmount || 450,
-        trxId: cleanTrx,
-        gateway,
-      });
-    } catch (notifErr) {
-      console.warn('[Telegram Notification Warning]:', notifErr);
+    const db = getServiceSupabase();
+
+    // Verify caller owns this invoice (or admin)
+    const { data: invoice } = await db
+      .from('invoices')
+      .select('id, user_id, invoice_number, total_bdt, status')
+      .eq('invoice_number', invoiceNumber)
+      .maybeSingle();
+
+    if (!invoice) {
+      return NextResponse.json({ error: 'Invoice not found.' }, { status: 404 });
     }
+
+    if (invoice.user_id !== auth.user.id && auth.role !== 'admin') {
+      return NextResponse.json(
+        { error: 'Forbidden: you do not own this invoice.' },
+        { status: 403 }
+      );
+    }
+
+    if (invoice.status === 'paid') {
+      return NextResponse.json(
+        { error: 'This invoice is already marked as paid.' },
+        { status: 409 }
+      );
+    }
+
+    // DB-level duplicate TrxID detection across restarts / edge isolates
+    const { data: dupTx } = await db
+      .from('transactions')
+      .select('id, invoice_number, status')
+      .eq('trx_id', trxCheck.normalizedTrxId)
+      .maybeSingle();
+
+    if (dupTx) {
+      await createFraudAlert({
+        userId: auth.user.id,
+        alertType: 'duplicate_trxid',
+        severity: 'critical',
+        details: {
+          reason: 'Replayed MFS TrxID attempted across invoices',
+          attemptedInvoice: invoiceNumber,
+          existingInvoice: dupTx.invoice_number,
+          trxId: trxCheck.normalizedTrxId,
+          clientIp,
+        },
+      }).catch(() => {});
+
+      return NextResponse.json(
+        {
+          error: 'This Transaction ID has already been submitted or claimed on another order.',
+        },
+        { status: 409 }
+      );
+    }
+
+    const authoritativeTotal = Number(invoice.total_bdt || body.amountBDT || 0);
+
+    const { error: txErr } = await db.from('transactions').insert({
+      invoice_id: invoice.id,
+      invoice_number: invoiceNumber,
+      user_id: auth.user.id,
+      gateway: gatewayRaw,
+      trx_id: trxCheck.normalizedTrxId,
+      amount_bdt: authoritativeTotal,
+      status: 'pending_verification',
+      raw_payload: {
+        submittedByUserId: auth.user.id,
+        sender_number: senderNumber || null,
+        clientIp,
+        submittedAt: new Date().toISOString(),
+      },
+    });
+
+    if (txErr) {
+      if (txErr.code === '23505') {
+        return NextResponse.json(
+          { error: 'Duplicate Transaction ID detected.' },
+          { status: 409 }
+        );
+      }
+      return NextResponse.json(
+        { error: `Failed to submit TrxID: ${txErr.message}` },
+        { status: 500 }
+      );
+    }
+
+    await db
+      .from('invoices')
+      .update({
+        status: 'verifying_trxid',
+        payment_method: `${gatewayRaw}_manual`,
+        trx_id: trxCheck.normalizedTrxId,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', invoice.id);
+
+    await logSecurityAudit({
+      actorId: auth.user.id,
+      actorRole: auth.role,
+      actionType: 'MANUAL_TRXID_SUBMITTED',
+      targetResource: invoiceNumber,
+      ipAddress: clientIp,
+      riskLevel: 'low',
+      metadata: {
+        gateway: gatewayRaw,
+        trxId: trxCheck.normalizedTrxId,
+        amountBDT: authoritativeTotal,
+        senderNumber: senderNumber || undefined,
+      },
+    }).catch(() => {});
+
+    notifyManualPaymentVerification({
+      customerName: auth.profile.full_name,
+      invoiceId: invoiceNumber,
+      amountBDT: authoritativeTotal,
+      trxId: trxCheck.normalizedTrxId,
+      gateway: gatewayRaw,
+    }).catch(() => {});
 
     return NextResponse.json({
       success: true,
-      message: 'Payment details submitted successfully! Your invoice is in the verification queue.',
-      invoiceNumber,
-      trxId: cleanTrx,
       status: 'verifying_trxid',
+      invoiceNumber,
+      trxId: trxCheck.normalizedTrxId,
+      amountBDT: authoritativeTotal,
+      message: `Transaction ID ${trxCheck.normalizedTrxId} submitted for verification. Activation follows approval.`,
     });
-  } catch (err: any) {
+  } catch (err) {
     return NextResponse.json(
-      { success: false, error: err.message || 'Failed to submit payment verification' },
+      { error: err instanceof Error ? err.message : 'Manual TrxID submission failed' },
       { status: 500 }
     );
   }

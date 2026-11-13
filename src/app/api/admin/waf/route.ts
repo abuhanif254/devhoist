@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
+import { isSupabaseConfigured, getServiceSupabase, isDevSandboxMode } from '@/lib/supabase';
 import { triggerAutoWafRule, getSecurityLockdown, updateCmsConfig } from '@/lib/wafEngine';
-import { requireAdmin, verifySudoToken } from '@/lib/authGuard';
+import { requireAdmin, verifySudoToken, serviceUnavailableResponse } from '@/lib/authGuard';
 
 
 async function logAdminAudit(
@@ -38,6 +38,9 @@ export async function GET(req: NextRequest) {
     const lockdown = await getSecurityLockdown();
 
     if (!isSupabaseConfigured()) {
+      if (!isDevSandboxMode()) {
+        return serviceUnavailableResponse('Edge WAF & Fraud Shield');
+      }
       return NextResponse.json({
         success: true,
         rules: [
@@ -115,6 +118,10 @@ export async function POST(req: NextRequest) {
           { status: 403 }
         );
       }
+    }
+
+    if (!isSupabaseConfigured() && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Edge WAF & Fraud Shield');
     }
 
     const ip = req.headers.get('cf-connecting-ip') || req.headers.get('x-forwarded-for') || '127.0.0.1';

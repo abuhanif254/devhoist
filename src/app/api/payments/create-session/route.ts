@@ -1,183 +1,390 @@
 import { NextResponse } from 'next/server';
+import { getServiceSupabase, isSupabaseConfigured, isDevSandboxMode } from '@/lib/supabase';
+import { extractCookie, requireUser, serviceUnavailableResponse } from '@/lib/authGuard';
 import { checkRateLimit } from '@/lib/edgeRateLimit';
-import { getServiceSupabase, isSupabaseConfigured } from '@/lib/supabase';
-import { requireUser, isSafeExternalHttpUrl } from '@/lib/authGuard';
+import { parseAffiliateAttributionCookie } from '@/lib/affiliateEngine';
+import {
+  createBkashCheckoutPayment,
+  createNagadCheckoutSession,
+  createStripeCheckoutSession,
+  createUddoktaPayCheckout,
+  getMerchantMfsNumbers,
+  resolveSiteOrigin,
+} from '@/lib/paymentGateways';
+import { calculateOrderProfitBreakdown } from '@/lib/profitEngine';
 
-export async function POST(request: Request) {
-  const rateLimit = checkRateLimit(request, 20, 60 * 1000);
+export async function POST(req: Request) {
+  const rateLimit = checkRateLimit(req, 20, 60 * 1000);
   if (!rateLimit.allowed) {
     return NextResponse.json(
-      { error: 'Too Many Requests', message: 'Rate limit exceeded. Please wait a moment.' },
+      { error: 'Too Many Requests', message: 'Checkout rate limit exceeded. Please retry shortly.' },
       { status: 429 }
     );
   }
 
-  const auth = await requireUser(request);
-  if (!auth.ok) return auth.response;
-
   try {
-    const body = await request.json().catch(() => ({}));
-    const {
-      amount,
-      currency = 'BDT',
-      method = 'bkash',
-      items = [],
-      customerEmail,
-      customerName,
-      domain = '',
-      planId = '',
-    } = body;
+    const auth = await requireUser(req);
+    if (!auth.ok) return auth.response;
 
-    const rawAmount = Number(amount);
-    if (!Number.isFinite(rawAmount) || rawAmount < 10 || rawAmount > 10000000) {
+    const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+    const gateway = String(body.gateway || body.method || 'uddoktapay').toLowerCase().trim();
+    const rawAmountBDT = Number(body.amountBDT ?? body.amount ?? 0);
+    const items = Array.isArray(body.items) ? (body.items as Array<Record<string, unknown>>) : [];
+    const firstItem = items[0] || {};
+    const orderType = String(
+      body.orderType ||
+        (firstItem.type === 'wallet_topup' || firstItem.isWalletTopup ? 'wallet_topup' : 'hosting_order')
+    );
+
+    if (!Number.isFinite(rawAmountBDT) || rawAmountBDT <= 0 || rawAmountBDT > 10_000_000) {
       return NextResponse.json(
-        { error: 'Invalid Amount', message: 'Payment amount must be a valid number between 10 and 10,000,000 BDT.' },
+        { error: 'Invalid payment amount specified.' },
         { status: 400 }
       );
     }
 
-    const numericAmount = Math.round(rawAmount * 100) / 100;
-    const resolvedUserId =
-      auth.role === 'admin' && typeof body.userId === 'string' && body.userId.trim()
-        ? body.userId.trim()
-        : auth.user.id;
-    const resolvedEmail =
-      auth.role === 'admin' && typeof customerEmail === 'string' && customerEmail.trim()
-        ? customerEmail.trim()
-        : auth.profile.email;
-    const resolvedName =
-      typeof customerName === 'string' && customerName.trim()
-        ? customerName.trim()
-        : auth.profile.full_name;
-    const invoiceNumber = `INV-${new Date().getFullYear()}-${Math.floor(100000 + Math.random() * 900000)}`;
-
-    // 1. Try to record invoice in Supabase if configured
-    let invoiceId = `inv-local-${Date.now()}`;
-    if (isSupabaseConfigured()) {
-      try {
-        const supabase = getServiceSupabase();
-        const { data: invData } = await supabase
-          .from('invoices')
-          .insert({
-            invoice_number: invoiceNumber,
-            user_id: resolvedUserId,
-            items: Array.isArray(items) && items.length > 0 ? items : [{ description: `Hosting Provisioning (${domain || 'Cloud VPS'})`, cycle: 'Monthly', amount: numericAmount }],
-            subtotal_bdt: numericAmount,
-            discount_bdt: 0,
-            total_bdt: numericAmount,
-            status: 'unpaid',
-            payment_method: method,
-            billing_cycle: body.billingCycle || 'monthly',
-            free_domain_bundle_applied: Boolean(body.freeDomainBundleApplied),
-            bundled_domain_name: body.bundledDomainName || domain,
-            due_date: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
-          })
-          .select('id')
-          .single();
-
-        if (invData?.id) {
-          invoiceId = invData.id;
-        }
-      } catch (dbErr) {
-        console.warn('[DB Invoice Insert Warning]', dbErr);
-      }
+    if (orderType === 'wallet_topup' && rawAmountBDT < 50) {
+      return NextResponse.json(
+        { error: 'Minimum wallet top-up amount is ৳50 BDT.' },
+        { status: 400 }
+      );
     }
 
-    // 2. Gateways Resolution (bKash / Nagad / UddoktaPay / Stripe)
-    const uddoktaKey = process.env.UDDOKTAPAY_API_KEY || '';
-    const uddoktaUrl = process.env.UDDOKTAPAY_API_URL || 'https://sandbox.uddoktapay.com/api/checkout-v2';
-    const bkashKey = process.env.BKASH_APP_KEY || '';
-    const stripeKey = process.env.STRIPE_SECRET_KEY || '';
+    if (!['uddoktapay', 'bkash', 'nagad', 'stripe', 'wallet'].includes(gateway)) {
+      return NextResponse.json(
+        { error: `Unsupported payment gateway "${gateway}".` },
+        { status: 400 }
+      );
+    }
 
-    const rawOrigin = request.headers.get('origin') || '';
-    const origin = isSafeExternalHttpUrl(rawOrigin) ? rawOrigin : 'https://devhoist.pages.dev';
+    if (!isSupabaseConfigured() && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Payment Checkout');
+    }
 
-    // A. UddoktaPay Live Gateway Adapter (Supports bKash, Nagad, Rocket, Upay)
-    if (uddoktaKey && !uddoktaKey.includes('your-uddoktapay-key')) {
-      try {
-        const upRes = await fetch(uddoktaUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'RT-UDDOKTAPAY-API-KEY': uddoktaKey,
-          },
-          body: JSON.stringify({
-            full_name: resolvedName,
-            email: resolvedEmail,
-            amount: String(numericAmount),
-            metadata: {
-              invoice_number: invoiceNumber,
-              invoice_id: invoiceId,
-              domain,
-              plan_id: planId,
-              billing_cycle: body.billingCycle || 'monthly',
-              free_domain_bundle: Boolean(body.freeDomainBundleApplied),
-              bundled_domain: body.bundledDomainName || domain,
-            },
-            redirect_url: `${origin}/dashboard?tab=services&payment=success&inv=${invoiceNumber}`,
-            cancel_url: `${origin}/dashboard?payment=cancelled`,
-            webhook_url: `${origin}/api/payments/webhook`,
-          }),
-        });
+    const billingCycle: 'monthly' | 'annually' =
+      body.billingCycle === 'annually' || firstItem.billingCycle === 'annually'
+        ? 'annually'
+        : 'monthly';
+    const freeDomainApplied = Boolean(body.freeDomainApplied ?? firstItem.freeDomainApplied);
+    const domain = String(body.domain || firstItem.domain || '').trim();
+    const planSlugOrId = String(body.planSlug || body.planId || firstItem.planSlug || firstItem.planId || '').trim();
+    const promoCodeInput = String(body.promoCode || '').trim().toUpperCase();
 
-        const upData = await upRes.json();
-        if (upData?.payment_url) {
-          return NextResponse.json({
-            success: true,
-            invoiceNumber,
-            invoiceId,
-            paymentUrl: upData.payment_url,
-            mode: 'live_uddoktapay',
+    // Parse referral attribution from body or Edge middleware devhost_aff_ref cookie
+    const cookieAttr = parseAffiliateAttributionCookie(extractCookie(req, 'devhost_aff_ref'));
+    let referralCode = String(body.referralCode || cookieAttr?.referralCode || '').trim();
+    const subId = String(body.subId || cookieAttr?.subId || 'organic').trim() || 'organic';
+
+    if (
+      referralCode &&
+      auth.profile.referral_code &&
+      referralCode.toLowerCase() === auth.profile.referral_code.toLowerCase()
+    ) {
+      referralCode = '';
+    }
+
+    const db = isSupabaseConfigured() ? getServiceSupabase() : null;
+
+    // =========================================================================
+    // AUTHORITATIVE SERVER-SIDE PRICING & ZERO-LOSS PROMO VALIDATION
+    // =========================================================================
+    let subtotalBDT = rawAmountBDT;
+    let discountBDT = 0;
+    let totalBDT = rawAmountBDT;
+    let verifiedPlanName = String(body.planName || firstItem.name || 'DevHost Cloud Service');
+
+    if (db && orderType !== 'wallet_topup' && planSlugOrId) {
+      const pidSlugMap: Record<string, string> = {
+        '1': 'starter',
+        '2': 'developer-pro',
+        '3': 'business-max',
+      };
+      const resolvedSlug = (pidSlugMap[planSlugOrId] || planSlugOrId).toLowerCase();
+      const { data: planRow } = await db
+        .from('catalog_hosting_plans')
+        .select('id, slug, name_en, selling_price_monthly_bdt, unit_server_cost_bdt, min_owner_profit_bdt, annual_discount_percent, whm_package_name')
+        .eq('slug', resolvedSlug)
+        .maybeSingle();
+
+      if (planRow) {
+        verifiedPlanName = String(planRow.name_en || verifiedPlanName);
+        const monthlyPrice = Number(planRow.selling_price_monthly_bdt || 0);
+        const annualDiscount = Number(planRow.annual_discount_percent ?? 20);
+        const baseCyclePrice =
+          billingCycle === 'annually'
+            ? Math.round(monthlyPrice * 12 * (1 - annualDiscount / 100))
+            : monthlyPrice;
+
+        subtotalBDT = baseCyclePrice;
+        totalBDT = baseCyclePrice;
+
+        if (promoCodeInput) {
+          const { data: promo } = await db
+            .from('promo_codes')
+            .select('code, discount_type, discount_value, max_uses, current_uses, expires_at, is_active')
+            .eq('code', promoCodeInput)
+            .maybeSingle();
+
+          const expired = promo?.expires_at && new Date(String(promo.expires_at)).getTime() < Date.now();
+          const exhausted = promo?.max_uses && Number(promo.current_uses || 0) >= Number(promo.max_uses);
+
+          if (!promo || !promo.is_active || expired || exhausted) {
+            return NextResponse.json(
+              { error: `Promo code "${promoCodeInput}" is invalid, expired, or usage-exhausted.` },
+              { status: 400 }
+            );
+          }
+
+          discountBDT =
+            promo.discount_type === 'percentage'
+              ? Math.round((subtotalBDT * Number(promo.discount_value || 0)) / 100)
+              : Math.min(subtotalBDT, Number(promo.discount_value || 0));
+
+          totalBDT = Math.max(1, subtotalBDT - discountBDT);
+
+          // Enforce zero-loss floor on discounted plan price
+          const profitCheck = calculateOrderProfitBreakdown({
+            sellingPriceBDT: subtotalBDT,
+            unitServerCostBDT:
+              billingCycle === 'annually'
+                ? Number(planRow.unit_server_cost_bdt || 0) * 12
+                : Number(planRow.unit_server_cost_bdt || 0),
+            minOwnerProfitBDT:
+              billingCycle === 'annually'
+                ? Number(planRow.min_owner_profit_bdt || 0) * 12
+                : Number(planRow.min_owner_profit_bdt || 0),
+            promoDiscountBDT: discountBDT,
+            billingCycle,
+            freeDomainCostBDT: freeDomainApplied ? 1150 : 0,
           });
+
+          if (profitCheck.isLossMaking) {
+            return NextResponse.json(
+              {
+                error: 'Promo code discount violates server COGS & minimum margin protection on this cycle.',
+              },
+              { status: 400 }
+            );
+          }
         }
-      } catch (upErr) {
-        console.warn('[UddoktaPay Dispatch Error]', upErr);
+
+        // Prevent client amount tampering (> ৳5 delta vs server price)
+        if (Math.abs(totalBDT - rawAmountBDT) > 5 && !firstItem.customBundleTotal) {
+          return NextResponse.json(
+            {
+              error: `Price tampering detected: client supplied ৳${rawAmountBDT} BDT, authoritative server total is ৳${totalBDT} BDT.`,
+            },
+            { status: 400 }
+          );
+        }
       }
     }
 
-    // B. bKash Tokenized Direct API Adapter
-    if (method === 'bkash' && bkashKey && !bkashKey.includes('your-bkash-key')) {
-      // In production, token exchange happens here
-      // For fast and resilient edge checkout:
+    const generatedInvNum =
+      typeof body.invoiceNumber === 'string' && /^DEV-INV-[A-Za-z0-9_-]{4,}$/.test(body.invoiceNumber.trim())
+        ? body.invoiceNumber.trim()
+        : `DEV-INV-${Date.now().toString(36).toUpperCase()}`;
+
+    const invoiceItems =
+      items.length > 0
+        ? items
+        : [
+            {
+              name: orderType === 'wallet_topup' ? 'DevHost Wallet Credit Top-Up' : verifiedPlanName,
+              type: orderType,
+              domain: domain || undefined,
+              planId: planSlugOrId || undefined,
+              billingCycle,
+              freeDomainApplied,
+              promoCode: promoCodeInput || undefined,
+              promoDiscountBDT: discountBDT,
+              referralCode: referralCode || undefined,
+              amountBDT: totalBDT,
+            },
+          ];
+
+    if (db) {
+      const { error: invErr } = await db.from('invoices').upsert(
+        {
+          invoice_number: generatedInvNum,
+          user_id: auth.user.id,
+          items: invoiceItems,
+          subtotal_bdt: subtotalBDT,
+          discount_bdt: discountBDT,
+          total_bdt: totalBDT,
+          status: 'unpaid',
+          payment_method: gateway,
+          order_type: orderType,
+          billing_cycle: billingCycle,
+          free_domain_bundle_applied: freeDomainApplied,
+          bundled_domain_name: domain || null,
+          referral_code: referralCode || null,
+          referral_sub_id: subId,
+          plan_id: planSlugOrId || null,
+          promo_code: promoCodeInput || null,
+          promo_discount_bdt: discountBDT,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'invoice_number' }
+      );
+
+      if (invErr) {
+        return NextResponse.json(
+          { error: 'Failed to create billing invoice', details: invErr.message },
+          { status: 500 }
+        );
+      }
+    }
+
+    const reqOrigin = (() => {
+      try {
+        return new URL(req.url).origin;
+      } catch {
+        return undefined;
+      }
+    })();
+    const siteUrl = resolveSiteOrigin(reqOrigin);
+    const clientIp = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || '103.205.71.1';
+
+    const sessionInput = {
+      invoiceNumber: generatedInvNum,
+      amountBDT: totalBDT,
+      customerName: auth.profile.full_name,
+      customerEmail: auth.profile.email,
+      customerPhone: auth.profile.phone,
+      userId: auth.user.id,
+      planName: orderType === 'wallet_topup' ? 'Wallet Credit Top-Up' : verifiedPlanName,
+      referralCode: referralCode || undefined,
+      siteUrl,
+      clientIp,
+    };
+
+    // 1. Wallet Readiness
+    if (gateway === 'wallet') {
       return NextResponse.json({
         success: true,
-        invoiceNumber,
-        invoiceId,
-        paymentUrl: `https://tokenized.pay.bka.sh/checkout?invoice=${invoiceNumber}&amount=${numericAmount}`,
-        mode: 'live_bkash',
+        mode: 'wallet_ready',
+        gateway: 'wallet',
+        invoiceNumber: generatedInvNum,
+        amountBDT: totalBDT,
       });
     }
 
-    // C. Stripe Gateway Adapter (USD/BDT Card payments)
-    if (method === 'stripe' && stripeKey && !stripeKey.includes('your-stripe-key')) {
+    // 2. Stripe Checkout (Never emits fake checkout URLs without live key)
+    if (gateway === 'stripe') {
+      const stripeRes = await createStripeCheckoutSession(sessionInput);
+      if (!stripeRes.configured) {
+        if (!isDevSandboxMode()) {
+          return serviceUnavailableResponse('Stripe Checkout');
+        }
+        return NextResponse.json({
+          success: true,
+          mode: 'sandbox_simulation',
+          gateway: 'stripe',
+          invoiceNumber: generatedInvNum,
+          amountBDT: totalBDT,
+          message: 'DEV_SANDBOX_MODE Stripe simulation session.',
+        });
+      }
+      if (!stripeRes.paymentUrl) {
+        return NextResponse.json(
+          { error: stripeRes.error || 'Failed to initialize Stripe checkout session.' },
+          { status: stripeRes.statusCode || 502 }
+        );
+      }
       return NextResponse.json({
         success: true,
-        invoiceNumber,
-        invoiceId,
-        paymentUrl: `https://checkout.stripe.com/pay/${invoiceNumber}`,
         mode: 'live_stripe',
+        gateway: 'stripe',
+        paymentUrl: stripeRes.paymentUrl,
+        providerRef: stripeRes.providerRef,
+        invoiceNumber: generatedInvNum,
+        amountBDT: totalBDT,
       });
     }
 
-    // D. Real-World Manual Merchant bKash/Nagad Mode (Strict trxID Verification Queue)
+    // 3. Official bKash Tokenized Checkout
+    if (gateway === 'bkash') {
+      const bkashRes = await createBkashCheckoutPayment(sessionInput);
+      if (bkashRes.configured) {
+        if (!bkashRes.paymentUrl) {
+          return NextResponse.json(
+            { error: bkashRes.error || 'bKash gateway initialization failed.' },
+            { status: bkashRes.statusCode || 502 }
+          );
+        }
+        return NextResponse.json({
+          success: true,
+          mode: 'live_bkash',
+          gateway: 'bkash',
+          paymentUrl: bkashRes.paymentUrl,
+          providerRef: bkashRes.providerRef,
+          invoiceNumber: generatedInvNum,
+          amountBDT: totalBDT,
+        });
+      }
+    }
+
+    // 4. Official Nagad Merchant PG
+    if (gateway === 'nagad') {
+      const nagadRes = await createNagadCheckoutSession(sessionInput);
+      if (nagadRes.configured) {
+        if (!nagadRes.paymentUrl) {
+          return NextResponse.json(
+            { error: nagadRes.error || 'Nagad gateway initialization failed.' },
+            { status: nagadRes.statusCode || 502 }
+          );
+        }
+        return NextResponse.json({
+          success: true,
+          mode: 'live_nagad',
+          gateway: 'nagad',
+          paymentUrl: nagadRes.paymentUrl,
+          providerRef: nagadRes.providerRef,
+          invoiceNumber: generatedInvNum,
+          amountBDT: totalBDT,
+        });
+      }
+    }
+
+    // 5. UddoktaPay Aggregate Gateway (Direct or fallback from unconfigured bKash/Nagad)
+    const uddoktaRes = await createUddoktaPayCheckout(sessionInput);
+    if (uddoktaRes.configured) {
+      if (!uddoktaRes.paymentUrl) {
+        return NextResponse.json(
+          { error: uddoktaRes.error || 'UddoktaPay checkout creation failed.' },
+          { status: uddoktaRes.statusCode || 502 }
+        );
+      }
+      return NextResponse.json({
+        success: true,
+        mode: 'live_uddoktapay',
+        gateway: 'uddoktapay',
+        paymentUrl: uddoktaRes.paymentUrl,
+        invoiceNumber: generatedInvNum,
+        amountBDT: totalBDT,
+      });
+    }
+
+    // 6. Real Manual MFS Send-Money + TrxID Verification Queue (when live PG keys omitted for BD MFS)
+    const mfs = getMerchantMfsNumbers();
+    const isNagad = gateway === 'nagad';
     return NextResponse.json({
       success: true,
-      invoiceNumber,
-      invoiceId,
-      amount: numericAmount,
-      currency,
-      method,
       mode: 'manual_verification',
-      instructions:
-        method === 'bkash'
-          ? 'Please Make Payment or Send Money to bKash Merchant: 01789-234567. Use Invoice Number as reference. Then enter your Sender Mobile Number and Transaction ID below.'
-          : 'Please Make Payment or Send Money to Nagad Merchant: 01889-234567. Use Invoice Number as reference. Then enter your Sender Mobile Number and Transaction ID below.',
-      bkashMerchantNumber: '01789-234567',
-      nagadMerchantNumber: '01889-234567',
+      gateway,
+      invoiceNumber: generatedInvNum,
+      amountBDT: totalBDT,
+      instructions: {
+        method: isNagad ? 'Nagad Send Money' : 'bKash Send Money',
+        merchantNumber: isNagad ? mfs.nagad : mfs.bkash,
+        exactAmountBDT: totalBDT,
+        reference: generatedInvNum,
+      },
     });
-  } catch (err: any) {
+  } catch (err) {
     return NextResponse.json(
-      { error: 'Payment Session Error', message: err?.message || 'Failed to initialize payment session' },
+      { error: err instanceof Error ? err.message : 'Checkout initialization failed' },
       { status: 500 }
     );
   }

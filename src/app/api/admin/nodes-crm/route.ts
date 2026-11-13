@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
-import { requireAdmin, verifySudoToken } from '@/lib/authGuard';
+import { isSupabaseConfigured, getServiceSupabase, isDevSandboxMode } from '@/lib/supabase';
+import { requireAdmin, verifySudoToken, serviceUnavailableResponse } from '@/lib/authGuard';
 
 
 async function logNodeAudit(
@@ -34,7 +34,14 @@ export async function GET(req: NextRequest) {
     const adminAuth = await requireAdmin(req);
     if (!adminAuth.ok) return adminAuth.response;
 
+    if (!isSupabaseConfigured() && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('WHM Server Nodes & CRM');
+    }
+
     if (!isSupabaseConfigured()) {
+      if (!isDevSandboxMode()) {
+        return serviceUnavailableResponse('WHM Server Nodes & CRM');
+      }
       return NextResponse.json({
         success: true,
         nodes: [
@@ -127,6 +134,10 @@ export async function POST(req: NextRequest) {
     const adminAuth = await requireAdmin(req);
     if (!adminAuth.ok) return adminAuth.response;
 
+    if (!isSupabaseConfigured() && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('WHM Server Nodes & CRM');
+    }
+
     const sudoValid = await verifySudoToken(req, adminAuth.user.id);
     const body = await req.json();
     const { action, nodeData } = body;
@@ -209,6 +220,10 @@ export async function PUT(req: NextRequest) {
   try {
     const adminAuth = await requireAdmin(req);
     if (!adminAuth.ok) return adminAuth.response;
+
+    if (!isSupabaseConfigured() && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('WHM Server Nodes & CRM');
+    }
 
     const sudoValid = await verifySudoToken(req, adminAuth.user.id);
     const body = await req.json();

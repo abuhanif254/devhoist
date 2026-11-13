@@ -589,3 +589,18 @@ export function isSafeExternalHttpUrl(rawUrl: string): boolean {
     return false;
   }
 }
+
+/**
+ * Returns HTTP 503 Service Unavailable when a required backend database or
+ * upstream provider is unconfigured outside explicit DEV_SANDBOX_MODE.
+ */
+export function serviceUnavailableResponse(serviceName: string): NextResponse {
+  return NextResponse.json(
+    {
+      success: false,
+      error: `${serviceName} is currently unavailable because the backend database or upstream provider is not configured.`,
+      code: 'SERVICE_UNAVAILABLE',
+    },
+    { status: 503 }
+  );
+}

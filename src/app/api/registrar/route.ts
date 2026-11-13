@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { checkRateLimit } from '@/lib/edgeRateLimit';
-import { getServiceSupabase, isSupabaseConfigured } from '@/lib/supabase';
-import { requireUser, requireDomainAccess } from '@/lib/authGuard';
+import { getServiceSupabase, isSupabaseConfigured, isDevSandboxMode } from '@/lib/supabase';
+import { requireUser, requireDomainAccess, serviceUnavailableResponse } from '@/lib/authGuard';
 
 export async function POST(request: Request) {
   const rateLimit = checkRateLimit(request, 30, 60 * 1000);
@@ -32,6 +32,10 @@ export async function POST(request: Request) {
       const access = await requireDomainAccess(request, { domainName: String(domain) });
       if (!access.ok) return access.response;
       ownerUserId = access.user.id;
+    }
+
+    if (!isSupabaseConfigured() && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Domain Registrar Gateway');
     }
 
     // Registrar credentials (ResellerClub / Namecheap / Cloudflare)

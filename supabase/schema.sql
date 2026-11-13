@@ -846,6 +846,49 @@ CREATE TABLE IF NOT EXISTS public.affiliate_marketer_profiles (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Reconcile columns if profile/security tables pre-existed from an earlier schema
+ALTER TABLE public.user_security_credentials
+    ADD COLUMN IF NOT EXISTS totp_enabled BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS totp_secret_base32 TEXT,
+    ADD COLUMN IF NOT EXISTS email_2fa_enabled BOOLEAN NOT NULL DEFAULT true,
+    ADD COLUMN IF NOT EXISTS backup_recovery_hashes TEXT[] DEFAULT '{}'::TEXT[],
+    ADD COLUMN IF NOT EXISTS sudo_security_pin_hash TEXT,
+    ADD COLUMN IF NOT EXISTS trusted_device_fingerprints JSONB NOT NULL DEFAULT '[]'::JSONB,
+    ADD COLUMN IF NOT EXISTS admin_allowed_ips TEXT[] DEFAULT '{}'::TEXT[],
+    ADD COLUMN IF NOT EXISTS last_password_change TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ADD COLUMN IF NOT EXISTS last_sudo_verified_at TIMESTAMPTZ;
+
+ALTER TABLE public.customer_developer_profiles
+    ADD COLUMN IF NOT EXISTS account_type TEXT NOT NULL DEFAULT 'individual',
+    ADD COLUMN IF NOT EXISTS company_legal_name TEXT,
+    ADD COLUMN IF NOT EXISTS tax_vat_bin_number TEXT,
+    ADD COLUMN IF NOT EXISTS billing_street_address TEXT,
+    ADD COLUMN IF NOT EXISTS billing_city TEXT,
+    ADD COLUMN IF NOT EXISTS billing_country TEXT NOT NULL DEFAULT 'Bangladesh',
+    ADD COLUMN IF NOT EXISTS emergency_billing_email TEXT,
+    ADD COLUMN IF NOT EXISTS whatsapp_alert_number TEXT,
+    ADD COLUMN IF NOT EXISTS default_datacenter_region TEXT NOT NULL DEFAULT 'sg1',
+    ADD COLUMN IF NOT EXISTS default_node_version TEXT NOT NULL DEFAULT '22',
+    ADD COLUMN IF NOT EXISTS default_php_version TEXT NOT NULL DEFAULT '8.3',
+    ADD COLUMN IF NOT EXISTS ssh_public_keys JSONB NOT NULL DEFAULT '[]'::JSONB,
+    ADD COLUMN IF NOT EXISTS personal_api_tokens JSONB NOT NULL DEFAULT '[]'::JSONB,
+    ADD COLUMN IF NOT EXISTS auto_pay_from_wallet BOOLEAN NOT NULL DEFAULT true;
+
+ALTER TABLE public.affiliate_marketer_profiles
+    ADD COLUMN IF NOT EXISTS partner_display_name TEXT,
+    ADD COLUMN IF NOT EXISTS custom_referral_slug TEXT,
+    ADD COLUMN IF NOT EXISTS promotional_channels TEXT[] DEFAULT '{}'::TEXT[],
+    ADD COLUMN IF NOT EXISTS website_or_page_url TEXT,
+    ADD COLUMN IF NOT EXISTS primary_payout_method TEXT NOT NULL DEFAULT 'bkash_personal',
+    ADD COLUMN IF NOT EXISTS payout_wallet_number TEXT,
+    ADD COLUMN IF NOT EXISTS bank_account_details JSONB DEFAULT '{}'::JSONB,
+    ADD COLUMN IF NOT EXISTS payout_schedule_mode TEXT NOT NULL DEFAULT 'auto_monthly_5th',
+    ADD COLUMN IF NOT EXISTS min_payout_threshold_bdt NUMERIC(10, 2) NOT NULL DEFAULT 1000.00,
+    ADD COLUMN IF NOT EXISTS conversion_postback_webhook_url TEXT,
+    ADD COLUMN IF NOT EXISTS default_utm_campaign TEXT,
+    ADD COLUMN IF NOT EXISTS kyc_verified BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS payout_lock_until TIMESTAMPTZ;
+
 -- Indexes for lightning fast lookups
 CREATE INDEX IF NOT EXISTS idx_security_totp ON public.user_security_credentials(user_id, totp_enabled);
 CREATE INDEX IF NOT EXISTS idx_customer_profiles_vat ON public.customer_developer_profiles(tax_vat_bin_number);

@@ -205,7 +205,7 @@ export interface AffiliatePayout {
   amount: number;
   method: string;
   accountNumber: string;
-  status: 'Completed' | 'Pending';
+  status: 'Completed' | 'Pending' | 'Rejected';
   trxId: string;
 }
 
@@ -505,8 +505,24 @@ interface PortalContextType {
   walletBalanceBDT: number;
   walletTransactions: WalletTransaction[];
   invoices: Invoice[];
-  topUpWallet: (amount: number, method: string, trxId?: string) => void;
-  payInvoice: (invoiceId: string) => boolean;
+  topUpWallet: (
+    amount: number,
+    method: string,
+    trxId?: string
+  ) => Promise<{
+    ok: boolean;
+    mode?: string;
+    paymentUrl?: string;
+    invoiceNumber?: string;
+    instructions?: {
+      method: string;
+      merchantNumber: string;
+      exactAmountBDT: number;
+      reference: string;
+    };
+    error?: string;
+  }>;
+  payInvoice: (invoiceId: string) => Promise<boolean>;
 
   // Support
   tickets: SupportTicket[];
@@ -533,13 +549,21 @@ interface PortalContextType {
     pendingClearanceBDT: number;
     availableBalanceBDT: number;
     totalEarnedBDT: number;
+    totalWithdrawnBDT: number;
     payouts: AffiliatePayout[];
     commissions: AffiliateCommissionItem[];
     subIdStats: CampaignSubIdStat[];
   };
-  requestAffiliatePayout: (amount: number, method: string, accountNumber: string) => boolean;
-  approveAffiliatePayout: (payoutId: string) => void;
-  clawbackCommission: (commissionId: string) => void;
+  requestAffiliatePayout: (
+    amount: number,
+    method: string,
+    accountNumber: string
+  ) => Promise<{ ok: boolean; error?: string }>;
+  approveAffiliatePayout: (
+    payoutId: string,
+    adminTrxId: string
+  ) => Promise<{ ok: boolean; requireSudo?: boolean; error?: string }>;
+  clawbackCommission: (invoiceOrCommissionId: string) => Promise<{ ok: boolean; error?: string }>;
 
   // Security, Fraud Radar & Audit
   fraudAlerts: FraudAlertItem[];
@@ -651,47 +675,12 @@ const INITIAL_TRANSACTIONS: WalletTransaction[] = [];
 const INITIAL_TICKETS: SupportTicket[] = [];
 const INITIAL_CUSTOMERS: AdminCustomer[] = [];
 
-const INITIAL_NODES: ServerNode[] = [
-  {
-    id: 'node_sg1',
-    name: 'Singapore SG1 Master Node',
-    hostname: 'sg1.devhostcloud.com',
-    location: 'Singapore (Equinix SG1)',
-    totalDiskGB: 100.0,
-    allocatedDiskGB: 68.5,
-    actualUsedDiskGB: 29.4,
-    totalSlots: 50,
-    usedSlots: 38,
-    ramTotalGB: 64,
-    ramUsedGB: 28.5,
-    lveLoad: 0.38,
-    status: 'Operational',
-  },
-  {
-    id: 'node_us1',
-    name: 'USA East Node',
-    hostname: 'us1.devhostcloud.com',
-    location: 'Ashburn, VA (Equinix)',
-    totalDiskGB: 100.0,
-    allocatedDiskGB: 32.0,
-    actualUsedDiskGB: 11.2,
-    totalSlots: 30,
-    usedSlots: 14,
-    ramTotalGB: 32,
-    ramUsedGB: 10.4,
-    lveLoad: 0.22,
-    status: 'Operational',
-  },
-];
+const INITIAL_NODES: ServerNode[] = [];
 
 const INITIAL_LEDGER: LedgerOrder[] = [];
 const INITIAL_MIGRATIONS: MigrationRequest[] = [];
 
-const INITIAL_PROMOS: PromoCode[] = [
-  { code: 'DEVPRO20', discountPercent: 20, usesCount: 38, maxUses: 100, expiryDate: '2026-12-31', status: 'Active' },
-  { code: 'LAUNCHBDIX', discountPercent: 50, usesCount: 100, maxUses: 100, expiryDate: '2026-10-31', status: 'Expired' },
-  { code: 'MIGRATEFREE', discountPercent: 15, usesCount: 14, maxUses: 50, expiryDate: '2027-06-30', status: 'Active' },
-];
+const INITIAL_PROMOS: PromoCode[] = [];
 
 const INITIAL_DYNAMIC_PLANS: DynamicHostingPlan[] = [
   {
@@ -916,6 +905,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     pendingClearanceBDT: number;
     availableBalanceBDT: number;
     totalEarnedBDT: number;
+    totalWithdrawnBDT: number;
     payouts: AffiliatePayout[];
     commissions: AffiliateCommissionItem[];
     subIdStats: CampaignSubIdStat[];
@@ -931,6 +921,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     pendingClearanceBDT: 0,
     availableBalanceBDT: 0,
     totalEarnedBDT: 0,
+    totalWithdrawnBDT: 0,
     payouts: [],
     commissions: [],
     subIdStats: [],
@@ -1088,6 +1079,79 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       } else {
         setWalletTransactions([]);
       }
+
+      // 5. Hydrate live Affiliate balances, commissions & payout history from server API
+      try {
+        const affRes = await fetch('/api/affiliate', { cache: 'no-store' });
+        if (affRes.ok) {
+          const affData = await affRes.json();
+          const p = affData.profile || {};
+          const rawComms = Array.isArray(affData.commissions) ? affData.commissions : [];
+          const rawPayouts = Array.isArray(affData.payouts) ? affData.payouts : [];
+          const refCodeVal = String(p.referralCode || '');
+          const tierLvl: 'starter_20' | 'pro_25' | 'agency_30' =
+            p.tierLevel === 'agency_30' || p.tierLevel === 'pro_25' ? p.tierLevel : 'starter_20';
+          const rateVal = Number(p.commissionRate || 20);
+          const pendingVal = Number(p.pendingClearanceBDT || 0);
+          const availVal = Number(p.availableBalanceBDT || 0);
+          const withdrawnVal = Number(p.totalWithdrawnBDT || 0);
+
+          setAffiliate((prev) => ({
+            ...prev,
+            refLink: refCodeVal ? `https://devhostcloud.com/?ref=${refCodeVal}` : prev.refLink,
+            referralCode: refCodeVal || prev.referralCode,
+            clicks: Number(p.totalClicks || 0),
+            signups: Number(p.totalSignups || 0),
+            activeConversions: Number(p.activeConversions || 0),
+            tierLevel: tierLvl,
+            commissionRate: rateVal,
+            commissionTier:
+              tierLvl === 'agency_30'
+                ? 'Tier 3 (Agency 30%)'
+                : tierLvl === 'pro_25'
+                  ? 'Tier 2 (Pro 25%)'
+                  : 'Tier 1 (Starter 20%)',
+            pendingClearanceBDT: pendingVal,
+            availableBalanceBDT: availVal,
+            totalWithdrawnBDT: withdrawnVal,
+            totalEarnedBDT: Number((pendingVal + availVal + withdrawnVal).toFixed(2)),
+            commissions: rawComms.map((c: any) => {
+              const maturesAt = c.matures_at ? new Date(c.matures_at).getTime() : Date.now();
+              const daysLeft = Math.max(0, Math.ceil((maturesAt - Date.now()) / 86400000));
+              return {
+                id: String(c.id),
+                date: String(c.created_at || '').split('T')[0],
+                invoiceId: String(c.invoice_number || c.invoice_id || ''),
+                customerMasked: c.referred_user_id ? `user_${String(c.referred_user_id).slice(0, 6)}` : 'Guest Order',
+                domain: 'cloud-service',
+                orderAmountBDT: Number(c.order_amount_bdt || 0),
+                commissionBDT: Number(c.commission_amount_bdt || 0),
+                ratePercent: Number(c.commission_rate || rateVal),
+                subId: String(c.sub_id || 'organic'),
+                status: c.status || 'pending_35d_hold',
+                daysLeftToMature: daysLeft,
+                clearanceDate: String(c.matures_at || '').split('T')[0],
+              };
+            }),
+            payouts: rawPayouts.map((pay: any) => ({
+              id: String(pay.id),
+              date: String(pay.created_at || '').split('T')[0],
+              amount: Number(pay.amount_bdt || 0),
+              method: String(pay.payout_method || 'bkash'),
+              accountNumber: String(pay.account_details || ''),
+              status:
+                pay.status === 'approved_paid'
+                  ? 'Completed'
+                  : pay.status === 'rejected_fraud'
+                    ? 'Rejected'
+                    : 'Pending',
+              trxId: String(pay.admin_trx_id || pay.payout_gateway_ref || 'PENDING_ADMIN_APPROVAL'),
+            })),
+          }));
+        }
+      } catch {
+        // Non-fatal affiliate hydration fallback
+      }
     } catch (err) {
       console.error('[PortalContext] User data fetch error:', err);
     }
@@ -1187,6 +1251,66 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
 
       // Secondary data must never break login (fetchUserData has its own try/catch)
       await fetchUserData(session.user.id);
+
+      // Hydrate Admin live cluster nodes when founder/admin session is active
+      if (role === 'admin') {
+        try {
+          const nodesRes = await fetch('/api/admin/nodes-crm', { cache: 'no-store' });
+          if (nodesRes.ok) {
+            const nodesData = await nodesRes.json();
+            if (Array.isArray(nodesData.nodes)) {
+              const adminMappedNodes: ServerNode[] = nodesData.nodes.map((n: any) => ({
+                id: String(n.id || n.node_code),
+                name: String(n.node_name || n.node_code || 'Cloud Node'),
+                hostname: String(n.whm_hostname || `${n.node_code || 'node'}.devhost.cloud`),
+                location: String(n.datacenter_location || 'Global Edge'),
+                totalDiskGB: Number(n.max_disk_gb ?? 100),
+                allocatedDiskGB: Number(n.allocated_disk_gb ?? 0),
+                actualUsedDiskGB: Number(n.actual_physical_disk_gb ?? 0),
+                totalSlots: Number(n.max_cpanel_slots ?? 50),
+                usedSlots: Number(n.used_cpanel_slots ?? 0),
+                ramTotalGB: Number(n.ram_total_gb ?? 64),
+                ramUsedGB: Number(n.ram_used_gb ?? 0),
+                lveLoad: Number(n.lve_load ?? 0.25),
+                status:
+                  n.is_healthy === false
+                    ? 'Maintenance'
+                    : n.auto_provision_enabled === false
+                      ? 'Warning'
+                      : 'Operational',
+              }));
+              setServerNodes(adminMappedNodes);
+            }
+          }
+
+          // Hydrate Admin cluster-wide affiliate payout requests & commissions
+          const adminAffRes = await fetch('/api/affiliate?scope=admin', { cache: 'no-store' });
+          if (adminAffRes.ok) {
+            const adminAffData = await adminAffRes.json();
+            if (Array.isArray(adminAffData.payouts)) {
+              setAffiliate((prev) => ({
+                ...prev,
+                payouts: adminAffData.payouts.map((pay: any) => ({
+                  id: String(pay.id),
+                  date: String(pay.created_at || '').split('T')[0],
+                  amount: Number(pay.amount_bdt || 0),
+                  method: String(pay.payout_method || 'bkash'),
+                  accountNumber: String(pay.account_details || ''),
+                  status:
+                    pay.status === 'approved_paid'
+                      ? 'Completed'
+                      : pay.status === 'rejected_fraud'
+                        ? 'Rejected'
+                        : 'Pending',
+                  trxId: String(pay.admin_trx_id || pay.payout_gateway_ref || 'PENDING_ADMIN_APPROVAL'),
+                })),
+              }));
+            }
+          }
+        } catch {
+          // ignore secondary admin node sync failure
+        }
+      }
     } catch (err) {
       console.error('[PortalContext] refreshUserData error:', err);
     } finally {
@@ -1282,6 +1406,46 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
               featuredBadge: t.featured_badge,
             }));
             setDynamicTlds(mappedTlds);
+          }
+          if (Array.isArray(data.promoCodes)) {
+            const mappedPromos: PromoCode[] = data.promoCodes.map((pr: any) => {
+              const expiresStr = pr.expires_at ? String(pr.expires_at).split('T')[0] : '2027-12-31';
+              const isExpired =
+                pr.is_active === false ||
+                (pr.expires_at ? new Date(pr.expires_at).getTime() < Date.now() : false);
+              return {
+                code: String(pr.code || '').toUpperCase(),
+                discountPercent: Number(pr.discount_value ?? pr.discountPercent ?? 0),
+                usesCount: Number(pr.current_uses ?? pr.usesCount ?? 0),
+                maxUses: Number(pr.max_uses ?? pr.maxUses ?? 100),
+                expiryDate: expiresStr,
+                status: isExpired ? 'Expired' : 'Active',
+              };
+            });
+            setPromoCodes(mappedPromos);
+          }
+          if (Array.isArray(data.serverNodes)) {
+            const mappedNodes: ServerNode[] = data.serverNodes.map((n: any) => ({
+              id: String(n.id || n.node_code),
+              name: String(n.node_name || n.name || n.node_code || 'Cloud Node'),
+              hostname: String(n.whm_hostname || n.hostname || `${n.node_code || 'node'}.devhost.cloud`),
+              location: String(n.datacenter_location || n.location || 'Global Edge'),
+              totalDiskGB: Number(n.max_disk_gb ?? 100),
+              allocatedDiskGB: Number(n.allocated_disk_gb ?? 0),
+              actualUsedDiskGB: Number(n.actual_physical_disk_gb ?? 0),
+              totalSlots: Number(n.max_cpanel_slots ?? 50),
+              usedSlots: Number(n.used_cpanel_slots ?? 0),
+              ramTotalGB: Number(n.ram_total_gb ?? 64),
+              ramUsedGB: Number(n.ram_used_gb ?? 0),
+              lveLoad: Number(n.lve_load ?? 0.25),
+              status:
+                n.is_healthy === false
+                  ? 'Maintenance'
+                  : n.auto_provision_enabled === false
+                    ? 'Warning'
+                    : 'Operational',
+            }));
+            setServerNodes((prev) => (prev.length > 0 && mappedNodes.length === 0 ? prev : mappedNodes));
           }
         }
       } catch (err) {
@@ -1839,24 +2003,44 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   };
 
   // ---------------------------------------------------------------------------
-  // BILLING & WALLET
+  // BILLING & WALLET (SERVER-VERIFIED VIA PAYMENT SESSIONS & ATOMIC RPC)
   // ---------------------------------------------------------------------------
 
-  const topUpWallet = (amount: number, method: string, trxId?: string) => {
-    const newBalance = walletBalanceBDT + amount;
-    setWalletBalanceBDT(newBalance);
-    const newTx: WalletTransaction = {
-      id: `wtx_${Date.now()}`,
-      date: new Date().toISOString().split('T')[0],
-      type: 'Top-Up',
-      amount,
-      method: `${method} (${trxId || 'Instant'})`,
-      balanceAfter: newBalance,
-    };
-    setWalletTransactions((prev) => [newTx, ...prev]);
+  const topUpWallet = async (amount: number, method: string, _trxId?: string) => {
+    try {
+      const res = await fetch('/api/payments/create-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          gateway: method.toLowerCase(),
+          amountBDT: Number(amount),
+          orderType: 'wallet_topup',
+          planName: 'DevHost Prepaid Cloud Wallet Top-Up',
+          items: [{ name: 'DevHost Prepaid Cloud Wallet Top-Up', type: 'wallet_topup', amountBDT: Number(amount) }],
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        return { ok: false, error: data.error || 'Failed to initiate wallet top-up session.' };
+      }
+
+      if (data.paymentUrl) {
+        window.location.href = data.paymentUrl;
+      }
+
+      return {
+        ok: true,
+        mode: data.mode,
+        paymentUrl: data.paymentUrl,
+        invoiceNumber: data.invoiceNumber,
+        instructions: data.instructions,
+      };
+    } catch (err: any) {
+      return { ok: false, error: err?.message || 'Wallet top-up network failure.' };
+    }
   };
 
-  const payInvoice = (invoiceId: string): boolean => {
+  const payInvoice = async (invoiceId: string): Promise<boolean> => {
     const inv = invoices.find((i) => i.id === invoiceId);
     if (!inv || inv.status === 'Paid') return false;
 
@@ -1865,37 +2049,60 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       return false;
     }
 
-    const newBalance = walletBalanceBDT - inv.amount;
-    setWalletBalanceBDT(newBalance);
-    setInvoices((prev) =>
-      prev.map((i) => (i.id === invoiceId ? { ...i, status: 'Paid', paymentMethod: 'Prepaid Wallet', trxID: `WLT_${Date.now()}` } : i))
-    );
+    try {
+      const res = await fetch('/api/payments/wallet-pay', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ invoiceNumber: inv.id, amountBDT: inv.amount }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        alert(data.error || 'Wallet checkout declined.');
+        return false;
+      }
 
-    setWalletTransactions((prev) => [
-      {
-        id: `wtx_${Date.now()}`,
-        date: new Date().toISOString().split('T')[0],
-        type: 'Debit',
-        amount: inv.amount,
-        method: `Payment for Invoice ${invoiceId}`,
-        balanceAfter: newBalance,
-      },
-      ...prev,
-    ]);
+      const nextBalance =
+        typeof data.newWalletBalanceBDT === 'number'
+          ? data.newWalletBalanceBDT
+          : Math.max(0, walletBalanceBDT - inv.amount);
+      setWalletBalanceBDT(nextBalance);
+      setInvoices((prev) =>
+        prev.map((i) =>
+          i.id === invoiceId
+            ? { ...i, status: 'Paid', paymentMethod: 'Prepaid Wallet', trxID: data.trxId || `WLT_${Date.now()}` }
+            : i
+        )
+      );
 
-    setNotifications((prev) => [
-      {
-        id: `notif_${Date.now()}`,
-        title: 'Invoice Paid from Wallet',
-        desc: `Invoice ${invoiceId} for ৳${inv.amount} paid instantly. Balance: ৳${newBalance}.`,
-        time: 'Just now',
-        type: 'billing',
-        read: false,
-      },
-      ...prev,
-    ]);
+      setWalletTransactions((prev) => [
+        {
+          id: `wtx_${Date.now()}`,
+          date: new Date().toISOString().split('T')[0],
+          type: 'Debit',
+          amount: inv.amount,
+          method: `Payment for Invoice ${invoiceId}`,
+          balanceAfter: nextBalance,
+        },
+        ...prev,
+      ]);
 
-    return true;
+      setNotifications((prev) => [
+        {
+          id: `notif_${Date.now()}`,
+          title: 'Invoice Paid from Wallet',
+          desc: `Invoice ${invoiceId} for ৳${inv.amount} paid atomically. Balance: ৳${nextBalance}.`,
+          time: 'Just now',
+          type: 'billing',
+          read: false,
+        },
+        ...prev,
+      ]);
+
+      return true;
+    } catch (err: any) {
+      alert(err?.message || 'Atomic wallet checkout failed.');
+      return false;
+    }
   };
 
   // ---------------------------------------------------------------------------
@@ -1982,45 +2189,126 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     setTickets((prev) => prev.map((t) => (t.id === ticketId ? { ...t, status: 'Resolved', lastUpdated: 'Just now' } : t)));
   };
 
-  const requestAffiliatePayout = (amount: number, method: string, accountNumber: string): boolean => {
-    if (amount > affiliate.availableBalanceBDT) return false;
-    const newPayout: AffiliatePayout = {
-      id: `PAY-${Math.floor(100 + Math.random() * 900)}`,
-      date: new Date().toISOString().split('T')[0],
-      amount,
-      method,
-      accountNumber,
-      status: 'Pending',
-      trxId: 'PENDING_ADMIN_APPROVAL',
-    };
-    setAffiliate((prev) => ({
-      ...prev,
-      availableBalanceBDT: prev.availableBalanceBDT - amount,
-      payouts: [newPayout, ...prev.payouts],
-    }));
-    return true;
-  };
+  const requestAffiliatePayout = async (
+    amount: number,
+    method: string,
+    accountNumber: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const res = await fetch('/api/affiliate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'request_payout',
+          amountBDT: Number(amount),
+          payoutMethod: method.toLowerCase(),
+          accountDetails: accountNumber.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        return { ok: false, error: data.message || data.error || 'Payout request failed.' };
+      }
 
-  const approveAffiliatePayout = (payoutId: string) => {
-    setAffiliate((prev) => ({
-      ...prev,
-      payouts: prev.payouts.map((p) =>
-        p.id === payoutId ? { ...p, status: 'Completed', trxId: `BK_${Math.random().toString(36).substring(2, 9).toUpperCase()}` } : p
-      ),
-    }));
-  };
-
-  const clawbackCommission = (commissionId: string) => {
-    setAffiliate((prev) => {
-      const comm = prev.commissions.find((c) => c.id === commissionId);
-      if (!comm || comm.status === 'clawed_back_refunded') return prev;
-      return {
-        ...prev,
-        pendingClearanceBDT: comm.status === 'pending_35d_hold' ? Math.max(0, prev.pendingClearanceBDT - comm.commissionBDT) : prev.pendingClearanceBDT,
-        availableBalanceBDT: comm.status === 'cleared_available' ? Math.max(0, prev.availableBalanceBDT - comm.commissionBDT) : prev.availableBalanceBDT,
-        commissions: prev.commissions.map((c) => (c.id === commissionId ? { ...c, status: 'clawed_back_refunded', daysLeftToMature: 0 } : c)),
+      const newPayout: AffiliatePayout = {
+        id: String(data.payoutId || `PAY-${Date.now()}`),
+        date: new Date().toISOString().split('T')[0],
+        amount: Number(amount),
+        method: method.toLowerCase(),
+        accountNumber,
+        status: 'Pending',
+        trxId: 'PENDING_ADMIN_APPROVAL',
       };
-    });
+      setAffiliate((prev) => ({
+        ...prev,
+        availableBalanceBDT:
+          typeof data.availableBalanceBDT === 'number'
+            ? data.availableBalanceBDT
+            : Math.max(0, prev.availableBalanceBDT - amount),
+        payouts: [newPayout, ...prev.payouts],
+      }));
+      return { ok: true };
+    } catch (err: any) {
+      return { ok: false, error: err?.message || 'Payout request network failure.' };
+    }
+  };
+
+  const approveAffiliatePayout = async (
+    payoutId: string,
+    adminTrxId: string
+  ): Promise<{ ok: boolean; requireSudo?: boolean; error?: string }> => {
+    try {
+      const res = await fetch('/api/affiliate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'approve_payout',
+          payoutId,
+          adminTrxId,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        return {
+          ok: false,
+          requireSudo: Boolean(data.requireSudo),
+          error: data.error || data.message || 'Payout approval failed.',
+        };
+      }
+
+      setAffiliate((prev) => ({
+        ...prev,
+        payouts: prev.payouts.map((p) =>
+          p.id === payoutId ? { ...p, status: 'Completed', trxId: adminTrxId } : p
+        ),
+      }));
+      return { ok: true };
+    } catch (err: any) {
+      return { ok: false, error: err?.message || 'Payout approval network error.' };
+    }
+  };
+
+  const clawbackCommission = async (
+    invoiceOrCommissionId: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const res = await fetch('/api/affiliate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'clawback_refund',
+          invoiceId: invoiceOrCommissionId,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        return { ok: false, error: data.error || data.message || 'Commission clawback failed.' };
+      }
+
+      setAffiliate((prev) => {
+        const comm = prev.commissions.find(
+          (c) => c.id === invoiceOrCommissionId || c.invoiceId === invoiceOrCommissionId
+        );
+        if (!comm || comm.status === 'clawed_back_refunded') return prev;
+        return {
+          ...prev,
+          pendingClearanceBDT:
+            comm.status === 'pending_35d_hold'
+              ? Math.max(0, prev.pendingClearanceBDT - comm.commissionBDT)
+              : prev.pendingClearanceBDT,
+          availableBalanceBDT:
+            comm.status === 'cleared_available'
+              ? Math.max(0, prev.availableBalanceBDT - comm.commissionBDT)
+              : prev.availableBalanceBDT,
+          commissions: prev.commissions.map((c) =>
+            c.id === comm.id ? { ...c, status: 'clawed_back_refunded', daysLeftToMature: 0 } : c
+          ),
+        };
+      });
+      return { ok: true };
+    } catch (err: any) {
+      return { ok: false, error: err?.message || 'Commission clawback network error.' };
+    }
   };
 
   const toggleEmergencyLockdown = (enabled: boolean) => {
@@ -2332,11 +2620,41 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   };
 
   const createServerNode = (nodeData: Omit<ServerNode, 'id'>) => {
+    const cleanCode = nodeData.hostname
+      .split('.')[0]
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, '') || `node-${Date.now().toString(36)}`;
     const newNode: ServerNode = {
       ...nodeData,
-      id: `node_${Date.now()}`,
+      id: `node_${cleanCode}_${Date.now()}`,
     };
     setServerNodes((prev) => [...prev, newNode]);
+
+    // Persist to Supabase whm_server_nodes via Admin Nodes CRM API
+    fetch('/api/admin/nodes-crm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'save_node',
+        nodeData: {
+          nodeCode: cleanCode,
+          nodeName: nodeData.name,
+          datacenterLocation: nodeData.location,
+          ipv4Address: nodeData.hostname,
+          whmHostname: nodeData.hostname,
+          whmUsername: 'root',
+          maxSlots: nodeData.totalSlots,
+          maxDiskGb: nodeData.totalDiskGB,
+        },
+      }),
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => ({}));
+          console.warn('[PortalContext] Server node persistence notice:', errBody?.error || res.status);
+        }
+      })
+      .catch((err) => console.error('[PortalContext] Failed to persist server node:', err));
   };
 
   const approveLedgerOrder = (orderId: string) => {
@@ -2379,19 +2697,62 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   };
 
   const createAdminPromo = (code: string, discount: number, maxUses: number, expiry: string) => {
+    const cleanCode = code.toUpperCase().trim();
+    if (!cleanCode) return;
+
     const newPromo: PromoCode = {
-      code: code.toUpperCase().trim(),
+      code: cleanCode,
       discountPercent: discount,
       usesCount: 0,
       maxUses,
       expiryDate: expiry,
       status: 'Active',
     };
-    setPromoCodes((prev) => [newPromo, ...prev]);
+    setPromoCodes((prev) => [newPromo, ...prev.filter((p) => p.code !== cleanCode)]);
+
+    // Persist promo code to Supabase via /api/catalog
+    fetch('/api/catalog', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        entityType: 'promo',
+        data: {
+          code: cleanCode,
+          discount_type: 'percentage',
+          discount_value: discount,
+          applies_to: 'all',
+          max_uses: maxUses,
+          current_uses: 0,
+          reduce_affiliate_commission_proportionally: true,
+          expires_at: expiry ? new Date(expiry).toISOString() : null,
+          is_active: true,
+        },
+      }),
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => ({}));
+          console.warn('[PortalContext] Promo code persistence notice:', errBody?.error || res.status);
+        }
+      })
+      .catch((err) => console.error('[PortalContext] Failed to persist promo code:', err));
   };
 
   const deleteAdminPromo = (code: string) => {
-    setPromoCodes((prev) => prev.filter((p) => p.code !== code));
+    const cleanCode = code.toUpperCase().trim();
+    setPromoCodes((prev) => prev.filter((p) => p.code !== cleanCode));
+
+    // Delete promo code from Supabase via /api/catalog
+    fetch(`/api/catalog?entityType=promo&code=${encodeURIComponent(cleanCode)}`, {
+      method: 'DELETE',
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => ({}));
+          console.warn('[PortalContext] Promo code deletion notice:', errBody?.error || res.status);
+        }
+      })
+      .catch((err) => console.error('[PortalContext] Failed to delete promo code:', err));
   };
 
   const exportAccountingCsv = () => {

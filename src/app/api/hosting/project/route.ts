@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
+import { isSupabaseConfigured, getServiceSupabase, isDevSandboxMode } from '@/lib/supabase';
 import {
   encryptEnvValue,
   decryptEnvValue,
@@ -7,7 +7,7 @@ import {
   parseDotEnvFile,
   validateShellCommand,
 } from '@/lib/projectEngine';
-import { requireServiceAccess, verifySudoToken } from '@/lib/authGuard';
+import { requireServiceAccess, verifySudoToken, serviceUnavailableResponse } from '@/lib/authGuard';
 
 
 async function logAudit(
@@ -89,7 +89,11 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // Offline fallback
+    if (!isDevSandboxMode()) {
+      return serviceUnavailableResponse('Project Control Engine');
+    }
+
+    // Offline fallback (DEV_SANDBOX_MODE only)
     return NextResponse.json({
       success: true,
       settings: {
@@ -135,6 +139,10 @@ export async function PUT(request: NextRequest) {
     const access = await requireServiceAccess(request, serviceId, 'services:write');
     if (!access.ok) return access.response;
     const userId = access.user.id;
+
+    if (!isSupabaseConfigured() && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Project Control Engine');
+    }
 
     // Security Firewall: Sanitize build and install commands
     if (settings.build_command) {
@@ -226,6 +234,10 @@ export async function POST(request: NextRequest) {
     const access = await requireServiceAccess(request, resolvedServiceId, requiredScope);
     if (!access.ok) return access.response;
     const userId = access.user.id;
+
+    if (!isSupabaseConfigured() && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Project Control Engine');
+    }
 
     // 1. ADD SINGLE ENV VARIABLE
     if (action === 'add_env') {
@@ -423,6 +435,10 @@ export async function DELETE(request: NextRequest) {
     const access = await requireServiceAccess(request, serviceId, 'env:write');
     if (!access.ok) return access.response;
     const userId = access.user.id;
+
+    if (!isSupabaseConfigured() && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Project Control Engine');
+    }
 
     if (db) {
       const { error } = await db

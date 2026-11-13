@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase, getServiceSupabase, isSupabaseConfigured } from '@/lib/supabase';
+import { getServiceSupabase, isSupabaseConfigured, isDevSandboxMode } from '@/lib/supabase';
 import { validatePricingPlanChange } from '@/lib/profitEngine';
-import { requireAdmin } from '@/lib/authGuard';
+import { requireAdmin, serviceUnavailableResponse } from '@/lib/authGuard';
 
 
 // Default Production Fallback & Seeding Datasets
@@ -288,10 +288,15 @@ export const DEFAULT_PRODUCTION_PROMOS = [
  */
 export async function GET() {
   try {
-    let plans = DEFAULT_PRODUCTION_HOSTING_PLANS;
-    let tlds = DEFAULT_PRODUCTION_DOMAIN_TLDS;
-    let promos = DEFAULT_PRODUCTION_PROMOS;
-    let settings: Record<string, any> = {
+    if (!isSupabaseConfigured() && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Dynamic Catalog');
+    }
+
+    let plans = isDevSandboxMode() ? DEFAULT_PRODUCTION_HOSTING_PLANS : ([] as typeof DEFAULT_PRODUCTION_HOSTING_PLANS);
+    let tlds = isDevSandboxMode() ? DEFAULT_PRODUCTION_DOMAIN_TLDS : ([] as typeof DEFAULT_PRODUCTION_DOMAIN_TLDS);
+    let promos = isDevSandboxMode() ? DEFAULT_PRODUCTION_PROMOS : ([] as typeof DEFAULT_PRODUCTION_PROMOS);
+    let serverNodes: any[] = [];
+    const settings: Record<string, any> = {
       bdix_status: { status: 'online', peering_mbps: 10000, node: 'Equinix SG1' },
       usd_bdt_rate: 120,
     };
@@ -312,6 +317,7 @@ export async function GET() {
       } else if (!plansErr && (!dbPlans || dbPlans.length === 0)) {
         // Auto-seed plans if empty
         console.log('[Catalog API] Auto-seeding catalog_hosting_plans in Supabase...');
+        plans = DEFAULT_PRODUCTION_HOSTING_PLANS;
         try {
           await db.from('catalog_hosting_plans').upsert(DEFAULT_PRODUCTION_HOSTING_PLANS);
         } catch {
@@ -329,6 +335,7 @@ export async function GET() {
         tlds = dbTlds;
       } else if (!tldsErr && (!dbTlds || dbTlds.length === 0)) {
         console.log('[Catalog API] Auto-seeding catalog_domain_tlds in Supabase...');
+        tlds = DEFAULT_PRODUCTION_DOMAIN_TLDS;
         try {
           await db.from('catalog_domain_tlds').upsert(DEFAULT_PRODUCTION_DOMAIN_TLDS);
         } catch {
@@ -336,14 +343,26 @@ export async function GET() {
         }
       }
 
-      // Query Promos
+      // Query Promos (live from promo_codes)
       const { data: dbPromos, error: promosErr } = await db
         .from('promo_codes')
         .select('*')
-        .eq('is_active', true);
+        .order('created_at', { ascending: false });
 
-      if (!promosErr && dbPromos && dbPromos.length > 0) {
+      if (!promosErr && dbPromos) {
         promos = dbPromos;
+      }
+
+      // Query Public-Safe Server Cluster Node Capacity (no IP/credentials exposed publicly)
+      const { data: dbNodes, error: nodesErr } = await db
+        .from('whm_server_nodes')
+        .select(
+          'id, node_code, node_name, datacenter_location, whm_hostname, max_cpanel_slots, used_cpanel_slots, max_disk_gb, allocated_disk_gb, actual_physical_disk_gb, is_healthy, status_message, auto_provision_enabled'
+        )
+        .order('created_at', { ascending: true });
+
+      if (!nodesErr && dbNodes) {
+        serverNodes = dbNodes;
       }
 
       // Query Platform Settings
@@ -363,11 +382,13 @@ export async function GET() {
       allPlans: plans,
       domainTlds: tlds,
       promoCodes: promos,
+      serverNodes,
       platformSettings: settings,
       meta: {
         totalPlans: plans.length,
         totalTlds: tlds.length,
-        activePromos: promos.length,
+        activePromos: promos.filter((p: any) => p.is_active !== false).length,
+        totalNodes: serverNodes.length,
         currency: 'BDT',
       },
     });
@@ -376,10 +397,6 @@ export async function GET() {
       {
         success: false,
         error: error?.message || 'Failed to fetch dynamic catalog',
-        plans: DEFAULT_PRODUCTION_HOSTING_PLANS.filter((p) => p.category !== 'vps'),
-        vpsPlans: DEFAULT_PRODUCTION_HOSTING_PLANS.filter((p) => p.category === 'vps'),
-        domainTlds: DEFAULT_PRODUCTION_DOMAIN_TLDS,
-        promoCodes: DEFAULT_PRODUCTION_PROMOS,
       },
       { status: 500 }
     );
@@ -406,6 +423,10 @@ export async function PUT(req: NextRequest) {
         { error: 'Missing entityType or data in request body' },
         { status: 400 }
       );
+    }
+
+    if (!isSupabaseConfigured() && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Dynamic Catalog');
     }
 
     // 1. Profit Protection Validation for Plan updates
@@ -459,7 +480,26 @@ export async function PUT(req: NextRequest) {
           return NextResponse.json({ error: error.message }, { status: 500 });
         }
       } else if (entityType === 'promo') {
-        const { error } = await db.from('promo_codes').upsert(data);
+        const cleanCode = String(data.code || '').toUpperCase().trim();
+        if (!cleanCode) {
+          return NextResponse.json({ error: 'Promo code is required' }, { status: 400 });
+        }
+        const { error } = await db.from('promo_codes').upsert(
+          {
+            code: cleanCode,
+            discount_type: data.discount_type || 'percentage',
+            discount_value: Number(data.discount_value ?? data.discountPercent ?? 0),
+            applies_to: data.applies_to || 'all',
+            max_uses: data.max_uses !== undefined ? Number(data.max_uses) : null,
+            current_uses: Number(data.current_uses ?? 0),
+            reduce_affiliate_commission_proportionally:
+              data.reduce_affiliate_commission_proportionally ?? true,
+            expires_at: data.expires_at || null,
+            is_active: data.is_active ?? true,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'code' }
+        );
         if (error) {
           return NextResponse.json({ error: error.message }, { status: 500 });
         }
@@ -474,6 +514,51 @@ export async function PUT(req: NextRequest) {
   } catch (err: any) {
     return NextResponse.json(
       { error: err?.message || 'Failed to update catalog entity' },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * DELETE /api/catalog?entityType=promo&code=...
+ * Removes a promo code from promo_codes (Admin Only)
+ */
+export async function DELETE(req: NextRequest) {
+  try {
+    const adminAuth = await requireAdmin(req);
+    if (!adminAuth.ok) return adminAuth.response;
+
+    if (!isSupabaseConfigured() && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Dynamic Catalog');
+    }
+
+    const { searchParams } = new URL(req.url);
+    const entityType = searchParams.get('entityType');
+    const code = searchParams.get('code')?.toUpperCase().trim();
+
+    if (entityType !== 'promo' || !code) {
+      return NextResponse.json(
+        { error: 'entityType=promo and code are required' },
+        { status: 400 }
+      );
+    }
+
+    if (isSupabaseConfigured()) {
+      const db = getServiceSupabase();
+      const { error } = await db.from('promo_codes').delete().eq('code', code);
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 500 });
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
+      message: `Promo code ${code} deleted.`,
+      code,
+    });
+  } catch (err: any) {
+    return NextResponse.json(
+      { error: err?.message || 'Failed to delete catalog entity' },
       { status: 500 }
     );
   }

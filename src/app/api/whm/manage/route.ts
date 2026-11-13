@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
 import { whmClient, WhmPackageParams } from '@/lib/whmClient';
 import { checkRateLimit } from '@/lib/edgeRateLimit';
-import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
+import { isSupabaseConfigured, getServiceSupabase, isDevSandboxMode } from '@/lib/supabase';
 import { executeZeroTouchProvisioning } from '@/lib/zeroTouchProvisioner';
-import { requireAdmin } from '@/lib/authGuard';
+import { requireAdmin, serviceUnavailableResponse } from '@/lib/authGuard';
 
 
 export async function POST(request: Request) {
@@ -37,8 +37,13 @@ export async function POST(request: Request) {
     if (action === 'status') {
       return NextResponse.json({
         success: true,
+        sandboxMode: isDevSandboxMode(),
         ...whmClient.getStatus(),
       });
+    }
+
+    if (!whmClient.getStatus().configured && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('WHM Reseller Server');
     }
 
     if (action === 'list') {

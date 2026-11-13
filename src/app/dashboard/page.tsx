@@ -341,8 +341,17 @@ export default function CustomerDashboardPage() {
   // Top Up Wallet State
   const [isTopUpModalOpen, setIsTopUpModalOpen] = useState(false);
   const [topUpAmount, setTopUpAmount] = useState(1000);
-  const [topUpMethod, setTopUpMethod] = useState<'bKash' | 'Nagad'>('bKash');
+  const [topUpMethod, setTopUpMethod] = useState<'bKash' | 'Nagad' | 'UddoktaPay' | 'Stripe'>('bKash');
   const [topUpPhone, setTopUpPhone] = useState('01712345678');
+  const [topUpTrxId, setTopUpTrxId] = useState('');
+  const [topUpError, setTopUpError] = useState<string | null>(null);
+  const [isTopUpSubmitting, setIsTopUpSubmitting] = useState(false);
+  const [topUpManualInfo, setTopUpManualInfo] = useState<{
+    invoiceNumber: string;
+    merchantNumber: string;
+    method: string;
+    exactAmountBDT: number;
+  } | null>(null);
 
   // Support Ticket Form State
   const [isNewTicketModalOpen, setIsNewTicketModalOpen] = useState(false);
@@ -1980,11 +1989,11 @@ export default function CustomerDashboardPage() {
                       <span>Pending 35-Day Hold:</span>
                     </span>
                     <div className="text-2xl font-bold font-mono text-amber-600 dark:text-amber-400 mt-1">
-                      ৳{(affiliate.pendingClearanceBDT || 1575).toLocaleString()}
+                      ৳{affiliate.pendingClearanceBDT.toLocaleString()}
                     </div>
                   </div>
                   <p className="text-[11px] text-slate-500 dark:text-zinc-400 mt-2">
-                    Matures automatically after 30-day moneyback guarantee period.
+                    Matures automatically after 35-day anti-refund hold period.
                   </p>
                 </div>
 
@@ -1994,18 +2003,18 @@ export default function CustomerDashboardPage() {
                     ৳{affiliate.totalEarnedBDT.toLocaleString()}
                   </div>
                   <div className="mt-2 text-xs text-slate-500 font-mono">
-                    Total Withdrawn: ৳6,000 BDT
+                    Total Withdrawn: ৳{(affiliate.totalWithdrawnBDT || 0).toLocaleString()} BDT
                   </div>
                 </div>
 
                 <div className="p-5 rounded-2xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] shadow-xs">
                   <span className="text-xs font-mono text-slate-400">Commission Tier:</span>
                   <div className="text-2xl font-bold font-mono text-blue-600 mt-1">
-                    {affiliate.commissionRate || 25}% Recurring
+                    {affiliate.commissionRate || 20}% Recurring
                   </div>
                   <div className="mt-2 text-xs text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1">
                     <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>Tier 2 (Pro Partner)</span>
+                    <span>{affiliate.commissionTier}</span>
                   </div>
                 </div>
               </div>
@@ -2019,25 +2028,36 @@ export default function CustomerDashboardPage() {
                       <span>Auto-Scaling Tier Progress</span>
                     </h3>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      Earned {affiliate.signups} active signups. 17 more referrals to unlock Tier 3 (30% Agency Commission).
+                      Earned {affiliate.activeConversions} verified conversions.{' '}
+                      {affiliate.activeConversions >= 31
+                        ? 'Top Agency Tier (30%) unlocked!'
+                        : affiliate.activeConversions >= 11
+                          ? `${31 - affiliate.activeConversions} more conversions to unlock Tier 3 (30% Agency Commission).`
+                          : `${11 - affiliate.activeConversions} more conversions to unlock Tier 2 (25% Pro Partner).`}
                     </p>
                   </div>
                   <span className="px-2.5 py-1 rounded-full text-xs font-mono font-bold bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
-                    Tier 2: 25% Active
+                    {affiliate.commissionTier} Active
                   </span>
                 </div>
 
                 <div className="w-full bg-slate-100 dark:bg-zinc-800 h-2.5 rounded-full overflow-hidden">
                   <div
                     className="bg-gradient-to-r from-blue-600 to-indigo-600 h-full rounded-full transition-all duration-500"
-                    style={{ width: `${Math.min(100, Math.round((affiliate.signups / 31) * 100))}%` }}
+                    style={{ width: `${Math.min(100, Math.round((affiliate.activeConversions / 31) * 100))}%` }}
                   />
                 </div>
 
                 <div className="flex items-center justify-between text-[11px] font-mono text-slate-400">
-                  <span>Tier 1: 20% (1-10 Signups)</span>
-                  <span className="text-blue-600 font-bold">Tier 2: 25% (11-30 Signups) ✓</span>
-                  <span>Tier 3: 30% (31+ Signups)</span>
+                  <span className={affiliate.tierLevel === 'starter_20' ? 'text-blue-600 font-bold' : ''}>
+                    Tier 1: 20% (0-10)
+                  </span>
+                  <span className={affiliate.tierLevel === 'pro_25' ? 'text-blue-600 font-bold' : ''}>
+                    Tier 2: 25% (11-30)
+                  </span>
+                  <span className={affiliate.tierLevel === 'agency_30' ? 'text-blue-600 font-bold' : ''}>
+                    Tier 3: 30% (31+)
+                  </span>
                 </div>
               </div>
 
@@ -2424,13 +2444,17 @@ export default function CustomerDashboardPage() {
                   <button
                     type="button"
                     disabled={affiliatePayoutAmount > affiliate.availableBalanceBDT || affiliatePayoutAmount < 1000}
-                    onClick={() => {
-                      const success = requestAffiliatePayout(affiliatePayoutAmount, affiliatePayoutMethod, affiliatePayoutAccount);
-                      if (success) {
+                    onClick={async () => {
+                      const res = await requestAffiliatePayout(
+                        affiliatePayoutAmount,
+                        affiliatePayoutMethod,
+                        affiliatePayoutAccount
+                      );
+                      if (res.ok) {
                         setIsAffiliatePayoutModalOpen(false);
-                        alert(`Payout request of ৳${affiliatePayoutAmount} submitted! Funds will be disbursed within 24 hours.`);
+                        alert(`Payout request of ৳${affiliatePayoutAmount.toLocaleString()} submitted for Admin approval!`);
                       } else {
-                        alert('Insufficient available balance');
+                        alert(res.error || 'Payout request failed.');
                       }
                     }}
                     className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold cursor-pointer disabled:opacity-50"
@@ -3040,70 +3064,198 @@ export default function CustomerDashboardPage() {
               <h3 className="text-base font-bold text-slate-900 dark:text-white">Top Up Prepaid Cloud Wallet</h3>
               <button
                 type="button"
-                onClick={() => setIsTopUpModalOpen(false)}
+                onClick={() => {
+                  setIsTopUpModalOpen(false);
+                  setTopUpManualInfo(null);
+                  setTopUpError(null);
+                  setTopUpTrxId('');
+                }}
                 className="text-slate-400 hover:text-slate-600 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="space-y-3 text-xs font-mono">
-              <div>
-                <label className="text-slate-500">Amount (BDT):</label>
-                <input
-                  type="number"
-                  value={topUpAmount}
-                  onChange={(e) => setTopUpAmount(Number(e.target.value))}
-                  className="w-full mt-1 px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-sm font-bold text-slate-900 dark:text-white"
-                />
+            {topUpError && (
+              <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 text-xs text-rose-700 dark:text-rose-300 font-mono">
+                {topUpError}
               </div>
+            )}
 
-              <div>
-                <label className="text-slate-500">Gateway:</label>
-                <div className="grid grid-cols-2 gap-2 mt-1">
+            {!topUpManualInfo ? (
+              <>
+                <div className="space-y-3 text-xs font-mono">
+                  <div>
+                    <label className="text-slate-500">Amount (BDT — Min ৳50):</label>
+                    <input
+                      type="number"
+                      min={50}
+                      value={topUpAmount}
+                      onChange={(e) => setTopUpAmount(Number(e.target.value))}
+                      className="w-full mt-1 px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-sm font-bold text-slate-900 dark:text-white"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-slate-500">Gateway:</label>
+                    <div className="grid grid-cols-2 gap-2 mt-1">
+                      <button
+                        type="button"
+                        onClick={() => setTopUpMethod('bKash')}
+                        className={`p-2 rounded-xl border text-center font-bold cursor-pointer ${
+                          topUpMethod === 'bKash' ? 'bg-pink-500 text-white border-pink-500' : 'bg-slate-100 text-slate-600'
+                        }`}
+                      >
+                        bKash Instant
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTopUpMethod('Nagad')}
+                        className={`p-2 rounded-xl border text-center font-bold cursor-pointer ${
+                          topUpMethod === 'Nagad' ? 'bg-orange-500 text-white border-orange-500' : 'bg-slate-100 text-slate-600'
+                        }`}
+                      >
+                        Nagad Merchant
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTopUpMethod('UddoktaPay')}
+                        className={`p-2 rounded-xl border text-center font-bold cursor-pointer ${
+                          topUpMethod === 'UddoktaPay' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-slate-100 text-slate-600'
+                        }`}
+                      >
+                        UddoktaPay BD
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTopUpMethod('Stripe')}
+                        className={`p-2 rounded-xl border text-center font-bold cursor-pointer ${
+                          topUpMethod === 'Stripe' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-slate-100 text-slate-600'
+                        }`}
+                      >
+                        Card (Stripe)
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  disabled={isTopUpSubmitting || topUpAmount < 50}
+                  onClick={async () => {
+                    setTopUpError(null);
+                    setIsTopUpSubmitting(true);
+                    const result = await topUpWallet(topUpAmount, topUpMethod);
+                    setIsTopUpSubmitting(false);
+
+                    if (!result.ok) {
+                      setTopUpError(result.error || 'Could not start top-up session.');
+                      return;
+                    }
+
+                    if (result.paymentUrl) {
+                      return;
+                    }
+
+                    if (result.instructions && result.invoiceNumber) {
+                      setTopUpManualInfo({
+                        invoiceNumber: result.invoiceNumber,
+                        merchantNumber: result.instructions.merchantNumber,
+                        method: result.instructions.method,
+                        exactAmountBDT: result.instructions.exactAmountBDT,
+                      });
+                    } else {
+                      setIsTopUpModalOpen(false);
+                    }
+                  }}
+                  className="w-full h-11 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold cursor-pointer disabled:opacity-50"
+                >
+                  {isTopUpSubmitting ? 'Initializing Gateway Session...' : `Proceed to ৳${topUpAmount} Top-Up`}
+                </button>
+              </>
+            ) : (
+              <div className="space-y-3 text-xs font-mono">
+                <div className="p-3 rounded-xl bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 space-y-1">
+                  <div>
+                    Invoice: <strong>{topUpManualInfo.invoiceNumber}</strong>
+                  </div>
+                  <div>
+                    {topUpManualInfo.method} to <strong>{topUpManualInfo.merchantNumber}</strong>
+                  </div>
+                  <div>
+                    Exact Amount: <strong>৳{topUpManualInfo.exactAmountBDT} BDT</strong>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-slate-500">Sender Mobile Number:</label>
+                  <input
+                    type="text"
+                    value={topUpPhone}
+                    onChange={(e) => setTopUpPhone(e.target.value)}
+                    className="w-full mt-1 px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-slate-500">Transaction ID (trxID):</label>
+                  <input
+                    type="text"
+                    value={topUpTrxId}
+                    onChange={(e) => setTopUpTrxId(e.target.value.toUpperCase())}
+                    placeholder="e.g. 9K72LM89QP"
+                    className="w-full mt-1 px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono uppercase"
+                  />
+                </div>
+
+                <div className="flex gap-2">
                   <button
                     type="button"
-                    onClick={() => setTopUpMethod('bKash')}
-                    className={`p-2 rounded-xl border text-center font-bold cursor-pointer ${
-                      topUpMethod === 'bKash' ? 'bg-pink-500 text-white border-pink-500' : 'bg-slate-100 text-slate-600'
-                    }`}
+                    onClick={() => setTopUpManualInfo(null)}
+                    className="px-4 py-2 rounded-xl border border-slate-200 dark:border-white/10 text-xs cursor-pointer"
                   >
-                    bKash Instant
+                    Back
                   </button>
                   <button
                     type="button"
-                    onClick={() => setTopUpMethod('Nagad')}
-                    className={`p-2 rounded-xl border text-center font-bold cursor-pointer ${
-                      topUpMethod === 'Nagad' ? 'bg-orange-500 text-white border-orange-500' : 'bg-slate-100 text-slate-600'
-                    }`}
+                    disabled={isTopUpSubmitting || !topUpTrxId.trim()}
+                    onClick={async () => {
+                      setTopUpError(null);
+                      setIsTopUpSubmitting(true);
+                      try {
+                        const submitRes = await fetch('/api/payments/submit-trxid', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            invoiceNumber: topUpManualInfo.invoiceNumber,
+                            gateway: topUpMethod.toLowerCase(),
+                            senderNumber: topUpPhone.trim(),
+                            trxId: topUpTrxId.trim().toUpperCase(),
+                          }),
+                        });
+                        const submitData = await submitRes.json();
+                        if (!submitRes.ok || !submitData.success) {
+                          setTopUpError(submitData.error || 'Failed to submit TrxID.');
+                          setIsTopUpSubmitting(false);
+                          return;
+                        }
+                        setIsTopUpSubmitting(false);
+                        setIsTopUpModalOpen(false);
+                        setTopUpManualInfo(null);
+                        setTopUpTrxId('');
+                        alert(`TrxID ${submitData.trxId} queued for verification. Wallet balance will credit automatically once verified.`);
+                      } catch (err: any) {
+                        setTopUpError(err?.message || 'Submission failed.');
+                        setIsTopUpSubmitting(false);
+                      }
+                    }}
+                    className="flex-1 h-10 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold cursor-pointer disabled:opacity-50"
                   >
-                    Nagad Merchant
+                    {isTopUpSubmitting ? 'Verifying...' : 'Submit TrxID for Credit'}
                   </button>
                 </div>
               </div>
-
-              <div>
-                <label className="text-slate-500">Mobile Number:</label>
-                <input
-                  type="text"
-                  value={topUpPhone}
-                  onChange={(e) => setTopUpPhone(e.target.value)}
-                  className="w-full mt-1 px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono"
-                />
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => {
-                topUpWallet(topUpAmount, topUpMethod);
-                setIsTopUpModalOpen(false);
-                alert(`৳${topUpAmount} added to your Prepaid Cloud Wallet via ${topUpMethod}!`);
-              }}
-              className="w-full h-11 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold cursor-pointer"
-            >
-              Confirm ৳{topUpAmount} Top-Up
-            </button>
+            )}
           </div>
         </div>
       )}

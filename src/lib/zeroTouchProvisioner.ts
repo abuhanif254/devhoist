@@ -31,6 +31,12 @@ export interface ZeroTouchProvisionParams {
   bundledDomainName?: string;
   targetServerNode?: string;
   appStack?: string;
+  affiliateCommissionBDT?: number;
+  promoDiscountBDT?: number;
+  unitServerCostBDT?: number;
+  minOwnerProfitBDT?: number;
+  skipInvoiceMarkPaid?: boolean;
+  referralCode?: string;
 }
 
 export interface ZeroTouchProvisionResult {
@@ -66,18 +72,6 @@ export function generateCpanelUsername(domain: string): string {
     return clean.slice(0, 8);
   }
   return clean;
-}
-
-/**
- * Generates a cryptographically random secret hex string
- */
-function generateRandomHex(length: number = 24): string {
-  const chars = '0123456789abcdef';
-  let result = '';
-  for (let i = 0; i < length; i++) {
-    result += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return result;
 }
 
 /**
@@ -147,23 +141,46 @@ export async function executeZeroTouchProvisioning(
     // =========================================================================
     ledgerEntryCode = `LEDG-ZT-${Date.now().toString(36).toUpperCase()}`;
 
-    // Calculate profit economics
+    // Calculate profit economics (using server-verified COGS, promo & zero-loss affiliate commission)
     const unitMonthlyServerCost = 90; // Default baseline ~৳90
     const minMonthlyProfit = 225; // Locked owner margin ~৳225
     const freeDomainCost = params.freeDomainBundleApplied ? 1150 : 0;
 
+    const safePromoBDT = Math.max(0, params.promoDiscountBDT ?? 0);
+    const grossOrderPriceBDT = params.amountBDT + safePromoBDT;
+
     const profit = calculateOrderProfitBreakdown({
-      sellingPriceBDT: params.amountBDT,
-      unitServerCostBDT: isAnnual ? unitMonthlyServerCost * 12 : unitMonthlyServerCost,
-      minOwnerProfitBDT: isAnnual ? minMonthlyProfit * 12 : minMonthlyProfit,
+      sellingPriceBDT: grossOrderPriceBDT,
+      unitServerCostBDT:
+        typeof params.unitServerCostBDT === 'number'
+          ? params.unitServerCostBDT
+          : isAnnual
+            ? unitMonthlyServerCost * 12
+            : unitMonthlyServerCost,
+      minOwnerProfitBDT:
+        typeof params.minOwnerProfitBDT === 'number'
+          ? params.minOwnerProfitBDT
+          : isAnnual
+            ? minMonthlyProfit * 12
+            : minMonthlyProfit,
+      promoDiscountBDT: safePromoBDT,
+      affiliateRatePercent:
+        typeof params.affiliateCommissionBDT === 'number' || params.referralCode ? 20 : 0,
       billingCycle: isAnnual ? 'annually' : 'monthly',
       freeDomainCostBDT: freeDomainCost,
       bundledDomainTLD: params.bundledDomainName ? `.${params.bundledDomainName.split('.').pop()}` : undefined,
     });
 
+    const verifiedCommissionBDT =
+      typeof params.affiliateCommissionBDT === 'number'
+        ? params.affiliateCommissionBDT
+        : params.referralCode
+          ? profit.finalAffiliateCommissionBDT
+          : 0;
+
     if (db) {
-      // 1A. Mark Invoice as Paid
-      if (params.invoiceNumber || params.invoiceId) {
+      // 1A. Mark Invoice as Paid (skipped when atomic wallet RPC already finalized it)
+      if (!params.skipInvoiceMarkPaid && (params.invoiceNumber || params.invoiceId)) {
         const invQuery = db.from('invoices').update({
           status: 'paid',
           payment_method: effectiveGateway,
@@ -193,8 +210,8 @@ export async function executeZeroTouchProvisioning(
           trx_id: params.trxId || `ZT-${Date.now()}`,
           gross_amount_bdt: params.amountBDT,
           base_cogs_cost_bdt: profit.totalHardCostBDT || profit.unitServerCostBDT,
-          affiliate_commission_bdt: profit.finalAffiliateCommissionBDT,
-          promo_discount_bdt: profit.promoDiscountBDT,
+          affiliate_commission_bdt: verifiedCommissionBDT,
+          promo_discount_bdt: params.promoDiscountBDT ?? profit.promoDiscountBDT,
           notes: `Zero-Touch Auto-Provisioned: ${cleanDomain} (${params.planName || 'Developer Pro Cloud'}) [Annual Free Domain: ${params.freeDomainBundleApplied ? 'YES' : 'NO'}]`,
           created_at: new Date().toISOString(),
         });
@@ -369,7 +386,7 @@ export async function executeZeroTouchProvisioning(
                 comment: 'Auto-provisioned by DevHost Zero-Touch Orchestrator',
                 updated_at: new Date().toISOString(),
               },
-              { onConflict: 'domain_id,name,record_type' }
+              { onConflict: 'domain_id,name,record_type,content' }
             );
           }
         }
@@ -485,12 +502,12 @@ export async function executeZeroTouchProvisioning(
       deploymentId,
       stepsCompleted,
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
     const durationMs = Date.now() - startTime;
     console.error(`[ZeroTouchProvisioner] Fatal Error during provisioning:`, err);
     return {
       success: false,
-      message: err?.message || 'Provisioning pipeline encountered an error',
+      message: err instanceof Error ? err.message : 'Provisioning pipeline encountered an error',
       durationMs,
       cpanelUsername: cpanelUser,
       domain: cleanDomain,
@@ -499,7 +516,7 @@ export async function executeZeroTouchProvisioning(
       nameservers: serverNameservers,
       sslStatus: 'provisioning',
       stepsCompleted,
-      error: err?.message,
+      error: err instanceof Error ? err.message : String(err),
     };
   }
 }

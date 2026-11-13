@@ -1217,6 +1217,19 @@ export interface ProvisionMarketplaceStackResult {
     serverBridgeScript: string;
 }
 
+/**
+ * Maps a marketplace stack slug + runtime family to canonical
+ * `hosting_project_settings.framework_preset` CHECK enum values.
+ */
+export function resolveCanonicalFrameworkPreset(slug: string, runtimeFamily: string): string {
+    if (slug.includes('nextjs')) return 'nextjs_standalone';
+    if (slug.includes('laravel')) return 'laravel_php';
+    if (slug.includes('wordpress')) return 'wordpress_lscache';
+    if (runtimeFamily === 'python_wsgi_asgi') return 'python_wsgi';
+    if (runtimeFamily === 'static_edge') return 'static_site';
+    return 'nodejs_express';
+}
+
 export async function provisionMarketplaceStack(
     params: ProvisionMarketplaceStackParams
 ): Promise<ProvisionMarketplaceStackResult> {
@@ -1238,34 +1251,24 @@ export async function provisionMarketplaceStack(
 
     const slugShort = stack.slug.replace(/[^a-z0-9]/gi, '').slice(0, 6).toLowerCase();
 
-    // 2. Map Runtime Family to Framework Preset in hosting_project_settings
-    const frameworkPreset =
-        stack.slug.includes('nextjs')
-            ? 'nextjs_ssr'
-            : stack.slug.includes('laravel')
-            ? 'laravel_artisan'
-            : stack.slug.includes('wordpress')
-            ? 'wordpress_turbo'
-            : stack.runtime_family === 'python_wsgi_asgi'
-            ? 'python_wsgi'
-            : stack.runtime_family === 'static_edge'
-            ? 'static_html'
-            : 'nodejs_express';
+    // 2. Map Runtime Family to Canonical Framework Preset in hosting_project_settings
+    const frameworkPreset = resolveCanonicalFrameworkPreset(stack.slug, stack.runtime_family);
 
     if (supabaseAdmin) {
         await supabaseAdmin.from('hosting_project_settings').upsert(
             {
                 service_id: params.serviceId,
                 user_id: params.userId,
+                stack_slug: stack.slug,
                 framework_preset: frameworkPreset,
                 runtime_version: stack.default_runtime_version,
                 git_repo_url: params.gitRepoUrl || `https://github.com/devhost-templates/${stack.slug}.git`,
-                git_branch: params.gitBranch || 'main',
+                production_branch: params.gitBranch || 'main',
                 root_directory: stack.root_directory,
-                document_root_subpath: stack.document_root_subpath,
+                output_directory: stack.document_root_subpath,
                 install_command: stack.install_command,
                 build_command: stack.build_command,
-                startup_entry_file: stack.startup_entry_file,
+                startup_file: stack.startup_entry_file,
                 auto_deploy_on_push: true,
                 zero_downtime_symlink: true,
                 updated_at: new Date().toISOString(),
@@ -1291,13 +1294,15 @@ export async function provisionMarketplaceStack(
         databaseUrl = `${proto}://${dbUser}:${dbPassword}@127.0.0.1:${port}/${dbName}`;
 
         if (supabaseAdmin) {
+            const encryptedDbPassword = await encryptEnvValue(dbPassword);
             await supabaseAdmin.from('hosting_databases').upsert(
                 {
                     service_id: params.serviceId,
                     user_id: params.userId,
                     db_name: dbName,
-                    db_user: dbUser,
-                    engine: engineLabel,
+                    db_username: dbUser,
+                    db_password_hash: encryptedDbPassword,
+                    db_engine: engineLabel,
                     charset,
                     size_mb: 18.4,
                     remote_access_ips: ['127.0.0.1'],
@@ -1339,14 +1344,14 @@ export async function provisionMarketplaceStack(
                 {
                     service_id: params.serviceId,
                     user_id: params.userId,
-                    key_name: entry.key,
+                    env_key: entry.key,
                     encrypted_value: encryptedValue,
                     masked_preview: maskedPreview,
-                    environment: 'production',
+                    target_environment: 'production',
                     is_secret: entry.isSecret,
                     updated_at: new Date().toISOString(),
                 },
-                { onConflict: 'service_id,key_name,environment' }
+                { onConflict: 'service_id,env_key,target_environment' }
             );
         }
 
@@ -1364,7 +1369,7 @@ export async function provisionMarketplaceStack(
             await supabaseAdmin.from('hosting_cron_jobs').insert({
                 service_id: params.serviceId,
                 user_id: params.userId,
-                label: 'Laravel 11 Artisan Scheduler (schedule:run)',
+                job_label: 'Laravel 11 Artisan Scheduler (schedule:run)',
                 cron_expression: '* * * * *',
                 command: `cd /home/${cpanelPrefix}/app && /usr/local/bin/php artisan schedule:run >> /dev/null 2>&1`,
                 is_active: true,
@@ -1397,21 +1402,23 @@ export async function provisionMarketplaceStack(
     if (supabaseAdmin) {
         await supabaseAdmin
             .from('project_deployments')
-            .update({ status: 'rolled_back' })
+            .update({ status: 'superseded', is_current_production: false })
             .eq('service_id', params.serviceId)
             .eq('status', 'live_production');
 
         await supabaseAdmin.from('project_deployments').insert({
             service_id: params.serviceId,
             user_id: params.userId,
-            commit_hash: commitHash,
+            commit_sha: commitHash,
             commit_message: `Auto-Provisioned ${stack.name} Blueprint (${stack.default_runtime_version})`,
             author_name: 'DevHost Universal Stack Engine',
             branch: params.gitBranch || 'main',
+            trigger_source: 'stack_blueprint',
             environment: 'production',
             status: 'live_production',
-            build_duration_ms: 4200,
-            build_log: buildLog,
+            is_current_production: true,
+            duration_seconds: 4,
+            build_logs: buildLog,
         });
     }
 

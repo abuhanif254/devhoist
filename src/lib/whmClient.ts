@@ -3,6 +3,8 @@
 // Compatible with Cloudflare Workers / OpenNext Edge Runtime (Fetch API only)
 // ==============================================================================
 
+import { isDevSandboxMode } from '@/lib/supabase';
+
 export interface WhmAccountParams {
   username: string;
   domain: string;
@@ -36,7 +38,7 @@ export interface WhmPackageParams {
 
 export interface WhmPackageResult {
   success: boolean;
-  action: 'created' | 'updated' | 'simulated';
+  action: 'created' | 'updated' | 'simulated' | 'error';
   packageName: string;
   message: string;
   raw?: unknown;
@@ -54,6 +56,7 @@ export interface WhmSsoResult {
   url: string;
   service: 'cpaneld' | 'webmaild';
   expiresInSeconds?: number;
+  error?: string;
 }
 
 export interface WhmListedAccount {
@@ -89,8 +92,12 @@ export class WhmClient {
   public getStatus() {
     return {
       configured: this.isConfigured,
-      host: this.host ? `${this.host}:2087` : 'Simulated (Mock Mode)',
-      resellerUser: this.username || 'devreseller',
+      host: this.isConfigured
+        ? `${this.host}:2087`
+        : isDevSandboxMode()
+          ? 'Simulated (Sandbox Mode)'
+          : 'Unconfigured',
+      resellerUser: this.username || (isDevSandboxMode() ? 'devreseller' : ''),
     };
   }
 
@@ -143,8 +150,14 @@ export class WhmClient {
   public async createCpanelAccount(params: WhmAccountParams): Promise<WhmAccountResult> {
     const cleanUser = params.username.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 16);
 
-    // If WHM credentials are not configured, simulate deterministic successful creation
+    // If WHM credentials are not configured, fail closed unless DEV_SANDBOX_MODE is explicitly enabled
     if (!this.isConfigured) {
+      if (!isDevSandboxMode()) {
+        return {
+          success: false,
+          message: 'WHM reseller server is not configured (missing WHM_HOST, WHM_USERNAME, or WHM_API_TOKEN).',
+        };
+      }
       return {
         success: true,
         message: 'Account successfully provisioned in Sandbox Simulation mode.',
@@ -192,7 +205,15 @@ export class WhmClient {
     const cleanUser = cpanelUser.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 16);
 
     if (!this.isConfigured) {
-      // Return high-fidelity realistic SSO session URL for demo/offline test
+      if (!isDevSandboxMode()) {
+        return {
+          success: false,
+          url: '',
+          service,
+          error: 'WHM SSO is unavailable: WHM reseller credentials are not configured.',
+        };
+      }
+      // Return high-fidelity realistic SSO session URL for local DEV_SANDBOX_MODE preview
       const mockSessionId = Array.from({ length: 16 }, () => Math.floor(Math.random() * 36).toString(36)).join('');
       const mockPort = service === 'webmaild' ? 2096 : 2083;
       const targetPath = service === 'webmaild' ? 'cpsess' + mockSessionId + '/webmail/paper_lantern/index.html' : 'cpsess' + mockSessionId + '/frontend/jupiter/index.html';
@@ -221,12 +242,11 @@ export class WhmClient {
 
       throw new Error(data?.metadata?.reason || 'No session URL returned by WHM');
     } catch (err: any) {
-      // Safe fallback SSO URL if live server network dropped
-      const mockPort = service === 'webmaild' ? 2096 : 2083;
       return {
-        success: true,
-        url: `https://${this.host || 'cpanel.devhost.net'}:${mockPort}/login/?user=${cleanUser}&fallback=1`,
+        success: false,
+        url: '',
         service,
+        error: err?.message || 'WHM create_user_session request failed',
       };
     }
   }
@@ -236,6 +256,9 @@ export class WhmClient {
    */
   public async suspendAccount(cpanelUser: string, reason: string = 'Billing past due'): Promise<{ success: boolean; message: string }> {
     if (!this.isConfigured) {
+      if (!isDevSandboxMode()) {
+        return { success: false, message: 'WHM reseller server is not configured.' };
+      }
       return { success: true, message: `Account ${cpanelUser} suspended (Simulated).` };
     }
 
@@ -258,6 +281,9 @@ export class WhmClient {
    */
   public async unsuspendAccount(cpanelUser: string): Promise<{ success: boolean; message: string }> {
     if (!this.isConfigured) {
+      if (!isDevSandboxMode()) {
+        return { success: false, message: 'WHM reseller server is not configured.' };
+      }
       return { success: true, message: `Account ${cpanelUser} unsuspended (Simulated).` };
     }
 
@@ -280,6 +306,9 @@ export class WhmClient {
    */
   public async listAccounts(): Promise<{ success: boolean; accounts: WhmListedAccount[]; totalDiskUsedMb: number }> {
     if (!this.isConfigured) {
+      if (!isDevSandboxMode()) {
+        return { success: false, accounts: [], totalDiskUsedMb: 0 };
+      }
       const mockAccounts: WhmListedAccount[] = [
         {
           user: 'devprod',
@@ -350,6 +379,14 @@ export class WhmClient {
     const pkgName = pkg.name.trim();
 
     if (!this.isConfigured) {
+      if (!isDevSandboxMode()) {
+        return {
+          success: false,
+          action: 'error',
+          packageName: pkgName,
+          message: 'WHM reseller server is not configured.',
+        };
+      }
       return {
         success: true,
         action: 'simulated',
@@ -431,6 +468,13 @@ export class WhmClient {
     const cleanUser = cpanelUsername.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 16);
 
     if (!this.isConfigured) {
+      if (!isDevSandboxMode()) {
+        return {
+          success: false,
+          username: cleanUser,
+          message: 'WHM reseller server is not configured (AutoSSL unavailable).',
+        };
+      }
       return {
         success: true,
         username: cleanUser,
@@ -453,12 +497,11 @@ export class WhmClient {
         raw: data,
       };
     } catch (err: any) {
-      console.warn(`[AutoSSL Warning] WHM AutoSSL trigger for ${cleanUser}:`, err?.message);
-      // Return safe fallback so provisioning flow never crashes
+      console.warn(`[AutoSSL Error] WHM AutoSSL trigger for ${cleanUser}:`, err?.message);
       return {
-        success: true,
+        success: false,
         username: cleanUser,
-        message: `AutoSSL queued (Fallback mode: ${err?.message || 'Server timeout'})`,
+        message: `AutoSSL failed: ${err?.message || 'WHM server timeout'}`,
       };
     }
   }

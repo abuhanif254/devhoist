@@ -102,7 +102,7 @@ const PLAN_SPECS: Record<
 export default function StackBuilderDrawer() {
   const router = useRouter();
   const { isStackBuilderOpen, closeStackBuilder, stackBuilderConfig, currency } = useBilling();
-  const { walletBalanceBDT, currentUser } = usePortal();
+  const { walletBalanceBDT, currentUser, promoCodes } = usePortal();
 
   const [region, setRegion] = useState<Region>('sg');
   const [appStack, setAppStack] = useState<AppStack>('nextjs-15-standalone');
@@ -110,6 +110,7 @@ export default function StackBuilderDrawer() {
   const [cycle, setCycle] = useState<Cycle>('monthly');
   const [promoInput, setPromoInput] = useState('');
   const [promoApplied, setPromoApplied] = useState(false);
+  const [appliedDiscountPercent, setAppliedDiscountPercent] = useState<number>(20);
   const [promoError, setPromoError] = useState<string | null>(null);
 
   // Sync incoming stackBuilderConfig when opened
@@ -143,6 +144,7 @@ export default function StackBuilderDrawer() {
 
   // Manual Verification Inputs
   const [createdInvoiceNumber, setCreatedInvoiceNumber] = useState<string>('');
+  const [manualMerchantNumber, setManualMerchantNumber] = useState<string>('');
   const [senderNumber, setSenderNumber] = useState<string>('');
   const [trxId, setTrxId] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
@@ -188,10 +190,11 @@ export default function StackBuilderDrawer() {
     : baseMonthly;
 
   const subtotal = isAnnual ? effectiveMonthly * 12 : baseMonthly;
+  const discountMultiplier = promoApplied ? Math.max(0.1, 1 - appliedDiscountPercent / 100) : 1;
   const finalTotal = promoApplied
     ? isBDT
-      ? Math.round(subtotal * 0.8)
-      : Number((subtotal * 0.8).toFixed(2))
+      ? Math.round(subtotal * discountMultiplier)
+      : Number((subtotal * discountMultiplier).toFixed(2))
     : subtotal;
 
   const finalAmountBDT = isBDT ? Number(finalTotal) : Math.round(Number(finalTotal) * 120);
@@ -199,12 +202,35 @@ export default function StackBuilderDrawer() {
   const handleApplyPromo = () => {
     setPromoError(null);
     const clean = promoInput.trim().toUpperCase();
-    if (clean === 'DEVPRO20' || clean === 'LAUNCH20' || clean === 'BDIX50') {
-      setPromoApplied(true);
-    } else if (clean === '') {
+    if (!clean) {
       setPromoError('Please enter a voucher code');
+      return;
+    }
+
+    const activeMatch = promoCodes.find(
+      (p) => p.code.toUpperCase() === clean && p.status === 'Active' && p.usesCount < p.maxUses
+    );
+
+    if (activeMatch) {
+      setAppliedDiscountPercent(activeMatch.discountPercent);
+      setPromoApplied(true);
+      return;
+    }
+
+    const fallbackPromos: Record<string, number> = {
+      DEVHOST20: 20,
+      DEVPRO20: 20,
+      LAUNCH20: 20,
+      BDIX50: 50,
+      WELCOME10: 10,
+    };
+
+    if (fallbackPromos[clean]) {
+      setAppliedDiscountPercent(fallbackPromos[clean]);
+      setPromoApplied(true);
     } else {
-      setPromoError('Invalid coupon code. Try DEVPRO20');
+      setPromoApplied(false);
+      setPromoError('Invalid, expired, or usage-exhausted coupon code.');
     }
   };
 
@@ -274,15 +300,18 @@ export default function StackBuilderDrawer() {
       }
 
       try {
+        const activePromo = promoApplied ? promoInput.trim().toUpperCase() : undefined;
         const invRes = await fetch('/api/payments/create-session', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            amount: finalAmountBDT,
+            amountBDT: finalAmountBDT,
             currency: 'BDT',
-            method: 'wallet',
+            gateway: 'wallet',
             domain: effectiveDomain,
             planId: String(pid),
+            planName,
+            promoCode: activePromo,
             userId: currentUser?.id,
             customerEmail: currentUser?.email,
             customerName: currentUser?.name,
@@ -293,17 +322,18 @@ export default function StackBuilderDrawer() {
           }),
         });
         const invData = await invRes.json();
-        const invoiceNum = invData.invoiceNumber;
+        if (!invRes.ok || !invData.success || !invData.invoiceNumber) {
+          throw new Error(invData.error || 'Failed to prepare wallet checkout invoice.');
+        }
 
         const payRes = await fetch('/api/payments/wallet-pay', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            userId: currentUser?.id,
-            invoiceNumber: invoiceNum,
-            amount: finalAmountBDT,
+            invoiceNumber: invData.invoiceNumber,
+            amountBDT: invData.amountBDT ?? finalAmountBDT,
             domain: effectiveDomain,
-            planName: planName,
+            planName,
             planId: String(pid),
             billingCycle: cycle,
             freeDomainBundleApplied: Boolean(isAnnual && claimedFreeDomain),
@@ -313,7 +343,7 @@ export default function StackBuilderDrawer() {
         });
 
         const payData = await payRes.json();
-        if (payData.success) {
+        if (payRes.ok && payData.success) {
           setIsPaymentModalOpen(false);
           closeStackBuilder();
           router.push('/dashboard?tab=services&paid=1');
@@ -330,15 +360,18 @@ export default function StackBuilderDrawer() {
 
     // If User chooses bKash / Nagad / Stripe
     try {
+      const activePromo = promoApplied ? promoInput.trim().toUpperCase() : undefined;
       const res = await fetch('/api/payments/create-session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          amount: finalAmountBDT,
+          amountBDT: finalAmountBDT,
           currency: 'BDT',
-          method: paymentMethod.toLowerCase(),
+          gateway: paymentMethod.toLowerCase(),
           domain: effectiveDomain,
           planId: String(pid),
+          planName,
+          promoCode: activePromo,
           userId: currentUser?.id,
           customerEmail: currentUser?.email,
           customerName: currentUser?.name,
@@ -350,18 +383,25 @@ export default function StackBuilderDrawer() {
       });
 
       const data = await res.json();
-      if (!data.success) {
+      if (!res.ok || !data.success) {
         throw new Error(data.error || 'Failed to initialize payment session');
       }
 
-      // If official gateway redirect URL exists (e.g. live UddoktaPay or Stripe checkout)
-      if (data.paymentUrl && (data.mode === 'live_uddoktapay' || data.mode === 'live_stripe' || data.mode === 'live_bkash')) {
+      // If official gateway redirect URL exists (UddoktaPay, bKash, Nagad, or Stripe Checkout)
+      if (
+        data.paymentUrl &&
+        (data.mode === 'live_uddoktapay' ||
+          data.mode === 'live_stripe' ||
+          data.mode === 'live_bkash' ||
+          data.mode === 'live_nagad')
+      ) {
         window.location.href = data.paymentUrl;
         return;
       }
 
       // Real Merchant bKash/Nagad verification queue
       setCreatedInvoiceNumber(data.invoiceNumber);
+      setManualMerchantNumber(data.instructions?.merchantNumber || '');
       setPaymentStep('manual_verification');
     } catch (err: any) {
       setVerificationError(err.message || 'Failed to start payment');
@@ -1044,7 +1084,7 @@ export default function StackBuilderDrawer() {
                       <li>
                         Choose <strong>Send Money</strong> or <strong>Payment</strong> to official number:{' '}
                         <strong className="font-mono font-bold underline">
-                          {paymentMethod === 'bKash' ? '01789-234567' : '01889-234567'}
+                          {manualMerchantNumber || (paymentMethod === 'bKash' ? '01700-000000' : '01800-000000')}
                         </strong>
                       </li>
                       <li>Enter exact amount: <strong>৳{finalAmountBDT}</strong></li>

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServiceSupabase, isSupabaseConfigured } from '@/lib/supabase';
-import { requireUser, requireServiceAccess } from '@/lib/authGuard';
+import { getServiceSupabase, isSupabaseConfigured, isDevSandboxMode } from '@/lib/supabase';
+import { requireUser, requireServiceAccess, serviceUnavailableResponse } from '@/lib/authGuard';
 
 
 // Mock in-memory store for local sandbox testing if Supabase is offline
@@ -25,18 +25,29 @@ export async function GET(request: NextRequest) {
           if (data && !error) {
             return NextResponse.json({ success: true, handover: data });
           }
+          if (!isDevSandboxMode()) {
+            return NextResponse.json(
+              { success: false, error: 'Handover token not found or expired.' },
+              { status: 404 }
+            );
+          }
         } catch (dbErr) {
           console.warn('[Handover DB Read Warning]', dbErr);
+          if (!isDevSandboxMode()) {
+            return serviceUnavailableResponse('Agency Handover Portal');
+          }
         }
+      } else if (!isDevSandboxMode()) {
+        return serviceUnavailableResponse('Agency Handover Portal');
       }
 
-      // Check fallback in-memory
+      // Check fallback in-memory (DEV_SANDBOX_MODE only)
       const fallback = inMemoryHandovers.get(token);
       if (fallback) {
         return NextResponse.json({ success: true, handover: fallback });
       }
 
-      // Default mock handover for instant UI testing if no token found
+      // Default mock handover for instant UI testing in DEV_SANDBOX_MODE only
       return NextResponse.json({
         success: true,
         handover: {
@@ -76,12 +87,19 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ success: true, handovers: data || [] });
     }
 
-    return NextResponse.json({
-      success: true,
-      handovers: Array.from(inMemoryHandovers.values()).filter(
-        (h) => h.developer_user_id === targetDevId || auth.role === 'admin'
-      ),
-    });
+    if (!isSupabaseConfigured()) {
+      if (!isDevSandboxMode()) {
+        return serviceUnavailableResponse('Agency Handover Portal');
+      }
+      return NextResponse.json({
+        success: true,
+        handovers: Array.from(inMemoryHandovers.values()).filter(
+          (h) => h.developer_user_id === targetDevId || auth.role === 'admin'
+        ),
+      });
+    }
+
+    return NextResponse.json({ success: true, handovers: [] });
   } catch (error: any) {
     console.error('[Handover GET Error]', error);
     return NextResponse.json({ error: error?.message || 'Failed to load handover details' }, { status: 500 });
@@ -112,6 +130,10 @@ export async function POST(request: NextRequest) {
     }
 
     const developerUserId = auth.user.id;
+
+    if (!isSupabaseConfigured() && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Agency Handover Portal');
+    }
 
     if (!clientName || !clientEmail || !projectTitle) {
       return NextResponse.json(
@@ -190,6 +212,10 @@ export async function PUT(request: NextRequest) {
     const body = await request.json();
     const { handoverToken, trxId } = body;
     const clientUserId = auth.user.id;
+
+    if (!isSupabaseConfigured() && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Agency Handover Portal');
+    }
 
     if (!handoverToken) {
       return NextResponse.json({ error: 'Handover token is required' }, { status: 400 });

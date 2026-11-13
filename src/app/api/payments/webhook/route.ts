@@ -1,239 +1,244 @@
 import { NextResponse } from 'next/server';
-import { getServiceSupabase, isSupabaseConfigured } from '@/lib/supabase';
-import { executeZeroTouchProvisioning } from '@/lib/zeroTouchProvisioner';
-import { timingSafeEqualStr, verifyHmacSha256Hex } from '@/lib/authGuard';
+import { getServiceSupabase, isSupabaseConfigured, isDevSandboxMode } from '@/lib/supabase';
+import { serviceUnavailableResponse } from '@/lib/authGuard';
+import { verifyPaymentWebhookRequest } from '@/lib/paymentGateways';
+import { fulfillPaidInvoiceAndAffiliate } from '@/lib/paymentFulfillment';
+import { createFraudAlert, logSecurityAudit } from '@/lib/security';
 
-const STRIPE_TOLERANCE_SECONDS = 300;
-
-async function verifyPaymentWebhookSignature(
-  request: Request,
-  rawBody: string
-): Promise<{ ok: true; via: string } | { ok: false; status: number; message: string }> {
-  const uddoktaSecret = process.env.UDDOKTAPAY_API_KEY?.trim() || '';
-  const stripeSecret = process.env.STRIPE_WEBHOOK_SECRET?.trim() || '';
-  const customWebhookSecret = process.env.PAYMENT_WEBHOOK_SECRET?.trim() || '';
-
-  const uddoktaHeader = request.headers.get('rt-uddoktapay-api-key')?.trim() || '';
-  if (
-    uddoktaHeader &&
-    uddoktaSecret &&
-    !uddoktaSecret.includes('your-uddoktapay-key') &&
-    timingSafeEqualStr(uddoktaHeader, uddoktaSecret)
-  ) {
-    return { ok: true, via: 'uddoktapay' };
-  }
-
-  const stripeSigHeader = request.headers.get('stripe-signature')?.trim() || '';
-  if (stripeSigHeader && stripeSecret && !stripeSecret.includes('your-stripe')) {
-    const parts = Object.fromEntries(
-      stripeSigHeader.split(',').map((kv) => {
-        const [k, v] = kv.trim().split('=');
-        return [k, v];
-      })
-    );
-    const tsNum = Number(parts.t);
-    const v1Sig = parts.v1 || '';
-    const ageSeconds = Math.abs(Math.floor(Date.now() / 1000) - tsNum);
-    if (
-      Number.isFinite(tsNum) &&
-      ageSeconds <= STRIPE_TOLERANCE_SECONDS &&
-      v1Sig &&
-      (await verifyHmacSha256Hex(`${tsNum}.${rawBody}`, v1Sig, stripeSecret))
-    ) {
-      return { ok: true, via: 'stripe' };
-    }
-    return { ok: false, status: 401, message: 'Invalid or expired Stripe webhook signature.' };
-  }
-
-  const customSigHeader = request.headers.get('x-devhost-webhook-signature')?.trim() || '';
-  const customSecretHeader = request.headers.get('x-devhost-webhook-secret')?.trim() || '';
-  if (customWebhookSecret) {
-    if (customSigHeader && (await verifyHmacSha256Hex(rawBody, customSigHeader, customWebhookSecret))) {
-      return { ok: true, via: 'hmac_sha256' };
-    }
-    if (customSecretHeader && timingSafeEqualStr(customSecretHeader, customWebhookSecret)) {
-      return { ok: true, via: 'shared_secret' };
-    }
-  }
-
-  const hasAnyConfiguredSecret = Boolean(
-    (uddoktaSecret && !uddoktaSecret.includes('your-uddoktapay-key')) ||
-      (stripeSecret && !stripeSecret.includes('your-stripe')) ||
-      customWebhookSecret
-  );
-
-  if (!hasAnyConfiguredSecret) {
-    return {
-      ok: false,
-      status: 503,
-      message: 'Payment webhook gateway secrets are not configured on the server.',
-    };
-  }
-
-  return {
-    ok: false,
-    status: 401,
-    message: 'Unauthorized payment webhook: missing or invalid cryptographic signature.',
-  };
+function normalizeTransactionGateway(
+  rawGateway: string,
+  provider: string
+): 'bkash' | 'nagad' | 'stripe' | 'wallet' | 'uddoktapay' | 'sslcommerz' | 'system' {
+  const lower = `${rawGateway} ${provider}`.toLowerCase();
+  if (lower.includes('stripe')) return 'stripe';
+  if (lower.includes('bkash')) return 'bkash';
+  if (lower.includes('nagad')) return 'nagad';
+  if (lower.includes('wallet')) return 'wallet';
+  if (lower.includes('sslcommerz')) return 'sslcommerz';
+  if (lower.includes('uddoktapay')) return 'uddoktapay';
+  return 'uddoktapay';
 }
 
-export async function POST(request: Request) {
+export async function POST(req: Request) {
+  const clientIp = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || '127.0.0.1';
+
   try {
-    const rawBody = await request.text();
-    const sigCheck = await verifyPaymentWebhookSignature(request, rawBody);
-    if (!sigCheck.ok) {
-      return NextResponse.json({ error: 'Unauthorized', message: sigCheck.message }, { status: sigCheck.status });
+    const rawBody = await req.text();
+    const payload = (() => {
+      try {
+        return JSON.parse(rawBody) as Record<string, unknown>;
+      } catch {
+        return {};
+      }
+    })();
+
+    // Step 1: Fail-closed cryptographic / API-key / server-verify-payment verification
+    const verified = await verifyPaymentWebhookRequest(req, rawBody, payload);
+    if (!verified.ok) {
+      await logSecurityAudit({
+        actionType: 'WEBHOOK_AUTH_REJECTED',
+        targetResource: String(payload.invoice_id || payload.invoice_number || 'webhook'),
+        ipAddress: clientIp,
+        riskLevel: verified.status === 503 ? 'medium' : 'critical',
+        metadata: {
+          provider: verified.provider,
+          error: verified.error,
+        },
+      }).catch(() => {});
+
+      return NextResponse.json(
+        { error: verified.error || 'Webhook verification failed.' },
+        { status: verified.status }
+      );
     }
 
-    let payload: Record<string, any> = {};
-    try {
-      payload = rawBody ? JSON.parse(rawBody) : {};
-    } catch {
-      return NextResponse.json({ error: 'Invalid JSON webhook payload.' }, { status: 400 });
+    // Ignore benign non-payment Stripe lifecycle events
+    if (verified.eventStatus === 'IGNORED') {
+      return NextResponse.json({ received: true, status: 'ignored_event' });
     }
 
-    // Support payload schemas from UddoktaPay, bKash, Stripe, and DevHost Webhooks
-    const invoiceNumber =
-      payload.invoice_number ||
-      payload.metadata?.invoice_number ||
-      payload.invoiceNumber ||
-      payload.order_id;
+    if (!isSupabaseConfigured() && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Payment Webhook Fulfillment');
+    }
 
-    const trxId =
-      payload.transaction_id ||
-      payload.trx_id ||
-      payload.trxID ||
-      payload.payment_id ||
-      `TRX-${Date.now()}`;
+    const { invoiceNumber, trxId, amountBDT, gateway, eventStatus } = verified;
+    if (!invoiceNumber || !trxId) {
+      return NextResponse.json(
+        { error: 'Webhook missing invoiceNumber or transaction identifier.' },
+        { status: 400 }
+      );
+    }
 
-    let amount = Number(payload.amount || payload.amount_bdt || 0);
-    let domain = payload.domain || payload.metadata?.domain || payload.custom_domain;
-    let planName = payload.plan_name || payload.metadata?.plan_name || 'Developer Pro Cloud';
-    let planId = payload.plan_id || payload.metadata?.plan_id || 'developer-pro';
-    const contactEmail = payload.email || payload.metadata?.email || payload.customer_email;
-    const customerName = payload.customer_name || payload.metadata?.customer_name || 'Developer';
-    let userId = payload.user_id || payload.metadata?.user_id;
-    let billingCycle = (payload.billing_cycle || payload.metadata?.billing_cycle || 'monthly') as
-      | 'monthly'
-      | 'annually';
-    let freeDomainBundle = Boolean(
-      payload.free_domain_bundle || payload.metadata?.free_domain_bundle_applied
-    );
-    let bundledDomain = payload.bundled_domain || payload.metadata?.bundled_domain_name || domain;
-    const gateway = payload.gateway || payload.payment_method || sigCheck.via || 'bkash';
+    const txGateway = normalizeTransactionGateway(gateway, verified.provider);
 
-    console.log(`[Payment Webhook] Verified (${sigCheck.via}) for Invoice: ${invoiceNumber}, TrxID: ${trxId}`);
-
-    // Fetch invoice metadata from Supabase and enforce idempotency + exact server amount
-    let dbInvoiceId: string | undefined;
-    if (isSupabaseConfigured()) {
-      const supabase = getServiceSupabase();
-
-      const { data: existingCompletedTrx } = await supabase
-        .from('transactions')
-        .select('id, status')
-        .eq('trx_id', trxId)
-        .eq('status', 'Completed')
-        .maybeSingle();
-
-      if (existingCompletedTrx) {
-        return NextResponse.json({
-          success: true,
-          alreadyProcessed: true,
-          message: 'Webhook transaction already processed.',
-          invoiceNumber,
-          trxId,
+    // Handle failed or cancelled payment states safely
+    if (eventStatus !== 'COMPLETED') {
+      if (isSupabaseConfigured()) {
+        const db = getServiceSupabase();
+        await db.from('transactions').insert({
+          invoice_number: invoiceNumber,
+          gateway: txGateway,
+          trx_id: trxId,
+          amount_bdt: amountBDT,
+          status: 'Failed',
+          raw_payload: {
+            provider: verified.provider,
+            reported_gateway: gateway,
+            eventStatus,
+            sender_number: verified.senderPhone,
+            card_fingerprint: verified.cardFingerprint,
+            payload: verified.rawPayload,
+          },
         });
       }
+      return NextResponse.json({ received: true, status: 'payment_not_completed', eventStatus });
+    }
 
-      if (invoiceNumber) {
-        const { data: inv } = await supabase
-          .from('invoices')
-          .select('*')
-          .eq('invoice_number', invoiceNumber)
-          .maybeSingle();
-
-        if (inv) {
-          if (inv.status === 'paid') {
-            return NextResponse.json({
-              success: true,
-              alreadyProcessed: true,
-              message: 'Invoice already marked as paid.',
-              invoiceNumber,
-              trxId,
-            });
-          }
-
-          dbInvoiceId = inv.id;
-          userId = inv.user_id || userId;
-          const dbAmount = Number(inv.total_bdt ?? inv.total_amount_bdt ?? inv.amount ?? 0);
-          if (amount > 0 && dbAmount > 0 && amount + 0.01 < dbAmount) {
-            return NextResponse.json(
-              {
-                error: 'Underpayment Rejected',
-                message: `Paid amount ${amount} is less than invoice total ${dbAmount}.`,
-              },
-              { status: 400 }
-            );
-          }
-          amount = dbAmount || amount;
-          billingCycle = (inv.billing_cycle || billingCycle) as 'monthly' | 'annually';
-          freeDomainBundle = freeDomainBundle || Boolean(inv.free_domain_bundle_applied);
-          bundledDomain = bundledDomain || inv.bundled_domain_name;
-
-          // Extract domain from invoice items if missing
-          if (!domain && Array.isArray(inv.items) && inv.items.length > 0) {
-            const firstItem = inv.items[0];
-            domain = firstItem.domain || firstItem.description?.match(/([a-z0-9-]+\.[a-z]{2,})/i)?.[0];
-            planName = planName || firstItem.name || firstItem.plan_name;
-          }
-        }
-      }
-
-      // Record transaction entry
-      await supabase.from('transactions').insert({
-        trx_id: trxId,
-        invoice_number: invoiceNumber || null,
-        user_id: userId || null,
-        amount_bdt: amount || 450,
-        gateway: ['bkash', 'nagad', 'stripe', 'wallet', 'uddoktapay'].includes(gateway) ? gateway : 'bkash',
-        status: 'Completed',
-        raw_payload: payload,
-        created_at: new Date().toISOString(),
+    if (!isSupabaseConfigured()) {
+      return NextResponse.json({
+        received: true,
+        sandbox: true,
+        invoiceNumber,
+        trxId,
       });
     }
 
-    const effectiveDomain = domain || bundledDomain || 'devhost-app.net';
+    const db = getServiceSupabase();
 
-    // EXECUTE 5-STEP ZERO-TOUCH INSTANT PROVISIONING PIPELINE
-    const provisionResult = await executeZeroTouchProvisioning({
-      invoiceId: dbInvoiceId,
-      invoiceNumber,
-      userId,
-      customerEmail: contactEmail,
-      customerName,
-      domain: effectiveDomain,
-      planId,
-      planName,
-      gateway,
-      trxId,
-      amountBDT: amount || 450,
-      billingCycle,
-      freeDomainBundleApplied: freeDomainBundle,
-      bundledDomainName: bundledDomain,
+    // Step 2: Atomic Idempotency Check on transactions.trx_id AND invoice status
+    const { data: existingTx } = await db
+      .from('transactions')
+      .select('id, status')
+      .eq('trx_id', trxId)
+      .maybeSingle();
+
+    if (existingTx && existingTx.status === 'Completed') {
+      return NextResponse.json({
+        received: true,
+        status: 'already_processed',
+        trxId,
+      });
+    }
+
+    const { data: invoice } = await db
+      .from('invoices')
+      .select('*')
+      .eq('invoice_number', invoiceNumber)
+      .maybeSingle();
+
+    if (!invoice) {
+      return NextResponse.json(
+        { error: `Invoice "${invoiceNumber}" not found.` },
+        { status: 404 }
+      );
+    }
+
+    if (invoice.status === 'paid') {
+      return NextResponse.json({
+        received: true,
+        status: 'invoice_already_paid',
+        invoiceNumber,
+      });
+    }
+
+    // Step 3: Strict Underpayment / Amount Integrity Guard
+    const expectedTotal = Number(invoice.total_bdt || 0);
+    if (expectedTotal > 0 && amountBDT + 1 < expectedTotal) {
+      await createFraudAlert({
+        userId: invoice.user_id ? String(invoice.user_id) : undefined,
+        alertType: 'velocity_abuse',
+        severity: 'critical',
+        details: {
+          reason: 'Webhook underpayment amount mismatch',
+          invoiceNumber,
+          expectedBDT: expectedTotal,
+          receivedBDT: amountBDT,
+          trxId,
+          gateway,
+        },
+      }).catch(() => {});
+
+      return NextResponse.json(
+        {
+          error: `Underpayment rejected: invoice requires ৳${expectedTotal} BDT, gateway reported ৳${amountBDT} BDT.`,
+        },
+        { status: 400 }
+      );
+    }
+
+    // Step 4: Insert Completed Transaction with Unique Conflict Protection (23505)
+    const { error: txInsertErr } = await db.from('transactions').insert({
+      invoice_id: invoice.id,
+      invoice_number: invoiceNumber,
+      user_id: invoice.user_id || null,
+      gateway: txGateway,
+      trx_id: trxId,
+      amount_bdt: amountBDT || expectedTotal,
+      status: 'Completed',
+      raw_payload: {
+        provider: verified.provider,
+        reported_gateway: gateway,
+        sender_number: verified.senderPhone || null,
+        card_fingerprint: verified.cardFingerprint || null,
+        remote_invoice_id: verified.remoteInvoiceId || null,
+        verified_at: new Date().toISOString(),
+      },
     });
+
+    if (txInsertErr) {
+      if (txInsertErr.code === '23505') {
+        return NextResponse.json({
+          received: true,
+          status: 'already_processed_conflict',
+          trxId,
+        });
+      }
+      return NextResponse.json(
+        { error: `Failed to record transaction: ${txInsertErr.message}` },
+        { status: 500 }
+      );
+    }
+
+    // Step 5: Unified Idempotent Fulfillment (Wallet Credit OR 4-Signal Affiliate + Provisioning)
+    const fulfillment = await fulfillPaidInvoiceAndAffiliate({
+      db,
+      invoice,
+      gateway: gateway || verified.provider,
+      trxId,
+      amountBDT: amountBDT || expectedTotal,
+      buyerIp: clientIp,
+      senderPhone: verified.senderPhone,
+      cardFingerprint: verified.cardFingerprint,
+    });
+
+    await logSecurityAudit({
+      actorId: invoice.user_id ? String(invoice.user_id) : undefined,
+      actorRole: 'system',
+      actionType: 'WEBHOOK_PAYMENT_SETTLED',
+      targetResource: invoiceNumber,
+      ipAddress: clientIp,
+      riskLevel: 'low',
+      metadata: {
+        gateway,
+        trxId,
+        kind: fulfillment.kind,
+        affiliateCommissionBDT: fulfillment.affiliate?.commissionBDT ?? 0,
+      },
+    }).catch(() => {});
 
     return NextResponse.json({
-      success: true,
-      message: 'Zero-Touch Order Provisioned & Activated Successfully!',
+      received: true,
+      status: 'settled',
+      kind: fulfillment.kind,
       invoiceNumber,
       trxId,
-      provisioning: provisionResult,
+      walletBalanceBDT: fulfillment.walletBalanceBDT,
+      provision: fulfillment.provision,
+      affiliate: fulfillment.affiliate,
     });
-  } catch (err: any) {
-    console.error('[Payment Webhook Error]', err);
+  } catch (err) {
     return NextResponse.json(
-      { error: 'Webhook Processing Error', message: err?.message || 'Server error' },
+      { error: err instanceof Error ? err.message : 'Webhook processing failure' },
       { status: 500 }
     );
   }

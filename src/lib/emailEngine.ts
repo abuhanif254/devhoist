@@ -5,6 +5,7 @@
  */
 
 import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
+import { buildDashboardUrl, buildPortalUrl } from '@/lib/siteUrl';
 
 export type EmailTemplateId =
   | 'welcome_and_verify'
@@ -212,8 +213,8 @@ function getEmailWrapper(content: string, previewText: string): string {
         <p style="margin: 0 0 8px 0;">DevHost Cloud Systems Ltd. • Singapore SG1 &amp; Dhaka BDIX Peering Node</p>
         <p style="margin: 0; font-size: 11px;">
           Instant bKash/Nagad Support • 24/7 Priority NOC Desk • 
-          <a href="https://devhostcloud.com/dashboard" style="color: #60a5fa; text-decoration: none;">Client Portal</a> • 
-          <a href="https://devhostcloud.com/docs" style="color: #60a5fa; text-decoration: none;">Docs</a>
+          <a href="${buildDashboardUrl()}" style="color: #60a5fa; text-decoration: none;">Client Portal</a> • 
+          <a href="${buildPortalUrl('/docs')}" style="color: #60a5fa; text-decoration: none;">Docs</a>
         </p>
       </td>
     </tr>
@@ -242,7 +243,7 @@ export function renderWelcomeVerifyEmail(data: {
     <p style="color: #a1a1aa;">Once verified, you will have instant access to high-performance NVMe cloud hosting, automated GitHub deployments, and real-time DNS management.</p>
 
     <div style="margin-top: 28px; text-align: center;">
-      <a href="${data.loginUrl || 'https://devhostcloud.com/login'}" class="btn btn-primary" style="display:inline-block; padding:12px 28px; background:#2563eb; color:#fff; border-radius:8px; text-decoration:none; font-weight:bold;">Complete Sign In &rarr;</a>
+      <a href="${data.loginUrl || buildPortalUrl('/login')}" class="btn btn-primary" style="display:inline-block; padding:12px 28px; background:#2563eb; color:#fff; border-radius:8px; text-decoration:none; font-weight:bold;">Complete Sign In &rarr;</a>
     </div>
   `;
   return getEmailWrapper(content, `Your DevHost Cloud verification code is ${data.verificationCode}`);
@@ -297,7 +298,7 @@ export function renderHostingProvisionedEmail(data: {
       <div style="font-size:11px; color:#71717a; margin-top:8px;">No password required. Authenticates securely via your client portal.</div>
     </div>
 
-    <p style="color:#a1a1aa; font-size:12px;">Deploying Next.js or Node.js? Check our <a href="${data.webhookGuideUrl || 'https://devhostcloud.com/docs/deploy-nextjs-github-cpanel-zero-bloat'}" style="color:#60a5fa; text-decoration:none;">GitHub Actions Auto-Deployment Guide</a>.</p>
+    <p style="color:#a1a1aa; font-size:12px;">Deploying Next.js or Node.js? Check our <a href="${data.webhookGuideUrl || buildPortalUrl('/docs/deploy-nextjs-github-cpanel-zero-bloat')}" style="color:#60a5fa; text-decoration:none;">GitHub Actions Auto-Deployment Guide</a>.</p>
   `;
   return getEmailWrapper(content, `Your hosting for ${data.domain} is active. cPanel SSO & nameserver details inside.`);
 }
@@ -350,7 +351,7 @@ export function renderInvoicePaidEmail(data: {
     </div>
 
     <div style="text-align: center; margin-top:24px;">
-      <a href="${data.viewInvoiceUrl || 'https://devhostcloud.com/dashboard?tab=invoices'}" class="btn btn-primary" style="display:inline-block; padding:10px 24px; background:#2563eb; color:#fff; border-radius:8px; text-decoration:none; font-weight:bold;">
+      <a href="${data.viewInvoiceUrl || buildDashboardUrl('invoices')}" class="btn btn-primary" style="display:inline-block; padding:10px 24px; background:#2563eb; color:#fff; border-radius:8px; text-decoration:none; font-weight:bold;">
         Download PDF Invoice &rarr;
       </a>
     </div>
@@ -401,7 +402,7 @@ export function renderRenewalReminderEmail(data: {
     }
 
     <div style="margin: 28px 0; text-align: center;">
-      <a href="${data.renewUrl || 'https://devhostcloud.com/dashboard?tab=billing'}" class="btn btn-primary" style="display:inline-block; padding:12px 28px; background:#2563eb; color:#fff; border-radius:8px; text-decoration:none; font-weight:bold;">
+      <a href="${data.renewUrl || buildDashboardUrl('billing')}" class="btn btn-primary" style="display:inline-block; padding:12px 28px; background:#2563eb; color:#fff; border-radius:8px; text-decoration:none; font-weight:bold;">
         1-Click Renew via bKash/Nagad &rarr;
       </a>
     </div>
@@ -439,7 +440,7 @@ export function renderServiceSuspendedEmail(data: {
     </div>
 
     <div style="margin: 28px 0; text-align: center;">
-      <a href="${data.payUnlockUrl || 'https://devhostcloud.com/dashboard?tab=invoices'}" class="btn btn-rose" style="display:inline-block; padding:12px 28px; background:#e11d48; color:#fff; border-radius:8px; text-decoration:none; font-weight:bold;">
+      <a href="${data.payUnlockUrl || buildDashboardUrl('invoices')}" class="btn btn-rose" style="display:inline-block; padding:12px 28px; background:#e11d48; color:#fff; border-radius:8px; text-decoration:none; font-weight:bold;">
         Pay Outstanding Balance &amp; Unlock Now &rarr;
       </a>
     </div>
@@ -490,7 +491,7 @@ export function renderAffiliateEmail(data: {
     </div>
 
     <div style="text-align: center; margin-top:24px;">
-      <a href="${data.dashboardUrl || 'https://devhostcloud.com/dashboard?tab=affiliate'}" class="btn btn-primary" style="display:inline-block; padding:10px 24px; background:#2563eb; color:#fff; border-radius:8px; text-decoration:none; font-weight:bold;">
+      <a href="${data.dashboardUrl || buildDashboardUrl('affiliate')}" class="btn btn-primary" style="display:inline-block; padding:10px 24px; background:#2563eb; color:#fff; border-radius:8px; text-decoration:none; font-weight:bold;">
         View Affiliate Dashboard &rarr;
       </a>
     </div>
@@ -527,7 +528,7 @@ export function renderMigrationStatusEmail(data: {
     </div>
 
     <div style="text-align: center; margin-top:24px;">
-      <a href="https://devhostcloud.com/dashboard" class="btn btn-emerald" style="display:inline-block; padding:10px 24px; background:#059669; color:#fff; border-radius:8px; text-decoration:none; font-weight:bold;">
+      <a href="${buildDashboardUrl()}" class="btn btn-emerald" style="display:inline-block; padding:10px 24px; background:#059669; color:#fff; border-radius:8px; text-decoration:none; font-weight:bold;">
         Test Preview &amp; Confirm Live &rarr;
       </a>
     </div>
@@ -567,7 +568,7 @@ export function renderSecurityThreatEmail(data: {
     </div>
 
     <div style="text-align: center;">
-      <a href="${data.freezeAccountUrl || 'https://devhostcloud.com/dashboard?tab=security'}" class="btn btn-rose" style="display:inline-block; padding:12px 28px; background:#e11d48; color:#fff; border-radius:8px; text-decoration:none; font-weight:bold;">
+      <a href="${data.freezeAccountUrl || buildDashboardUrl('security')}" class="btn btn-rose" style="display:inline-block; padding:12px 28px; background:#e11d48; color:#fff; border-radius:8px; text-decoration:none; font-weight:bold;">
         Not You? Freeze Account &amp; Kill Sessions &rarr;
       </a>
     </div>

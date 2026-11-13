@@ -17,6 +17,7 @@ import {
   isStandaloneDomainOrderType,
   resolveDomainTldPriceBDT,
 } from '@/lib/billingEntitlements';
+import { extendAndUnsuspendHostingService } from '@/lib/lifecycleEngine';
 import {
   isBdManualTld,
   registerDomainWithRegistrar,
@@ -240,6 +241,28 @@ export async function fulfillPaidInvoiceAndAffiliate(
       invoiceId,
       invoiceNumber,
       walletBalanceBDT: newBalance,
+    };
+  }
+
+  // =========================================================================
+  // BRANCH A2: SERVICE RENEWAL SETTLEMENT (EXTEND DUE DATE & UNSUSPEND)
+  // =========================================================================
+  if (orderType === 'service_renewal' || orderType === 'renewal') {
+    const renewalServiceId = String(
+      invoice.service_id || firstItem.serviceId || metadata.serviceId || ''
+    ).trim();
+    if (renewalServiceId) {
+      await extendAndUnsuspendHostingService(db, {
+        serviceId: renewalServiceId,
+        userId: userId || undefined,
+        reason: `Renewal invoice ${invoiceNumber} settled via ${gateway}`,
+      });
+    }
+
+    return {
+      kind: 'hosting_order',
+      invoiceId,
+      invoiceNumber,
     };
   }
 

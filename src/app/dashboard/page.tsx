@@ -88,6 +88,7 @@ import { useBilling } from '@/context/BillingContext';
 import { useLanguage } from '@/context/LanguageContext';
 import CustomerProfileView from '@/components/profiles/CustomerProfileView';
 import AffiliateProfileView from '@/components/profiles/AffiliateProfileView';
+import { buildAffiliateReferralUrl, buildPortalUrl } from '@/lib/siteUrl';
 import { useSudoGate } from '@/components/security/SudoGateModal';
 import DnsZoneManager from '@/components/domains/DnsZoneManager';
 import DomainTransferTracker from '@/components/domains/DomainTransferTracker';
@@ -393,7 +394,7 @@ export default function CustomerDashboardPage() {
   const [affiliateSubId, setAffiliateSubId] = useState('youtube_bio');
   const [isAffiliatePayoutModalOpen, setIsAffiliatePayoutModalOpen] = useState(false);
   const [affiliatePayoutMethod, setAffiliatePayoutMethod] = useState<'bKash' | 'Nagad' | 'Bank'>('bKash');
-  const [affiliatePayoutAccount, setAffiliatePayoutAccount] = useState('01712345678');
+  const [affiliatePayoutAccount, setAffiliatePayoutAccount] = useState('');
   const [affiliatePayoutAmount, setAffiliatePayoutAmount] = useState(1000);
   const [bannerTab, setBannerTab] = useState<'728x90' | '300x250' | '1200x630'>('728x90');
 
@@ -2051,7 +2052,15 @@ export default function CustomerDashboardPage() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => setIsAffiliatePayoutModalOpen(true)}
+                    onClick={() => {
+                    if (affiliate.payoutMethod === 'nagad') setAffiliatePayoutMethod('Nagad');
+                    else if (affiliate.payoutMethod === 'bank') setAffiliatePayoutMethod('Bank');
+                    else setAffiliatePayoutMethod('bKash');
+                    if (!affiliatePayoutAccount && affiliate.payoutAccountNumber) {
+                      setAffiliatePayoutAccount(affiliate.payoutAccountNumber);
+                    }
+                    setIsAffiliatePayoutModalOpen(true);
+                  }}
                     className="mt-3 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
                   >
                     <Wallet className="w-3.5 h-3.5" />
@@ -2192,14 +2201,14 @@ export default function CustomerDashboardPage() {
                     <input
                       type="text"
                       readOnly
-                      value={`https://devhost.cloud${affiliateLanding}?ref=${affiliate.referralCode || 'hanif2026'}&subid=${affiliateSubId || 'general'}`}
+                      value={buildAffiliateReferralUrl(affiliate.customSlug || affiliate.referralCode || 'partner', affiliateLanding, affiliateSubId || 'general')}
                       className="flex-1 px-3 py-2 rounded-lg bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono text-blue-600 dark:text-blue-400 font-semibold"
                     />
                     <button
                       type="button"
                       onClick={() =>
                         triggerCopy(
-                          `https://devhost.cloud${affiliateLanding}?ref=${affiliate.referralCode || 'hanif2026'}&subid=${affiliateSubId || 'general'}`,
+                          buildAffiliateReferralUrl(affiliate.customSlug || affiliate.referralCode || 'partner', affiliateLanding, affiliateSubId || 'general'),
                           'gen_ref'
                         )
                       }
@@ -2338,7 +2347,7 @@ export default function CustomerDashboardPage() {
                         type="button"
                         onClick={() =>
                           triggerCopy(
-                            `🚀 বাংলাদেশে সবচেয়ে ফাস্ট ও সাশ্রয়ী Next.js/Node.js এবং WordPress হোস্টিং খুঁজছেন? DevHost Cloud-এ পাচ্ছেন 1-Click cPanel SSO, লাইটস্পিড ক্যাশ এবং ফ্রি SSL! এখনই চেক করুন: https://devhost.cloud/?ref=${affiliate.referralCode || 'hanif2026'}`,
+                            `🚀 বাংলাদেশে সবচেয়ে ফাস্ট ও সাশ্রয়ী Next.js/Node.js এবং WordPress হোস্টিং খুঁজছেন? DevHost Cloud-এ পাচ্ছেন 1-Click cPanel SSO, লাইটস্পিড ক্যাশ এবং ফ্রি SSL! এখনই চেক করুন: ${buildAffiliateReferralUrl(affiliate.customSlug || affiliate.referralCode || 'partner')}`,
                             'copy_bn'
                           )
                         }
@@ -2348,7 +2357,7 @@ export default function CustomerDashboardPage() {
                       </button>
                     </div>
                     <p className="text-xs text-slate-600 dark:text-zinc-300 leading-relaxed font-sans">
-                      🚀 বাংলাদেশে সবচেয়ে ফাস্ট ও সাশ্রয়ী Next.js/Node.js এবং WordPress হোস্টিং খুঁজছেন? DevHost Cloud-এ পাচ্ছেন 1-Click cPanel SSO, লাইটস্পিড ক্যাশ এবং ফ্রি SSL! এখনই চেক করুন: https://devhost.cloud/?ref={affiliate.referralCode || 'hanif2026'}
+                      🚀 বাংলাদেশে সবচেয়ে ফাস্ট ও সাশ্রয়ী Next.js/Node.js এবং WordPress হোস্টিং খুঁজছেন? DevHost Cloud-এ পাচ্ছেন 1-Click cPanel SSO, লাইটস্পিড ক্যাশ এবং ফ্রি SSL! এখনই চেক করুন: {buildAffiliateReferralUrl(affiliate.customSlug || affiliate.referralCode || 'partner')}
                     </p>
                   </div>
 
@@ -2359,7 +2368,7 @@ export default function CustomerDashboardPage() {
                         type="button"
                         onClick={() =>
                           triggerCopy(
-                            `⚡ Deploy your Next.js and WordPress apps in seconds with automated GitHub Actions, LiteSpeed NVMe Turbo, and instant bKash activation: https://devhost.cloud/?ref=${affiliate.referralCode || 'hanif2026'}`,
+                            `⚡ Deploy your Next.js and WordPress apps in seconds with automated GitHub Actions, LiteSpeed NVMe Turbo, and instant bKash activation: ${buildAffiliateReferralUrl(affiliate.customSlug || affiliate.referralCode || 'partner')}`,
                             'copy_en'
                           )
                         }
@@ -2369,7 +2378,7 @@ export default function CustomerDashboardPage() {
                       </button>
                     </div>
                     <p className="text-xs text-slate-600 dark:text-zinc-300 leading-relaxed font-sans">
-                      ⚡ Deploy your Next.js and WordPress apps in seconds with automated GitHub Actions, LiteSpeed NVMe Turbo, and instant bKash activation: https://devhost.cloud/?ref={affiliate.referralCode || 'hanif2026'}
+                      ⚡ Deploy your Next.js and WordPress apps in seconds with automated GitHub Actions, LiteSpeed NVMe Turbo, and instant bKash activation: {buildAffiliateReferralUrl(affiliate.customSlug || affiliate.referralCode || 'partner')}
                     </p>
                   </div>
                 </div>
@@ -2409,17 +2418,17 @@ export default function CustomerDashboardPage() {
                   <div className="p-3 rounded-xl bg-slate-50 dark:bg-zinc-950 font-mono text-[11px] text-slate-700 dark:text-zinc-300 flex items-center justify-between">
                     <code className="truncate max-w-xl">
                       {bannerTab === '728x90' &&
-                        `<a href="https://devhost.cloud/?ref=${affiliate.referralCode || 'hanif2026'}"><img src="https://devhost.cloud/banners/devhost-728x90.png" alt="DevHost Cloud" width="728" height="90"/></a>`}
+                        `<a href="${buildAffiliateReferralUrl(affiliate.customSlug || affiliate.referralCode || 'partner')}"><img src="${buildPortalUrl('/banners/devhost-728x90.png')}" alt="DevHost Cloud" width="728" height="90"/></a>`}
                       {bannerTab === '300x250' &&
-                        `<a href="https://devhost.cloud/?ref=${affiliate.referralCode || 'hanif2026'}"><img src="https://devhost.cloud/banners/devhost-300x250.png" alt="DevHost Cloud" width="300" height="250"/></a>`}
+                        `<a href="${buildAffiliateReferralUrl(affiliate.customSlug || affiliate.referralCode || 'partner')}"><img src="${buildPortalUrl('/banners/devhost-300x250.png')}" alt="DevHost Cloud" width="300" height="250"/></a>`}
                       {bannerTab === '1200x630' &&
-                        `<a href="https://devhost.cloud/?ref=${affiliate.referralCode || 'hanif2026'}"><img src="https://devhost.cloud/banners/devhost-1200x630.png" alt="DevHost Cloud" width="1200" height="630"/></a>`}
+                        `<a href="${buildAffiliateReferralUrl(affiliate.customSlug || affiliate.referralCode || 'partner')}"><img src="${buildPortalUrl('/banners/devhost-1200x630.png')}" alt="DevHost Cloud" width="1200" height="630"/></a>`}
                     </code>
                     <button
                       type="button"
                       onClick={() =>
                         triggerCopy(
-                          `<a href="https://devhost.cloud/?ref=${affiliate.referralCode || 'hanif2026'}"><img src="https://devhost.cloud/banners/devhost-${bannerTab}.png" alt="DevHost Cloud"/></a>`,
+                          `<a href="${buildAffiliateReferralUrl(affiliate.customSlug || affiliate.referralCode || 'partner')}"><img src="${buildPortalUrl(`/banners/devhost-${bannerTab}.png`)}" alt="DevHost Cloud"/></a>`,
                           'embed'
                         )
                       }
@@ -2501,13 +2510,20 @@ export default function CustomerDashboardPage() {
                     </label>
                     <input
                       type="number"
-                      min={1000}
+                      min={affiliate.minPayoutThresholdBDT || 1000}
                       max={affiliate.availableBalanceBDT}
                       value={affiliatePayoutAmount}
                       onChange={(e) => setAffiliatePayoutAmount(Number(e.target.value))}
                       className="mt-1 w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono"
                     />
                   </div>
+
+                  {affiliate.isCoolingLocked && affiliate.payoutLockUntil && (
+                    <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-500/30 text-[11px] text-amber-800 dark:text-amber-200">
+                      <strong>24h Cooling Lock Active:</strong> Payout withdrawals unlock at{' '}
+                      <span className="font-mono">{new Date(affiliate.payoutLockUntil).toLocaleString()}</span>.
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-white/10">
@@ -2520,7 +2536,12 @@ export default function CustomerDashboardPage() {
                   </button>
                   <button
                     type="button"
-                    disabled={affiliatePayoutAmount > affiliate.availableBalanceBDT || affiliatePayoutAmount < 1000}
+                    disabled={
+                      Boolean(affiliate.isCoolingLocked) ||
+                      affiliatePayoutAmount > affiliate.availableBalanceBDT ||
+                      affiliatePayoutAmount < (affiliate.minPayoutThresholdBDT || 1000) ||
+                      !affiliatePayoutAccount.trim()
+                    }
                     onClick={async () => {
                       const res = await requestAffiliatePayout(
                         affiliatePayoutAmount,

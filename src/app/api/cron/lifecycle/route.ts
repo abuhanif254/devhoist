@@ -1,199 +1,111 @@
 import { NextRequest, NextResponse } from 'next/server';
-import {
-  sendTransactionalEmail,
-  renderRenewalReminderEmail,
-  renderInvoicePaidEmail,
-  renderServiceSuspendedEmail,
-  renderAffiliateEmail,
-} from '@/lib/emailEngine';
-import { sendTelegramAlert } from '@/lib/adminNotifier';
-import { verifyCronOrAdmin } from '@/lib/authGuard';
-import { getServiceSupabase, isSupabaseConfigured } from '@/lib/supabase';
-import { syncDomainTransferStatuses } from '@/lib/transferLifecycle';
+import { serviceUnavailableResponse, verifyCronOrAdmin } from '@/lib/authGuard';
+import { runAutonomousLifecycleCron, type LifecycleCronReport } from '@/lib/lifecycleEngine';
+import { getServiceSupabase, isDevSandboxMode, isSupabaseConfigured } from '@/lib/supabase';
 
+/**
+ * Preserves backward-compatible `results` keys (e.g. Phase 10 `transfersPolled` /
+ * `transfersCompleted`) alongside the Phase 11 canonical `summary` payload.
+ */
+function buildCronResults(summary: LifecycleCronReport['summary']) {
+  return {
+    ...summary,
+    invoicesGenerated: summary.renewalInvoicesCreated,
+    remindersSent: summary.renewalEmailsSent + summary.urgentRemindersSent,
+    autoRenewed: summary.autoRenewedViaWallet,
+    suspendedAccounts: summary.accountsSuspendedOverdue,
+    terminatedAccounts: summary.accountsTerminatedFinalSnapshot,
+    commissionsMatured: summary.affiliateCommissionsMaturedCount,
+    commissionsReleasedBDT: summary.affiliateCommissionsMaturedBDT,
+    transfersPolled: summary.domainTransfersPolled,
+    transfersCompleted: summary.domainTransfersCompleted,
+    previewsPruned: summary.previewsPruned,
+  };
+}
 
-export async function GET(req: NextRequest) {
-  return handleLifecycleCron(req);
+/**
+ * Automated Lifecycle & Billing Engine Cron Endpoint
+ * Protected strictly by CRON_SECRET or verified Admin session.
+ * Triggered daily at 00:00 UTC by Cloudflare Cron Triggers (`worker-entry.mjs`)
+ * or manually by Founder/Admin from Command Center.
+ */
+async function handleLifecycleTrigger(req: NextRequest) {
+  try {
+    const auth = await verifyCronOrAdmin(req);
+    if (!auth.ok) return auth.response;
+
+    let dryRun = false;
+    if (req.method === 'POST') {
+      try {
+        const body = (await req.json()) as { dryRun?: boolean };
+        dryRun = Boolean(body?.dryRun);
+      } catch {
+        dryRun = false;
+      }
+    }
+
+    const executionMode =
+      auth.via === 'cron_secret' ? 'Cloudflare Automated Schedule' : 'Admin Manual Execution';
+
+    if (!isSupabaseConfigured()) {
+      if (!isDevSandboxMode()) {
+        return serviceUnavailableResponse('Autonomous Lifecycle Cron');
+      }
+
+      const emptyReport: LifecycleCronReport = {
+        success: true,
+        executedAt: new Date().toISOString(),
+        dryRun,
+        summary: {
+          renewalInvoicesCreated: 0,
+          renewalEmailsSent: 0,
+          autoRenewedViaWallet: 0,
+          urgentRemindersSent: 0,
+          accountsSuspendedOverdue: 0,
+          accountsTerminatedFinalSnapshot: 0,
+          affiliateCommissionsMaturedCount: 0,
+          affiliateCommissionsMaturedBDT: 0,
+          domainTransfersPolled: 0,
+          domainTransfersCompleted: 0,
+          previewsPruned: 0,
+        },
+        logs: [
+          `[${new Date().toISOString()}] Lifecycle Cron running in DEV_SANDBOX_MODE (Supabase unconfigured; 0 live records processed).`,
+        ],
+        errors: [],
+      };
+
+      return NextResponse.json({
+        ...emptyReport,
+        results: buildCronResults(emptyReport.summary),
+        executionMode,
+        message: 'DevHost Cloud Autonomous Lifecycle Engine executed cleanly (sandbox idle).',
+      });
+    }
+
+    const db = getServiceSupabase();
+    const report = await runAutonomousLifecycleCron(db, { dryRun });
+
+    return NextResponse.json({
+      ...report,
+      results: buildCronResults(report.summary),
+      executionMode,
+      message: 'DevHost Cloud Autonomous Lifecycle Engine executed successfully.',
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Cron execution failed';
+    console.error('[Lifecycle Cron Error]:', err);
+    return NextResponse.json(
+      { success: false, error: 'Cron Execution Failed', message },
+      { status: 500 }
+    );
+  }
 }
 
 export async function POST(req: NextRequest) {
-  return handleLifecycleCron(req);
+  return handleLifecycleTrigger(req);
 }
 
-async function handleLifecycleCron(req: NextRequest) {
-  const cronAuth = await verifyCronOrAdmin(req);
-  if (!cronAuth.ok) {
-    return cronAuth.response;
-  }
-
-  const logs: string[] = [];
-  const results = {
-    renewalInvoicesCreated: 0,
-    autoRenewedViaWallet: 0,
-    urgentRemindersSent: 0,
-    accountsSuspended: 0,
-    accountsTerminated: 0,
-    affiliateCommissionsMaturedBDT: 0,
-    transfersPolled: 0,
-    transfersCompleted: 0,
-    transfersFailed: 0,
-  };
-
-  const now = new Date();
-  logs.push(`[${now.toISOString()}] Starting DevHost Autonomous Lifecycle & Dunning Engine...`);
-
-  // ============================================================================
-  // TASK 1: T-7 DAYS RENEWAL INVOICE GENERATION
-  // ============================================================================
-  try {
-    // Simulated scan of accounts due in 7 days
-    results.renewalInvoicesCreated = 2;
-    logs.push(
-      `✓ Task 1: Scanned 48 active hosting services. Generated 2 unpaid renewal invoices for services expiring within 7 days.`
-    );
-
-    // Dispatch T-7 email notification
-    await sendTransactionalEmail({
-      to: 'demo.developer@gmail.com',
-      subject: 'Upcoming Renewal Notice: ecommerce-live.com (7 Days Left)',
-      html: renderRenewalReminderEmail({
-        name: 'Tanvir Hossain',
-        serviceName: 'Developer Pro NVMe',
-        domain: 'ecommerce-live.com',
-        expiryDate: new Date(Date.now() + 7 * 86400000).toLocaleDateString(),
-        daysRemaining: 7,
-        renewalAmountBDT: 450,
-        walletBalanceBDT: 1200,
-        renewUrl: 'https://devhostcloud.com/dashboard?tab=billing',
-      }),
-      template: 'renewal_reminder_notice',
-      previewText: 'Your ecommerce-live.com hosting will auto-renew in 7 days.',
-    });
-  } catch (err: any) {
-    logs.push(`⚠ Task 1 Warning: ${err?.message}`);
-  }
-
-  // ============================================================================
-  // TASK 2: AUTO-RENEW VIA PREPAID CLOUD WALLET
-  // ============================================================================
-  try {
-    // If auto_renew = true and customer wallet balance >= invoice amount
-    results.autoRenewedViaWallet = 1;
-    logs.push(
-      `✓ Task 2: Executed wallet auto-deduction (৳450 BDT) for service 'ecommerce-live.com'. Invoice #INV-2026-9021 marked PAID. Due date extended by +30 days.`
-    );
-
-    await sendTransactionalEmail({
-      to: 'demo.developer@gmail.com',
-      subject: 'Invoice Paid via Prepaid Cloud Wallet ✅ — ecommerce-live.com',
-      html: renderInvoicePaidEmail({
-        name: 'Tanvir Hossain',
-        invoiceNumber: 'INV-2026-9021',
-        amountBDT: 450,
-        paymentMethod: 'Prepaid Cloud Wallet',
-        trxId: `WAL-${Date.now().toString().slice(-8)}`,
-        paidDate: new Date().toLocaleDateString(),
-        items: [{ desc: 'Developer Pro NVMe Renewal (1 Month)', amount: 450 }],
-      }),
-      template: 'invoice_paid_receipt',
-      previewText: '৳450 paid via Cloud Wallet. Service renewed seamlessly.',
-    });
-  } catch (err: any) {
-    logs.push(`⚠ Task 2 Warning: ${err?.message}`);
-  }
-
-  // ============================================================================
-  // TASK 3: T-3 & T-1 DAYS URGENT EXPIRY REMINDERS
-  // ============================================================================
-  try {
-    results.urgentRemindersSent = 1;
-    logs.push(
-      `✓ Task 3: Sent urgent T-3 expiry notice to client with low wallet balance for domain 'portfolio-agency.net'.`
-    );
-  } catch (err: any) {
-    logs.push(`⚠ Task 3 Warning: ${err?.message}`);
-  }
-
-  // ============================================================================
-  // TASK 4: T+3 DAYS OVERDUE AUTO-SUSPEND (WHM INTEGRATION)
-  // ============================================================================
-  try {
-    results.accountsSuspended = 0; // None overdue in normal run
-    logs.push(
-      `✓ Task 4: Checked accounts overdue by >3 days. 0 accounts eligible for cPanel suspension.`
-    );
-  } catch (err: any) {
-    logs.push(`⚠ Task 4 Warning: ${err?.message}`);
-  }
-
-  // ============================================================================
-  // TASK 5: T+14 DAYS OVERDUE AUTO-TERMINATION & QUOTA RECOVERY
-  // ============================================================================
-  try {
-    results.accountsTerminated = 0;
-    logs.push(
-      `✓ Task 5: Checked abandoned accounts overdue by >14 days. 0 vHosts flagged for termination.`
-    );
-  } catch (err: any) {
-    logs.push(`⚠ Task 5 Warning: ${err?.message}`);
-  }
-
-  // ============================================================================
-  // TASK 6: 35-DAY AFFILIATE MATURITY & BALANCE CLEARANCE
-  // ============================================================================
-  try {
-    results.affiliateCommissionsMaturedBDT = 380;
-    logs.push(
-      `✓ Task 6: Matured 2 commissions totaling ৳380 BDT from 'Pending 35-Day Hold' to 'Available for Payout' for partner AFF-7842.`
-    );
-  } catch (err: any) {
-    logs.push(`⚠ Task 6 Warning: ${err?.message}`);
-  }
-
-  // ============================================================================
-  // TASK 7: REGISTRAR INBOUND DOMAIN TRANSFER STATUS SYNC & ACTIVATION
-  // ============================================================================
-  try {
-    if (isSupabaseConfigured()) {
-      const db = getServiceSupabase();
-      const pollSummary = await syncDomainTransferStatuses(db);
-      results.transfersPolled = pollSummary.checked;
-      results.transfersCompleted = pollSummary.completed;
-      results.transfersFailed = pollSummary.failed;
-      logs.push(
-        `✓ Task 7: Polled ${pollSummary.checked} registrar domain transfer(s) (${pollSummary.updated} updated, ${pollSummary.completed} completed & activated, ${pollSummary.failed} failed).`
-      );
-      if (pollSummary.errors.length > 0) {
-        logs.push(`⚠ Task 7 Registrar Notes: ${pollSummary.errors.join('; ')}`);
-      }
-    } else {
-      logs.push(`ℹ Task 7: Skipped registrar transfer polling (Supabase not configured).`);
-    }
-  } catch (err: unknown) {
-    logs.push(`⚠ Task 7 Warning: ${err instanceof Error ? err.message : String(err)}`);
-  }
-
-  // Dispatch Summary to Founder Telegram Bot
-  const summaryTelegram = `
-🤖 <b>[DevHost Engine] Daily Lifecycle Cron Completed</b>
-━━━━━━━━━━━━━━━━━━━━━
-• Invoices Generated: <b>${results.renewalInvoicesCreated}</b>
-• Wallet Auto-Renewed: <b>${results.autoRenewedViaWallet} (৳450 BDT)</b>
-• Urgent Notices Sent: <b>${results.urgentRemindersSent}</b>
-• Accounts Suspended: <b>${results.accountsSuspended}</b>
-• Affiliate Matured: <b>৳${results.affiliateCommissionsMaturedBDT} BDT</b>
-• Transfers Synced: <b>${results.transfersPolled} (${results.transfersCompleted} Done / ${results.transfersFailed} Failed)</b>
-• Status: <b>100% Operational & Zero-Gap</b>
-`.trim();
-
-  await sendTelegramAlert(summaryTelegram, 'order').catch(() => {});
-
-  logs.push(`[${new Date().toISOString()}] Lifecycle Cron Execution Finished.`);
-
-  return NextResponse.json({
-    success: true,
-    timestamp: new Date().toISOString(),
-    results,
-    logs,
-  });
+export async function GET(req: NextRequest) {
+  return handleLifecycleTrigger(req);
 }

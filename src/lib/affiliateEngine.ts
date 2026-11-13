@@ -10,6 +10,7 @@ import {
   STANDARD_DOMAIN_RETAIL_PRICES_BDT,
 } from '@/lib/profitEngine';
 import { createFraudAlert, logSecurityAudit } from '@/lib/security';
+import { fireAffiliatePostbackWebhook } from '@/lib/affiliateProfileVault';
 import { renderAffiliateEmail, sendEmail } from '@/lib/emailEngine';
 
 export interface ParsedAffiliateCookie {
@@ -725,6 +726,16 @@ export async function recordVerifiedAffiliateConversion(
     }).catch(() => {});
   }
 
+  // Fire S2S affiliate postback webhook asynchronously (if configured & SSRF-safe)
+  if (zeroLoss.commissionBDT > 0) {
+    await fireAffiliatePostbackWebhook(db, {
+      affiliateUserId: affiliate.user_id,
+      subId: String(input.subId || 'general'),
+      payoutBDT: zeroLoss.commissionBDT,
+      orderId: input.invoiceNumber,
+    }).catch(() => {});
+  }
+
   return {
     recorded: true,
     affiliateUserId: affiliate.user_id,
@@ -745,15 +756,6 @@ export async function maturePendingCommissions(db: SupabaseClient): Promise<{
   maturedCount: number;
   totalReleasedBDT: number;
 }> {
-  try {
-    const { data, error } = await db.rpc('process_mature_affiliate_commissions');
-    if (!error && typeof data === 'number') {
-      return { maturedCount: data, totalReleasedBDT: 0 };
-    }
-  } catch {
-    // Fallback below if RPC not yet deployed or running under mock client
-  }
-
   const nowIso = new Date().toISOString();
   const { data: dueList } = await db
     .from('affiliate_commissions')
@@ -769,13 +771,44 @@ export async function maturePendingCommissions(db: SupabaseClient): Promise<{
     return { maturedCount: 0, totalReleasedBDT: 0 };
   }
 
+  try {
+    const { data, error } = await db.rpc('process_mature_affiliate_commissions');
+    if (!error && typeof data === 'number') {
+      const candidateIds = eligible.map((e) => String(e.id));
+      let releasedBDT = 0;
+      if (data > 0 && candidateIds.length > 0) {
+        const { data: clearedRows } = await db
+          .from('affiliate_commissions')
+          .select('id, commission_amount_bdt')
+          .in('id', candidateIds)
+          .eq('status', 'cleared_available');
+        releasedBDT = (clearedRows || []).reduce(
+          (sum, row) => sum + Number(row.commission_amount_bdt || 0),
+          0
+        );
+      }
+      return {
+        maturedCount: data,
+        totalReleasedBDT: Number(releasedBDT.toFixed(2)),
+      };
+    }
+  } catch {
+    // Fallback below if RPC not yet deployed or running under mock client
+  }
+
   let totalReleased = 0;
+  let maturedCount = 0;
   for (const comm of eligible) {
     const amt = Number(comm.commission_amount_bdt || 0);
-    await db
+    const { data: casCleared } = await db
       .from('affiliate_commissions')
       .update({ status: 'cleared_available', cleared_at: nowIso })
-      .eq('id', comm.id);
+      .eq('id', comm.id)
+      .eq('status', 'pending_35d_hold')
+      .select('id')
+      .maybeSingle();
+
+    if (!casCleared) continue;
 
     const { data: aff } = await db
       .from('affiliate_profiles')
@@ -794,7 +827,8 @@ export async function maturePendingCommissions(db: SupabaseClient): Promise<{
     }
 
     totalReleased += amt;
+    maturedCount += 1;
   }
 
-  return { maturedCount: eligible.length, totalReleasedBDT: totalReleased };
+  return { maturedCount, totalReleasedBDT: Number(totalReleased.toFixed(2)) };
 }

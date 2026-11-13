@@ -414,6 +414,35 @@ export class WhmClient {
   }
 
   /**
+   * 4B. TERMINATE ACCOUNT (WHM removeacct)
+   */
+  public async terminateAccount(
+    cpanelUser: string,
+    keepDns = false
+  ): Promise<{ success: boolean; message: string }> {
+    const cleanUser = cpanelUser.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 16);
+    if (!this.isConfigured) {
+      if (!isDevSandboxMode()) {
+        return { success: false, message: 'WHM reseller server is not configured.' };
+      }
+      return { success: true, message: `Account ${cleanUser} terminated (Simulated).` };
+    }
+
+    try {
+      const data = await this.executeWhmApi('removeacct', {
+        user: cleanUser,
+        keepdns: keepDns ? '1' : '0',
+      });
+      return {
+        success: data?.metadata?.result === 1,
+        message: data?.metadata?.reason || `Terminated ${cleanUser} successfully`,
+      };
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed to terminate account' };
+    }
+  }
+
+  /**
    * 5. LIST ALL ACCOUNTS & DISK USAGE (WHM listaccts)
    * Powers Admin Reseller Watchdog & Account sync
    */

@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { supabase, isSupabaseConfigured, syncAuthCookie } from '@/lib/supabase';
+import { buildAffiliateReferralUrl } from '@/lib/siteUrl';
 import { HOSTING_PACKAGES } from '@/config/hostingData';
 import { TLD_PRICING_LIST } from '@/config/whmcs';
 
@@ -225,6 +226,13 @@ export interface AffiliatePayout {
   accountNumber: string;
   status: 'Completed' | 'Pending' | 'Rejected';
   trxId: string;
+  affiliateUserId?: string;
+  payoutLockUntil?: string | null;
+  isCoolingLocked?: boolean;
+  isFrozenForFraud?: boolean;
+  fraudReason?: string | null;
+  openFraudAlertsCount?: number;
+  rejectedReason?: string | null;
 }
 
 export interface AffiliateCommissionItem {
@@ -566,6 +574,15 @@ interface PortalContextType {
   affiliate: {
     refLink: string;
     referralCode: string;
+    customSlug?: string;
+    payoutMethod?: string;
+    primaryPayoutMethod?: string;
+    payoutAccountNumber?: string;
+    payoutLockUntil?: string | null;
+    isCoolingLocked?: boolean;
+    minPayoutThresholdBDT?: number;
+    isFrozenForFraud?: boolean;
+    fraudReason?: string;
     clicks: number;
     signups: number;
     activeConversions: number;
@@ -584,11 +601,16 @@ interface PortalContextType {
     amount: number,
     method: string,
     accountNumber: string
-  ) => Promise<{ ok: boolean; error?: string }>;
+  ) => Promise<{ ok: boolean; error?: string; code?: string; payoutLockUntil?: string }>;
   approveAffiliatePayout: (
     payoutId: string,
     adminTrxId: string
   ) => Promise<{ ok: boolean; requireSudo?: boolean; error?: string }>;
+  rejectAffiliatePayout: (
+    payoutId: string,
+    reason: string,
+    forfeitForFraud?: boolean
+  ) => Promise<{ ok: boolean; requireSudo?: boolean; refundedToAvailable?: boolean; error?: string }>;
   clawbackCommission: (invoiceOrCommissionId: string) => Promise<{ ok: boolean; error?: string }>;
 
   // Security, Fraud Radar & Audit
@@ -925,6 +947,15 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     clicks: number;
     signups: number;
     activeConversions: number;
+    customSlug?: string;
+    payoutMethod?: string;
+    primaryPayoutMethod?: string;
+    payoutAccountNumber?: string;
+    payoutLockUntil?: string | null;
+    isCoolingLocked?: boolean;
+    minPayoutThresholdBDT?: number;
+    isFrozenForFraud?: boolean;
+    fraudReason?: string;
     commissionTier: string;
     commissionRate: number;
     tierLevel: 'starter_20' | 'pro_25' | 'agency_30';
@@ -938,6 +969,14 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   }>({
     refLink: '',
     referralCode: '',
+    customSlug: '',
+    payoutMethod: 'bkash',
+    primaryPayoutMethod: 'bkash_personal',
+    payoutAccountNumber: '',
+    payoutLockUntil: null,
+    isCoolingLocked: false,
+    minPayoutThresholdBDT: 1000,
+    isFrozenForFraud: false,
     clicks: 0,
     signups: 0,
     activeConversions: 0,
@@ -1164,6 +1203,8 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
           const rawComms = Array.isArray(affData.commissions) ? affData.commissions : [];
           const rawPayouts = Array.isArray(affData.payouts) ? affData.payouts : [];
           const refCodeVal = String(p.referralCode || '');
+          const customSlugVal = String(p.customSlug || '');
+          const preferredShareToken = customSlugVal || refCodeVal;
           const tierLvl: 'starter_20' | 'pro_25' | 'agency_30' =
             p.tierLevel === 'agency_30' || p.tierLevel === 'pro_25' ? p.tierLevel : 'starter_20';
           const rateVal = Number(p.commissionRate || 20);
@@ -1173,15 +1214,27 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
 
           setAffiliate((prev) => ({
             ...prev,
-            refLink: refCodeVal ? `https://devhostcloud.com/?ref=${refCodeVal}` : prev.refLink,
+            refLink: String(
+              p.refLink || (preferredShareToken ? buildAffiliateReferralUrl(preferredShareToken) : prev.refLink)
+            ),
             referralCode: refCodeVal || prev.referralCode,
+            customSlug: customSlugVal,
+            payoutMethod: String(p.payoutMethod || prev.payoutMethod || 'bkash'),
+            primaryPayoutMethod: String(p.primaryPayoutMethod || prev.primaryPayoutMethod || 'bkash_personal'),
+            payoutAccountNumber: String(p.payoutAccountNumber || p.payoutWalletNumber || ''),
+            payoutLockUntil: p.payoutLockUntil ? String(p.payoutLockUntil) : null,
+            isCoolingLocked: Boolean(p.isCoolingLocked),
+            minPayoutThresholdBDT: Number(p.minPayoutThresholdBDT || 1000),
+            isFrozenForFraud: Boolean(p.isFrozenForFraud),
+            fraudReason: p.fraudReason ? String(p.fraudReason) : undefined,
             clicks: Number(p.totalClicks || 0),
             signups: Number(p.totalSignups || 0),
             activeConversions: Number(p.activeConversions || 0),
             tierLevel: tierLvl,
             commissionRate: rateVal,
-            commissionTier:
-              tierLvl === 'agency_30'
+            commissionTier: p.isFrozenForFraud
+              ? 'FROZEN FOR FRAUD INVESTIGATION'
+              : tierLvl === 'agency_30'
                 ? 'Tier 3 (Agency 30%)'
                 : tierLvl === 'pro_25'
                   ? 'Tier 2 (Pro 25%)'
@@ -1379,6 +1432,13 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
                         ? 'Rejected'
                         : 'Pending',
                   trxId: String(pay.admin_trx_id || pay.payout_gateway_ref || 'PENDING_ADMIN_APPROVAL'),
+                  affiliateUserId: pay.affiliate_user_id ? String(pay.affiliate_user_id) : undefined,
+                  payoutLockUntil: pay.payoutLockUntil ? String(pay.payoutLockUntil) : null,
+                  isCoolingLocked: Boolean(pay.isCoolingLocked),
+                  isFrozenForFraud: Boolean(pay.isFrozenForFraud),
+                  fraudReason: pay.fraudReason ? String(pay.fraudReason) : null,
+                  openFraudAlertsCount: Number(pay.openFraudAlertsCount || 0),
+                  rejectedReason: pay.rejected_reason ? String(pay.rejected_reason) : null,
                 })),
               }));
             }
@@ -2617,7 +2677,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     amount: number,
     method: string,
     accountNumber: string
-  ): Promise<{ ok: boolean; error?: string }> => {
+  ): Promise<{ ok: boolean; error?: string; code?: string; payoutLockUntil?: string }> => {
     try {
       const res = await fetch('/api/affiliate', {
         method: 'POST',
@@ -2631,7 +2691,12 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
-        return { ok: false, error: data.message || data.error || 'Payout request failed.' };
+        return {
+          ok: false,
+          code: data?.code,
+          payoutLockUntil: data?.payoutLockUntil,
+          error: data.message || data.error || 'Payout request failed.',
+        };
       }
 
       const newPayout: AffiliatePayout = {
@@ -2680,15 +2745,76 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         };
       }
 
-      setAffiliate((prev) => ({
-        ...prev,
-        payouts: prev.payouts.map((p) =>
-          p.id === payoutId ? { ...p, status: 'Completed', trxId: adminTrxId } : p
-        ),
-      }));
+      setAffiliate((prev) => {
+        const matched = prev.payouts.find((p) => p.id === payoutId);
+        return {
+          ...prev,
+          totalWithdrawnBDT: prev.totalWithdrawnBDT + (matched?.amount || 0),
+          payouts: prev.payouts.map((p) =>
+            p.id === payoutId ? { ...p, status: 'Completed', trxId: adminTrxId } : p
+          ),
+        };
+      });
       return { ok: true };
     } catch (err: any) {
       return { ok: false, error: err?.message || 'Payout approval network error.' };
+    }
+  };
+
+  const rejectAffiliatePayout = async (
+    payoutId: string,
+    reason: string,
+    forfeitForFraud = false
+  ): Promise<{ ok: boolean; requireSudo?: boolean; refundedToAvailable?: boolean; error?: string }> => {
+    try {
+      const res = await fetch('/api/affiliate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'reject_payout',
+          payoutId,
+          reason: reason.trim(),
+          forfeitForFraud,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        return {
+          ok: false,
+          requireSudo: Boolean(data.requireSudo),
+          error: data.message || data.error || 'Payout rejection failed.',
+        };
+      }
+
+      setAffiliate((prev) => {
+        const matched = prev.payouts.find((p) => p.id === payoutId);
+        return {
+          ...prev,
+          availableBalanceBDT:
+            !forfeitForFraud && matched
+              ? prev.availableBalanceBDT + matched.amount
+              : prev.availableBalanceBDT,
+          payouts: prev.payouts.map((p) =>
+            p.id === payoutId
+              ? {
+                  ...p,
+                  status: 'Rejected',
+                  rejectedReason: reason.trim(),
+                  isFrozenForFraud: forfeitForFraud ? true : p.isFrozenForFraud,
+                  fraudReason: forfeitForFraud ? reason.trim() : p.fraudReason,
+                }
+              : p
+          ),
+        };
+      });
+
+      await refreshUserData().catch(() => {});
+      return {
+        ok: true,
+        refundedToAvailable: Boolean(data.refundedToAvailable ?? !forfeitForFraud),
+      };
+    } catch (err: any) {
+      return { ok: false, error: err?.message || 'Payout rejection network error.' };
     }
   };
 
@@ -2749,12 +2875,35 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     );
   };
 
-  const freezeAffiliate = (userId: string, reason: string) => {
+  const freezeAffiliate = async (userId: string, reason: string) => {
+    try {
+      const res = await fetch('/api/affiliate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'freeze_partner',
+          affiliateUserId: userId,
+          reason,
+          freeze: true,
+        }),
+      });
+      if (res.ok) {
+        await refreshUserData().catch(() => {});
+      }
+    } catch {
+      // Fallback update below
+    }
     setAffiliate((prev) => ({
       ...prev,
+      isFrozenForFraud: true,
+      fraudReason: reason,
       commissionTier: 'FROZEN FOR FRAUD INVESTIGATION',
+      payouts: prev.payouts.map((p) =>
+        p.affiliateUserId === userId
+          ? { ...p, isFrozenForFraud: true, fraudReason: reason }
+          : p
+      ),
     }));
-    alert(`Affiliate ${userId} has been frozen. Reason: ${reason}`);
   };
 
   // ---------------------------------------------------------------------------
@@ -2886,17 +3035,56 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   };
 
   const runAutomationCronManually = async (): Promise<string[]> => {
-    await new Promise((res) => setTimeout(res, 1800));
-    return [
-      `[${new Date().toLocaleTimeString()}] Initializing DevHost WHMCS/WHM Dunning Engine...`,
-      `[${new Date().toLocaleTimeString()}] Connecting to WHM Node SG1 (103.145.22.40) & US East...`,
-      `[${new Date().toLocaleTimeString()}] Checking ${customers.length * 16} active cPanel and VPS accounts...`,
-      `[${new Date().toLocaleTimeString()}] Rule (7 Days): 2 renewal invoices generated for upcoming billing cycle.`,
-      `[${new Date().toLocaleTimeString()}] Rule (3 Days): Checked overdue invoices. 0 accounts suspended (all accounts in good standing).`,
-      `[${new Date().toLocaleTimeString()}] Rule (14 Days): Zero terminations required.`,
-      `[${new Date().toLocaleTimeString()}] JetBackup Cloud Snapshot Sync verified with AWS S3 Vault.`,
-      `[${new Date().toLocaleTimeString()}] System Cron execution completed successfully in 2.84s (0 errors).`,
-    ];
+    try {
+      const res = await fetch('/api/cron/lifecycle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dryRun: false }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        success?: boolean;
+        executionMode?: string;
+        summary?: {
+          renewalInvoicesCreated?: number;
+          autoRenewedViaWallet?: number;
+          accountsSuspendedOverdue?: number;
+          accountsTerminatedFinalSnapshot?: number;
+          affiliateCommissionsMaturedCount?: number;
+          affiliateCommissionsMaturedBDT?: number;
+          previewsPruned?: number;
+        };
+        logs?: string[];
+        errors?: string[];
+        message?: string;
+        error?: string;
+      };
+
+      if (!res.ok) {
+        return [
+          `[${new Date().toLocaleTimeString()}] Error (${res.status}): ${data?.message || data?.error || 'Cron execution failed.'}`,
+        ];
+      }
+
+      const outLogs = Array.isArray(data.logs) && data.logs.length > 0 ? [...data.logs] : [];
+      if (data.summary) {
+        outLogs.push(
+          `[${new Date().toLocaleTimeString()}] Summary (${data.executionMode || 'Manual'}): Invoices=${data.summary.renewalInvoicesCreated || 0}, AutoRenew=${data.summary.autoRenewedViaWallet || 0}, Suspended=${data.summary.accountsSuspendedOverdue || 0}, Terminated=${data.summary.accountsTerminatedFinalSnapshot || 0}, Matured=৳${data.summary.affiliateCommissionsMaturedBDT || 0}, PreviewsPruned=${data.summary.previewsPruned || 0}`
+        );
+      }
+      if (Array.isArray(data.errors) && data.errors.length > 0) {
+        for (const errLine of data.errors) {
+          outLogs.push(`[WARN] ${errLine}`);
+        }
+      }
+      await refreshUserData().catch(() => {});
+      return outLogs.length > 0
+        ? outLogs
+        : [`[${new Date().toLocaleTimeString()}] ${data.message || 'Lifecycle cron completed.'}`];
+    } catch (err: unknown) {
+      return [
+        `[${new Date().toLocaleTimeString()}] Network failure invoking /api/cron/lifecycle: ${err instanceof Error ? err.message : 'unknown'}`,
+      ];
+    }
   };
 
   const createCustomInvoice = (customerId: string, clientName: string, items: InvoiceItem[], dueDate: string) => {
@@ -3453,6 +3641,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         affiliate,
         requestAffiliatePayout,
         approveAffiliatePayout,
+        rejectAffiliatePayout,
         clawbackCommission,
 
         fraudAlerts,

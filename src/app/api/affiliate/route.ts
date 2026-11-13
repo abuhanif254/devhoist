@@ -13,7 +13,15 @@ import {
   maturePendingCommissions,
   recordVerifiedAffiliateConversion,
 } from '@/lib/affiliateEngine';
+import {
+  type BankAccountDetails,
+  loadAdminPartnerSecurityMap,
+  loadAffiliateMarketerVault,
+  normalizeShortPayoutMethod,
+  saveAffiliateMarketerVault,
+} from '@/lib/affiliateProfileVault';
 import { renderAffiliateEmail, sendEmail } from '@/lib/emailEngine';
+import { buildAffiliateReferralUrl } from '@/lib/siteUrl';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -64,12 +72,40 @@ export async function GET(request: Request) {
           .limit(150),
       ]);
 
+      const securityMap = await loadAdminPartnerSecurityMap(
+        db,
+        (affiliates || []) as Array<Record<string, unknown>>
+      );
+
+      const enrichedAffiliates = (affiliates || []).map((a: Record<string, unknown>) => {
+        const sec = securityMap.get(String(a.user_id || ''));
+        return {
+          ...a,
+          payoutLockUntil: sec?.payoutLockUntil || null,
+          isCoolingLocked: Boolean(sec?.isCoolingLocked),
+          openFraudAlertsCount: sec?.openFraudAlertsCount || 0,
+        };
+      });
+
+      const enrichedPayouts = (payouts || []).map((p: Record<string, unknown>) => {
+        const sec = securityMap.get(String(p.affiliate_user_id || ''));
+        return {
+          ...p,
+          payoutLockUntil: sec?.payoutLockUntil || null,
+          isCoolingLocked: Boolean(sec?.isCoolingLocked),
+          isFrozenForFraud: Boolean(sec?.isFrozenForFraud),
+          fraudReason: sec?.fraudReason || null,
+          openFraudAlertsCount: sec?.openFraudAlertsCount || 0,
+          openFraudAlerts: sec?.openFraudAlerts || [],
+        };
+      });
+
       return NextResponse.json({
         success: true,
         scope: 'admin',
-        affiliates: affiliates || [],
+        affiliates: enrichedAffiliates,
         commissions: commissions || [],
-        payouts: payouts || [],
+        payouts: enrichedPayouts,
       });
     }
 
@@ -82,11 +118,14 @@ export async function GET(request: Request) {
     }
 
     if (!isSupabaseConfigured()) {
+      const fallbackCode = auth.profile.referral_code || `dev-${auth.user.id.slice(0, 6)}`;
       return NextResponse.json({
         success: true,
         scope: 'self',
         profile: {
-          referralCode: auth.profile.referral_code || `dev-${auth.user.id.slice(0, 6)}`,
+          referralCode: fallbackCode,
+          customSlug: '',
+          refLink: buildAffiliateReferralUrl(fallbackCode),
           tierLevel: 'starter_20',
           commissionRate: 20,
           totalClicks: 0,
@@ -96,7 +135,21 @@ export async function GET(request: Request) {
           availableBalanceBDT: 0,
           totalWithdrawnBDT: 0,
           payoutMethod: 'bkash',
+          primaryPayoutMethod: 'bkash_personal',
           payoutAccountNumber: '',
+          payoutWalletNumber: '',
+          bankAccountDetails: {
+            bankName: '',
+            branchName: '',
+            accountHolderName: '',
+            accountNumber: '',
+            routingNumber: '',
+          },
+          payoutScheduleMode: 'manual',
+          minPayoutThresholdBDT: 1000,
+          conversionPostbackWebhookUrl: '',
+          payoutLockUntil: null,
+          isCoolingLocked: false,
           isFrozenForFraud: false,
         },
         commissions: [],
@@ -137,7 +190,8 @@ export async function GET(request: Request) {
       affProfile = created;
     }
 
-    const [{ data: commissions }, { data: payouts }] = await Promise.all([
+    const [vault, { data: commissions }, { data: payouts }] = await Promise.all([
+      loadAffiliateMarketerVault(db, auth.user.id, affProfile as Record<string, unknown> | null),
       db
         .from('affiliate_commissions')
         .select('*')
@@ -152,12 +206,19 @@ export async function GET(request: Request) {
         .limit(50),
     ]);
 
+    const resolvedReferralCode = String(
+      affProfile?.referral_code || auth.profile.referral_code || `dev-${auth.user.id.slice(0, 6)}`
+    );
+    const preferredShareToken = vault.customSlug || resolvedReferralCode;
+
     return NextResponse.json({
       success: true,
       scope: 'self',
       profile: {
-        referralCode: affProfile?.referral_code || auth.profile.referral_code || `dev-${auth.user.id.slice(0, 6)}`,
-        customSlug: affProfile?.custom_slug || '',
+        referralCode: resolvedReferralCode,
+        customSlug: vault.customSlug,
+        partnerDisplayName: vault.partnerDisplayName,
+        refLink: buildAffiliateReferralUrl(preferredShareToken),
         tierLevel: affProfile?.tier_level || 'starter_20',
         commissionRate: Number(affProfile?.commission_rate || 20),
         totalClicks: Number(affProfile?.total_clicks || 0),
@@ -166,8 +227,16 @@ export async function GET(request: Request) {
         pendingClearanceBDT: Number(affProfile?.pending_clearance_bdt || 0),
         availableBalanceBDT: Number(affProfile?.available_balance_bdt || 0),
         totalWithdrawnBDT: Number(affProfile?.total_withdrawn_bdt || 0),
-        payoutMethod: affProfile?.payout_method || 'bkash',
-        payoutAccountNumber: affProfile?.payout_account_number || '',
+        payoutMethod: vault.shortPayoutMethod,
+        primaryPayoutMethod: vault.primaryPayoutMethod,
+        payoutAccountNumber: vault.payoutWalletNumber || affProfile?.payout_account_number || '',
+        payoutWalletNumber: vault.payoutWalletNumber,
+        bankAccountDetails: vault.bankAccountDetails,
+        payoutScheduleMode: vault.payoutScheduleMode,
+        minPayoutThresholdBDT: vault.minPayoutThresholdBDT,
+        conversionPostbackWebhookUrl: vault.conversionPostbackWebhookUrl,
+        payoutLockUntil: vault.payoutLockUntil,
+        isCoolingLocked: vault.isCoolingLocked,
         isFrozenForFraud: Boolean(affProfile?.is_frozen_for_fraud),
         fraudReason: affProfile?.fraud_reason || undefined,
       },
@@ -388,20 +457,22 @@ export async function POST(request: Request) {
       }
 
       const numAmount = Number(body.amountBDT ?? 0);
-      const payoutMethod = String(body.payoutMethod || '').toLowerCase().trim();
+      const rawMethod = String(body.payoutMethod || '').toLowerCase().trim();
       const accountDetails = String(body.accountDetails || '').trim();
       const affiliateUserId = auth.user.id;
+
+      const allowedMethodInputs = ['bkash', 'nagad', 'bank', 'bkash_personal', 'nagad_personal', 'bank_eft'];
+      if (!allowedMethodInputs.includes(rawMethod) || !accountDetails) {
+        return NextResponse.json(
+          { error: 'Missing Details', message: 'Valid payout method (bkash/nagad/bank) and account details required.' },
+          { status: 400 }
+        );
+      }
+      const payoutMethod = normalizeShortPayoutMethod(rawMethod);
 
       if (isNaN(numAmount) || numAmount < 1000) {
         return NextResponse.json(
           { error: 'Invalid Amount', message: 'Minimum payout threshold is ৳1,000 BDT.' },
-          { status: 400 }
-        );
-      }
-
-      if (!['bkash', 'nagad', 'bank'].includes(payoutMethod) || !accountDetails) {
-        return NextResponse.json(
-          { error: 'Missing Details', message: 'Valid payout method (bkash/nagad/bank) and account details required.' },
           { status: 400 }
         );
       }
@@ -417,7 +488,7 @@ export async function POST(request: Request) {
       const supabase = getServiceSupabase();
       const { data: affProfile } = await supabase
         .from('affiliate_profiles')
-        .select('available_balance_bdt, is_frozen_for_fraud')
+        .select('available_balance_bdt, is_frozen_for_fraud, payout_method, payout_account_number, custom_slug')
         .eq('user_id', affiliateUserId)
         .maybeSingle();
 
@@ -429,6 +500,35 @@ export async function POST(request: Request) {
         return NextResponse.json(
           { error: 'Account Frozen', message: 'Your affiliate account is frozen due to fraud investigation.' },
           { status: 403 }
+        );
+      }
+
+      const vault = await loadAffiliateMarketerVault(
+        supabase,
+        affiliateUserId,
+        affProfile as Record<string, unknown>
+      );
+
+      if (vault.isCoolingLocked) {
+        return NextResponse.json(
+          {
+            error: 'Cooling Lock Active',
+            code: 'PAYOUT_COOLING_LOCK_ACTIVE',
+            payoutLockUntil: vault.payoutLockUntil,
+            message: `24-hour anti-hijack cooling lock active after payout destination change. Withdrawals unlock at ${vault.payoutLockUntil}.`,
+          },
+          { status: 423 }
+        );
+      }
+
+      const minThreshold = Math.max(1000, Number(vault.minPayoutThresholdBDT || 1000));
+      if (numAmount < minThreshold) {
+        return NextResponse.json(
+          {
+            error: 'Below Threshold',
+            message: `Minimum withdrawal threshold on your payout profile is ৳${minThreshold.toLocaleString()} BDT.`,
+          },
+          { status: 400 }
         );
       }
 
@@ -555,7 +655,7 @@ export async function POST(request: Request) {
       }
 
       const payoutAmount = Number(payout.amount_bdt || 0);
-      await db
+      const { data: casApproved, error: casApproveErr } = await db
         .from('affiliate_payouts')
         .update({
           status: 'approved_paid',
@@ -564,7 +664,27 @@ export async function POST(request: Request) {
           processed_by: adminAuth.user.id,
           processed_at: new Date().toISOString(),
         })
-        .eq('id', payoutId);
+        .eq('id', payoutId)
+        .eq('status', 'pending_review')
+        .select('*')
+        .maybeSingle();
+
+      if (casApproveErr) {
+        return NextResponse.json(
+          { error: `Failed to approve payout: ${casApproveErr.message}` },
+          { status: 500 }
+        );
+      }
+
+      if (!casApproved) {
+        return NextResponse.json(
+          {
+            error: 'Payout request was already approved, rejected, or transitioned concurrently.',
+            code: 'ALREADY_PROCESSED',
+          },
+          { status: 409 }
+        );
+      }
 
       const { data: affProfile } = await db
         .from('affiliate_profiles')
@@ -694,7 +814,7 @@ export async function POST(request: Request) {
         );
       }
 
-      await db
+      const { data: casRejected, error: casRejectErr } = await db
         .from('affiliate_payouts')
         .update({
           status: 'rejected_fraud',
@@ -702,7 +822,27 @@ export async function POST(request: Request) {
           processed_by: adminAuth.user.id,
           processed_at: new Date().toISOString(),
         })
-        .eq('id', payoutId);
+        .eq('id', payoutId)
+        .eq('status', 'pending_review')
+        .select('*')
+        .maybeSingle();
+
+      if (casRejectErr) {
+        return NextResponse.json(
+          { error: `Failed to reject payout: ${casRejectErr.message}` },
+          { status: 500 }
+        );
+      }
+
+      if (!casRejected) {
+        return NextResponse.json(
+          {
+            error: 'Payout request was already approved, rejected, or transitioned concurrently.',
+            code: 'ALREADY_PROCESSED',
+          },
+          { status: 409 }
+        );
+      }
 
       const { data: affProfile } = await db
         .from('affiliate_profiles')
@@ -761,20 +901,147 @@ export async function POST(request: Request) {
     }
 
     // --------------------------------------------------------------------------
-    // 7. UPDATE AFFILIATE PAYOUT SETTINGS (Authenticated Partner)
+    // 7. UPDATE AFFILIATE PAYOUT PROFILE / VAULT (Sudo-Verified + 24h Cooling Lock)
     // --------------------------------------------------------------------------
-    if (action === 'update_payout_settings') {
+    if (action === 'update_payout_profile' || action === 'update_payout_settings') {
       const auth = await requireUser(request);
       if (!auth.ok) return auth.response;
+
+      const sudoValid = await verifySudoToken(request, auth.user.id);
+      if (!sudoValid) {
+        return NextResponse.json(
+          {
+            error: 'Sudo verification required',
+            requireSudo: true,
+            message: 'Updating payout destination, postback webhook, or slug requires Sudo 2FA verification.',
+          },
+          { status: 403 }
+        );
+      }
 
       if (!isSupabaseConfigured() && !isDevSandboxMode()) {
         return serviceUnavailableResponse('Affiliate Settings');
       }
 
-      const payoutMethod = String(body.payoutMethod || 'bkash').toLowerCase().trim();
-      const accountDetails = String(body.accountDetails || '').trim();
-      if (!['bkash', 'nagad', 'bank'].includes(payoutMethod)) {
-        return NextResponse.json({ error: 'Invalid payoutMethod.' }, { status: 400 });
+      const primaryMethodInput = body.primaryPayoutMethod ?? body.payoutMethod;
+      const walletInput = body.payoutWalletNumber ?? body.accountDetails;
+
+      if (!isSupabaseConfigured()) {
+        const fallbackLock = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+        return NextResponse.json({
+          success: true,
+          payoutMethod: normalizeShortPayoutMethod(primaryMethodInput || 'bkash'),
+          primaryPayoutMethod: String(primaryMethodInput || 'bkash_personal'),
+          payoutWalletNumber: String(walletInput || ''),
+          payoutAccountNumber: String(walletInput || ''),
+          payoutLockUntil: fallbackLock,
+          isCoolingLocked: true,
+          lockTriggered: true,
+        });
+      }
+
+      const db = getServiceSupabase();
+      const { data: existingAff } = await db
+        .from('affiliate_profiles')
+        .select('*')
+        .eq('user_id', auth.user.id)
+        .maybeSingle();
+
+      if (!existingAff) {
+        const generatedCode = auth.profile.referral_code || `dev-${auth.user.id.slice(0, 6)}`;
+        await db.from('affiliate_profiles').upsert(
+          {
+            user_id: auth.user.id,
+            referral_code: generatedCode,
+            tier_level: 'starter_20',
+            commission_rate: 20.0,
+            payout_method: normalizeShortPayoutMethod(primaryMethodInput || 'bkash'),
+          },
+          { onConflict: 'user_id', ignoreDuplicates: true }
+        );
+      }
+
+      const saveRes = await saveAffiliateMarketerVault(
+        db,
+        auth.user.id,
+        {
+          partnerDisplayName:
+            typeof body.partnerDisplayName === 'string' ? body.partnerDisplayName : undefined,
+          customSlug: typeof body.customSlug === 'string' ? body.customSlug : undefined,
+          primaryPayoutMethod:
+            typeof primaryMethodInput === 'string' ? primaryMethodInput : undefined,
+          payoutWalletNumber: typeof walletInput === 'string' ? walletInput : undefined,
+          bankAccountDetails:
+            body.bankAccountDetails && typeof body.bankAccountDetails === 'object'
+              ? (body.bankAccountDetails as Partial<BankAccountDetails>)
+              : undefined,
+          payoutScheduleMode:
+            typeof body.payoutScheduleMode === 'string' ? body.payoutScheduleMode : undefined,
+          minPayoutThresholdBDT:
+            body.minPayoutThresholdBDT !== undefined
+              ? Number(body.minPayoutThresholdBDT)
+              : undefined,
+          conversionPostbackWebhookUrl:
+            typeof body.conversionPostbackWebhookUrl === 'string'
+              ? body.conversionPostbackWebhookUrl
+              : undefined,
+        },
+        (existingAff as Record<string, unknown> | null) || null
+      );
+
+      if (!saveRes.ok) {
+        return NextResponse.json(
+          { error: saveRes.code, message: saveRes.error },
+          { status: saveRes.status }
+        );
+      }
+
+      const refSlug =
+        saveRes.vault.customSlug ||
+        String(existingAff?.referral_code || auth.profile.referral_code || '');
+
+      return NextResponse.json({
+        success: true,
+        lockTriggered: saveRes.lockTriggered,
+        payoutMethod: saveRes.vault.shortPayoutMethod,
+        primaryPayoutMethod: saveRes.vault.primaryPayoutMethod,
+        payoutAccountNumber: saveRes.vault.payoutWalletNumber,
+        payoutWalletNumber: saveRes.vault.payoutWalletNumber,
+        bankAccountDetails: saveRes.vault.bankAccountDetails,
+        payoutScheduleMode: saveRes.vault.payoutScheduleMode,
+        minPayoutThresholdBDT: saveRes.vault.minPayoutThresholdBDT,
+        conversionPostbackWebhookUrl: saveRes.vault.conversionPostbackWebhookUrl,
+        customSlug: saveRes.vault.customSlug,
+        refLink: buildAffiliateReferralUrl(refSlug),
+        payoutLockUntil: saveRes.vault.payoutLockUntil,
+        isCoolingLocked: saveRes.vault.isCoolingLocked,
+      });
+    }
+
+    // --------------------------------------------------------------------------
+    // 7B. FREEZE / UNFREEZE PARTNER FOR FRAUD (Admin + Sudo Required)
+    // --------------------------------------------------------------------------
+    if (action === 'freeze_partner') {
+      const adminAuth = await requireAdmin(request);
+      if (!adminAuth.ok) return adminAuth.response;
+
+      const sudoValid = await verifySudoToken(request, adminAuth.user.id);
+      if (!sudoValid) {
+        return NextResponse.json(
+          {
+            error: 'Sudo verification required',
+            requireSudo: true,
+            message: 'Freezing an affiliate partner requires Sudo 2FA verification.',
+          },
+          { status: 403 }
+        );
+      }
+
+      const targetUserId = String(body.affiliateUserId || body.userId || '').trim();
+      const reason = String(body.reason || 'Suspicious self-referral / multi-account fraud pattern').trim();
+      const freeze = body.freeze !== false;
+      if (!targetUserId) {
+        return NextResponse.json({ error: 'affiliateUserId is required.' }, { status: 400 });
       }
 
       if (isSupabaseConfigured()) {
@@ -782,17 +1049,37 @@ export async function POST(request: Request) {
         await db
           .from('affiliate_profiles')
           .update({
-            payout_method: payoutMethod,
-            payout_account_number: accountDetails || null,
+            is_frozen_for_fraud: freeze,
+            fraud_reason: freeze ? reason : null,
             updated_at: new Date().toISOString(),
           })
-          .eq('user_id', auth.user.id);
+          .eq('user_id', targetUserId);
+
+        if (freeze) {
+          await createFraudAlert({
+            userId: targetUserId,
+            alertType: 'self_referral_attempt',
+            severity: 'critical',
+            details: { frozenByAdmin: adminAuth.user.id, reason },
+          }).catch(() => {});
+        }
+
+        await logSecurityAudit({
+          actorId: adminAuth.user.id,
+          actorRole: 'admin',
+          actionType: freeze ? 'AFFILIATE_PARTNER_FROZEN' : 'AFFILIATE_PARTNER_UNFROZEN',
+          targetResource: `affiliate:${targetUserId}`,
+          ipAddress: clientIp,
+          riskLevel: freeze ? 'high' : 'medium',
+          metadata: { reason, freeze },
+        }).catch(() => {});
       }
 
       return NextResponse.json({
         success: true,
-        payoutMethod,
-        payoutAccountNumber: accountDetails,
+        affiliateUserId: targetUserId,
+        isFrozenForFraud: freeze,
+        fraudReason: freeze ? reason : null,
       });
     }
 

@@ -1,7 +1,12 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "devhoist",
-	"main": ".open-next/worker.js",
+	"main": "worker-entry.mjs",
+	"triggers": {
+		"crons": [
+			"0 0 * * *"
+		]
+	},
 	"compatibility_date": "2024-12-30",
 	"compatibility_flags": [
 		"nodejs_compat",
@@ -36,6 +41,7 @@
 		]
 	},
 	"vars": {
+		"NEXT_PUBLIC_SITE_URL": "https://devhostcloud.com",
 		"NEXT_PUBLIC_SUPABASE_URL": "https://senlgfzhomodiyhnclfg.supabase.co",
 		"NEXT_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_6gzAgaJBxEW53W7hfUhA4Q_v1A3ZX_I",
 		"NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_6gzAgaJBxEW53W7hfUhA4Q_v1A3ZX_I"

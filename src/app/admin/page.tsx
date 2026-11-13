@@ -171,6 +171,7 @@ export default function AdminCommandCenterPage() {
 
     affiliate,
     approveAffiliatePayout,
+    rejectAffiliatePayout,
 
     fraudAlerts,
     auditLogs: securityAuditLogs,
@@ -2533,12 +2534,33 @@ export default function AdminCommandCenterPage() {
                       className="p-4 bg-white dark:bg-zinc-950/40 flex items-center justify-between text-xs font-mono"
                     >
                       <div>
-                        <strong className="text-slate-900 dark:text-white">{p.id} — ৳{p.amount.toLocaleString()}</strong>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <strong className="text-slate-900 dark:text-white">{p.id} — ৳{p.amount.toLocaleString()}</strong>
+                          {p.isCoolingLocked && (
+                            <span
+                              title={p.payoutLockUntil ? `Cooling lock until ${p.payoutLockUntil}` : '24h cooling lock'}
+                              className="px-2 py-0.5 rounded bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-500/30 text-[10px] font-bold"
+                            >
+                              24h Cooling Lock
+                            </span>
+                          )}
+                          {p.isFrozenForFraud && (
+                            <span className="px-2 py-0.5 rounded bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border border-rose-500/30 text-[10px] font-bold">
+                              Partner Frozen
+                            </span>
+                          )}
+                          {(p.openFraudAlertsCount || 0) > 0 && (
+                            <span className="px-2 py-0.5 rounded bg-red-500/15 text-red-600 dark:text-red-400 border border-red-500/30 text-[10px] font-bold">
+                              {p.openFraudAlertsCount} Fraud Alert{p.openFraudAlertsCount === 1 ? '' : 's'}
+                            </span>
+                          )}
+                        </div>
                         <div className="text-[11px] text-slate-400 mt-0.5">
                           Method: {p.method} • Account: {p.accountNumber} • Date: {p.date} • Trx: {p.trxId}
+                          {p.rejectedReason ? ` • Reason: ${p.rejectedReason}` : ''}
                         </div>
                       </div>
-                      <div>
+                      <div className="flex flex-wrap items-center gap-2">
                         {p.status === 'Completed' ? (
                           <span className="px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950 text-emerald-600 text-[10px] font-bold">
                             Paid ({p.trxId})
@@ -2548,26 +2570,70 @@ export default function AdminCommandCenterPage() {
                             Rejected
                           </span>
                         ) : (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              requireSudo(async () => {
-                                const enteredTrx = window.prompt(
-                                  `Enter verified bKash/Nagad/Bank TrxID for ৳${p.amount.toLocaleString()} payout:`
-                                );
-                                if (!enteredTrx || !enteredTrx.trim()) return;
-                                const res = await approveAffiliatePayout(p.id, enteredTrx.trim());
-                                if (res.ok) {
-                                  alert(`Payout ${p.id} approved and settled (TrxID: ${enteredTrx.trim()}).`);
-                                } else {
-                                  alert(res.error || 'Failed to approve payout.');
-                                }
-                              });
-                            }}
-                            className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold cursor-pointer"
-                          >
-                            Approve &amp; Mark Paid
-                          </button>
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                requireSudo(async () => {
+                                  const enteredTrx = window.prompt(
+                                    `Enter verified bKash/Nagad/Bank TrxID for ৳${p.amount.toLocaleString()} payout:`
+                                  );
+                                  if (!enteredTrx || !enteredTrx.trim()) return;
+                                  const res = await approveAffiliatePayout(p.id, enteredTrx.trim());
+                                  if (res.ok) {
+                                    alert(`Payout ${p.id} approved and settled (TrxID: ${enteredTrx.trim()}).`);
+                                  } else {
+                                    alert(res.error || 'Failed to approve payout.');
+                                  }
+                                }, 'Approve Affiliate Payout Settlement');
+                              }}
+                              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold cursor-pointer"
+                            >
+                              Approve &amp; Mark Paid
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                requireSudo(async () => {
+                                  const reason = window.prompt(
+                                    `Enter reason to reject payout ${p.id} and refund ৳${p.amount.toLocaleString()} back to partner wallet:`,
+                                    'Unverified payout account details'
+                                  );
+                                  if (!reason || !reason.trim()) return;
+                                  const res = await rejectAffiliatePayout(p.id, reason.trim(), false);
+                                  if (res.ok) {
+                                    alert(`Payout ${p.id} rejected and ৳${p.amount.toLocaleString()} refunded to partner available balance.`);
+                                  } else {
+                                    alert(res.error || 'Failed to reject payout.');
+                                  }
+                                }, 'Reject Affiliate Payout & Refund Balance');
+                              }}
+                              className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold cursor-pointer"
+                            >
+                              Reject &amp; Refund
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                requireSudo(async () => {
+                                  const reason = window.prompt(
+                                    `Enter fraud forfeiture reason to reject payout ${p.id} AND freeze partner account:`,
+                                    '4-Signal self-referral / multi-account ring violation'
+                                  );
+                                  if (!reason || !reason.trim()) return;
+                                  const res = await rejectAffiliatePayout(p.id, reason.trim(), true);
+                                  if (res.ok) {
+                                    alert(`Payout ${p.id} rejected and partner frozen for fraud.`);
+                                  } else {
+                                    alert(res.error || 'Failed to freeze partner.');
+                                  }
+                                }, 'Reject Payout & Freeze Partner For Fraud');
+                              }}
+                              className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold cursor-pointer"
+                            >
+                              Freeze (Fraud)
+                            </button>
+                          </>
                         )}
                       </div>
                     </div>

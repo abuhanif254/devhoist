@@ -588,7 +588,9 @@ export async function deployStaticEdgeRelease(params: {
   const sitePrefix = `sites/${siteKey}`;
   const releasePrefix = `${sitePrefix}/releases/${params.releaseId}`;
   const manifestKey = `${sitePrefix}/current.json`;
-  const edgeRouterUrl = `/api/edge-site?site=${encodeURIComponent(siteKey)}`;
+  const edgeOrigin = process.env.EDGE_SITES_ORIGIN?.trim().replace(/\/+$/, '');
+  const edgePath = `/api/edge-site?site=${encodeURIComponent(siteKey)}`;
+  const edgeRouterUrl = edgeOrigin ? `${edgeOrigin}${edgePath}` : edgePath;
 
   const defaultIndexHtml = `<!DOCTYPE html>
 <html lang="en">

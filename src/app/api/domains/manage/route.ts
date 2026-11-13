@@ -9,6 +9,10 @@ import {
   serviceUnavailableResponse,
 } from '@/lib/authGuard';
 import {
+  resolveDomainTldPriceBDT,
+  verifyPaidDomainEntitlement,
+} from '@/lib/billingEntitlements';
+import {
   addRegistrarChildNameserver,
   deleteRegistrarChildNameserver,
   getRegistrarEppCode,
@@ -100,6 +104,7 @@ export async function POST(request: NextRequest) {
       transferStep?: number | string;
       years?: number;
       deferRegistrarSubmit?: boolean;
+      invoiceNumber?: string;
     };
 
     const {
@@ -122,11 +127,13 @@ export async function POST(request: NextRequest) {
       transferStep,
       years,
       deferRegistrarSubmit,
+      invoiceNumber,
     } = body;
 
     const db = isSupabaseConfigured() ? getServiceSupabase() : null;
 
     let userId: string;
+    let userRole = 'client';
     let resolvedDomainId = domainId;
     let resolvedDomainName = domainName?.trim().toLowerCase();
 
@@ -134,20 +141,12 @@ export async function POST(request: NextRequest) {
       const auth = await requireUser(request);
       if (!auth.ok) return auth.response;
       userId = auth.user.id;
+      userRole = auth.role;
     } else if (action === 'update_transfer_step') {
-      const auth = await requireUser(request);
-      if (!auth.ok) return auth.response;
-      if (db && transferId) {
-        const { data: trf } = await db
-          .from('domain_transfers')
-          .select('user_id')
-          .eq('id', transferId)
-          .maybeSingle();
-        if (!trf || (trf.user_id !== auth.user.id && auth.role !== 'admin')) {
-          return NextResponse.json({ success: false, error: 'Forbidden transfer access.' }, { status: 403 });
-        }
-      }
-      userId = auth.user.id;
+      const adminAuth = await requireAdmin(request);
+      if (!adminAuth.ok) return adminAuth.response;
+      userId = adminAuth.user.id;
+      userRole = 'admin';
     } else if (action === 'sync_all_registrars') {
       const adminAuth = await requireAdmin(request);
       if (!adminAuth.ok) return adminAuth.response;
@@ -158,6 +157,7 @@ export async function POST(request: NextRequest) {
         );
       }
       userId = adminAuth.user.id;
+      userRole = 'admin';
     } else {
       if (!resolvedDomainId && db) {
         if (action === 'delete_child_nameserver' && childId) {
@@ -180,6 +180,7 @@ export async function POST(request: NextRequest) {
       const access = await requireDomainAccess(request, { domainId: resolvedDomainId, domainName });
       if (!access.ok) return access.response;
       userId = access.user.id;
+      userRole = access.role || (access.isAdmin ? 'admin' : 'client');
       resolvedDomainId = access.domainId || resolvedDomainId;
       resolvedDomainName = access.domainName || resolvedDomainName;
     }
@@ -646,6 +647,20 @@ export async function POST(request: NextRequest) {
       if (!resolvedDomainId || !activeDomainName) {
         return NextResponse.json({ success: false, error: 'Domain ID and domain name are required.' }, { status: 400 });
       }
+      const entitlement = await verifyPaidDomainEntitlement({
+        db,
+        userId,
+        role: userRole,
+        domain: activeDomainName,
+        operation: 'renew',
+        invoiceNumber: invoiceNumber || null,
+      });
+      if (!entitlement.entitled) {
+        return NextResponse.json(
+          { success: false, code: 'PAYMENT_REQUIRED', error: entitlement.reason },
+          { status: 402 }
+        );
+      }
       const renewalYears = Math.max(1, Math.min(10, Number(years || 1)));
       const regRes = await renewDomainWithRegistrar({ domain: activeDomainName, years: renewalYears });
       if (!regRes.ok) {
@@ -694,9 +709,10 @@ export async function POST(request: NextRequest) {
       }
 
       const cleanDomain = domainName.trim().toLowerCase();
-      const tld = cleanDomain.includes('.') ? cleanDomain.substring(cleanDomain.lastIndexOf('.')) : '.com';
+      const tldPricing = await resolveDomainTldPriceBDT(db, cleanDomain, 'transfer');
+      const tld = tldPricing.tld;
       const encryptedEpp = await encryptEppCode(eppCode.trim());
-      const transferPriceBDT = tld === '.com' ? 1250 : tld === '.net' ? 1450 : 1350;
+      const transferPriceBDT = tldPricing.found && tldPricing.unitPriceBDT > 0 ? tldPricing.unitPriceBDT : 1350;
 
       let registrarOrderId: string | null = null;
       let registrarProvider = isBdManualTld(cleanDomain) ? 'btcl_manual' : 'unconfigured';
@@ -705,6 +721,21 @@ export async function POST(request: NextRequest) {
       let statusMessage = 'Transfer initiated. Awaiting payment and initial registrar validation handshake.';
 
       if (!deferRegistrarSubmit) {
+        const entitlement = await verifyPaidDomainEntitlement({
+          db,
+          userId,
+          role: userRole,
+          domain: cleanDomain,
+          operation: 'transfer',
+          invoiceNumber: invoiceNumber || null,
+        });
+        if (!entitlement.entitled) {
+          return NextResponse.json(
+            { success: false, code: 'PAYMENT_REQUIRED', error: entitlement.reason },
+            { status: 402 }
+          );
+        }
+
         const regRes = await transferDomainWithRegistrar({
           domain: cleanDomain,
           eppCode: eppCode.trim(),

@@ -95,11 +95,11 @@ describe('Phase 2: Schema Reconciliation, Fail-Closed 503 Guards & Dynamic Catal
   afterEach(() => {
     controls.supabaseConfigured = true;
     controls.authenticated = true;
-    (process.env as Record<string, string | undefined>).NODE_ENV = envSnapshot.NODE_ENV;
-    (process.env as Record<string, string | undefined>).DEV_SANDBOX_MODE = envSnapshot.DEV_SANDBOX_MODE;
-    (process.env as Record<string, string | undefined>).WHM_HOST = envSnapshot.WHM_HOST;
-    (process.env as Record<string, string | undefined>).WHM_USERNAME = envSnapshot.WHM_USERNAME;
-    (process.env as Record<string, string | undefined>).WHM_API_TOKEN = envSnapshot.WHM_API_TOKEN;
+    const env = process.env as Record<string, string | undefined>;
+    for (const [k, v] of Object.entries(envSnapshot)) {
+      if (v === undefined) delete env[k];
+      else env[k] = v;
+    }
   });
 
   describe('DEV_SANDBOX_MODE Fail-Closed Gate', () => {

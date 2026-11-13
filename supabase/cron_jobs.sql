@@ -18,14 +18,15 @@ SELECT cron.schedule(
 );
 
 -- 3. Daily Midnight Job: Invoke Cloudflare Edge Lifecycle Endpoint via pg_net
--- (Replace with your live production URL and CRON_SECRET)
+-- IMPORTANT: Replace <YOUR_PRODUCTION_DOMAIN> and <YOUR_STRONG_CRON_SECRET>
+-- (must match the CRON_SECRET Cloudflare Worker secret — never commit live secrets!)
 SELECT cron.schedule(
     'invoke-devhost-lifecycle-cron',
     '5 0 * * *',
     $$
         SELECT net.http_post(
-            url := 'https://devhostcloud.com/api/cron/lifecycle',
-            headers := '{"Content-Type": "application/json", "Authorization": "Bearer devhost_cron_secret_key"}'::jsonb,
+            url := 'https://<YOUR_PRODUCTION_DOMAIN>/api/cron/lifecycle',
+            headers := '{"Content-Type": "application/json", "Authorization": "Bearer <YOUR_STRONG_CRON_SECRET>"}'::jsonb,
             body := '{"source": "pg_cron_scheduler"}'::jsonb
         );
     $$

@@ -14,6 +14,37 @@ export interface RateLimitResult {
   ip: string;
 }
 
+export function checkKeyedRateLimit(
+  bucketKey: string,
+  maxRequests: number = 10,
+  windowMs: number = 60 * 1000
+): RateLimitResult {
+  const now = Date.now();
+  const key = `keyed:${bucketKey}`;
+  const timestamps = (ipRequests.get(key) || []).filter((t) => now - t < windowMs);
+
+  if (timestamps.length >= maxRequests) {
+    const oldest = timestamps[0];
+    const reset = Math.max(1, Math.ceil((oldest + windowMs - now) / 1000));
+    return {
+      allowed: false,
+      remaining: 0,
+      reset,
+      ip: key,
+    };
+  }
+
+  timestamps.push(now);
+  ipRequests.set(key, timestamps);
+
+  return {
+    allowed: true,
+    remaining: maxRequests - timestamps.length,
+    reset: Math.ceil(windowMs / 1000),
+    ip: key,
+  };
+}
+
 export function checkRateLimit(
   request: Request,
   maxRequests: number = 30,

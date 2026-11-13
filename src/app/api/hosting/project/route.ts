@@ -169,14 +169,46 @@ export async function PUT(request: NextRequest) {
 
     if (isSupabaseConfigured()) {
       const db = getServiceSupabase();
+      const allowedSettings: Record<string, unknown> = {};
+      const ALLOWED_SETTING_FIELDS = [
+        'stack_slug',
+        'framework_preset',
+        'runtime_family',
+        'runtime_version',
+        'root_directory',
+        'install_command',
+        'build_command',
+        'output_directory',
+        'startup_file',
+        'git_repo_url',
+        'production_branch',
+        'auto_deploy_on_push',
+        'litespeed_cache_enabled',
+        'redis_object_cache_enabled',
+        'php_version',
+        'node_version',
+      ] as const;
+
+      if (settings && typeof settings === 'object') {
+        const rawSettings = settings as Record<string, unknown>;
+        for (const key of ALLOWED_SETTING_FIELDS) {
+          if (rawSettings[key] !== undefined) {
+            allowedSettings[key] = rawSettings[key];
+          }
+        }
+      }
+
       const { error } = await db
         .from('hosting_project_settings')
-        .upsert({
-          service_id: serviceId,
-          user_id: userId,
-          ...settings,
-          updated_at: new Date().toISOString(),
-        });
+        .upsert(
+          {
+            service_id: serviceId,
+            user_id: userId,
+            ...allowedSettings,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'service_id' }
+        );
 
       if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
     }

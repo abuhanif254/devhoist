@@ -25,6 +25,87 @@ function inferMimeType(filePath: string, fallback?: string): string {
   return fallback || 'application/octet-stream';
 }
 
+function isExecutableWebMime(contentType: string): boolean {
+  const lower = contentType.toLowerCase();
+  return (
+    lower.includes('text/html') ||
+    lower.includes('application/xhtml') ||
+    lower.includes('javascript') ||
+    lower.includes('ecmascript') ||
+    lower.includes('image/svg+xml')
+  );
+}
+
+function extractHostname(rawHostOrUrl: string | null | undefined): string {
+  if (!rawHostOrUrl) return '';
+  const trimmed = rawHostOrUrl.trim().toLowerCase();
+  if (!trimmed) return '';
+  try {
+    const parsed = trimmed.includes('://') ? new URL(trimmed) : new URL(`https://${trimmed}`);
+    return parsed.hostname.toLowerCase();
+  } catch {
+    return trimmed.split('/')[0].split(':')[0].trim().toLowerCase();
+  }
+}
+
+export function isEdgeExecutionOriginIsolated(request: NextRequest): {
+  allowed: boolean;
+  reason?: string;
+} {
+  const requestHost = extractHostname(
+    request.headers.get('host') || request.nextUrl.host || request.nextUrl.hostname
+  );
+  const dashboardHost = extractHostname(process.env.NEXT_PUBLIC_SITE_URL);
+  const wildcardBase = extractHostname(
+    process.env.EDGE_SITES_WILDCARD_DOMAIN?.replace(/^\*\./, '').replace(/^\./, '')
+  );
+  const edgeOriginHost = extractHostname(process.env.EDGE_SITES_ORIGIN);
+
+  if (wildcardBase) {
+    if (dashboardHost && requestHost === dashboardHost) {
+      return {
+        allowed: false,
+        reason: 'Tenant edge HTML/JS cannot execute on the primary dashboard origin.',
+      };
+    }
+    const matchesWildcard =
+      requestHost === wildcardBase || requestHost.endsWith(`.${wildcardBase}`);
+    return matchesWildcard
+      ? { allowed: true }
+      : {
+          allowed: false,
+          reason: `Edge site assets must be accessed via an isolated *.${wildcardBase} host.`,
+        };
+  }
+
+  if (edgeOriginHost) {
+    if (dashboardHost && requestHost === dashboardHost && requestHost !== edgeOriginHost) {
+      return {
+        allowed: false,
+        reason: 'Tenant edge HTML/JS cannot execute on the primary dashboard origin.',
+      };
+    }
+    return requestHost === edgeOriginHost
+      ? { allowed: true }
+      : {
+          allowed: false,
+          reason: `Edge site assets must be requested via the configured EDGE_SITES_ORIGIN (${edgeOriginHost}).`,
+        };
+  }
+
+  const isLoopback =
+    requestHost === 'localhost' || requestHost === '127.0.0.1' || requestHost === '::1';
+  if (isLoopback && process.env.NODE_ENV !== 'production') {
+    return { allowed: true };
+  }
+
+  return {
+    allowed: false,
+    reason:
+      'Isolated EDGE_SITES_ORIGIN or EDGE_SITES_WILDCARD_DOMAIN is required to execute tenant HTML/JS in production.',
+  };
+}
+
 function sanitizeAssetPath(rawPath: string | null): string {
   const cleaned = (rawPath || 'index.html')
     .replace(/\\/g, '/')
@@ -114,18 +195,51 @@ export async function GET(request: NextRequest) {
       ? new Uint8Array(assetObj.bodyBuffer)
       : new TextEncoder().encode(assetObj.bodyText || '');
     const contentType = inferMimeType(requestedPath, assetObj.contentType);
+    const activeWebMime = isExecutableWebMime(contentType);
+
+    if (activeWebMime) {
+      const isolation = isEdgeExecutionOriginIsolated(request);
+      if (!isolation.allowed) {
+        return NextResponse.json(
+          {
+            error: 'Edge Origin Isolation Enforced',
+            code: 'EDGE_ORIGIN_ISOLATION_REQUIRED',
+            message: isolation.reason,
+          },
+          {
+            status: 403,
+            headers: {
+              'X-Content-Type-Options': 'nosniff',
+              'Cache-Control': 'no-store',
+            },
+          }
+        );
+      }
+    }
+
+    const headers: Record<string, string> = {
+      'Content-Type': contentType,
+      'Cache-Control':
+        requestedPath === 'index.html'
+          ? 'public, max-age=60, stale-while-revalidate=300'
+          : 'public, max-age=31536000, immutable',
+      'X-DevHost-Edge-Router': 'r2',
+      'X-DevHost-Release': releaseId,
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'DENY',
+      'Referrer-Policy': 'no-referrer',
+      'Cross-Origin-Resource-Policy': 'cross-origin',
+    };
+
+    if (activeWebMime) {
+      // Force an opaque null origin without allow-same-origin so cookies/storage on any host stay unreachable
+      headers['Content-Security-Policy'] =
+        "sandbox allow-scripts; default-src 'none'; style-src 'unsafe-inline' 'self'; img-src * data:; font-src * data:; connect-src 'none'; form-action 'none'; frame-ancestors 'none';";
+    }
 
     return new NextResponse(bytes, {
       status: 200,
-      headers: {
-        'Content-Type': contentType,
-        'Cache-Control':
-          requestedPath === 'index.html'
-            ? 'public, max-age=60, stale-while-revalidate=300'
-            : 'public, max-age=31536000, immutable',
-        'X-DevHost-Edge-Router': 'r2',
-        'X-DevHost-Release': releaseId,
-      },
+      headers,
     });
   } catch (err: unknown) {
     return NextResponse.json(

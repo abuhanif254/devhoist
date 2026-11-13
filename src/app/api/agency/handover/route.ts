@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServiceSupabase, isSupabaseConfigured, isDevSandboxMode } from '@/lib/supabase';
 import { requireUser, requireServiceAccess, serviceUnavailableResponse } from '@/lib/authGuard';
+import { chargeWalletAtomic, resolveAuthoritativePlanMeta } from '@/lib/billingEntitlements';
 
 
 // Mock in-memory store for local sandbox testing if Supabase is offline
@@ -8,6 +9,9 @@ const inMemoryHandovers = new Map<string, any>();
 
 export async function GET(request: NextRequest) {
   try {
+    const auth = await requireUser(request);
+    if (!auth.ok) return auth.response;
+
     const { searchParams } = new URL(request.url);
     const token = searchParams.get('token');
     const devUserId = searchParams.get('devUserId');
@@ -23,6 +27,18 @@ export async function GET(request: NextRequest) {
             .single();
 
           if (data && !error) {
+            const isParticipant =
+              data.developer_user_id === auth.user.id ||
+              data.claimed_by_user_id === auth.user.id ||
+              (typeof data.client_email === 'string' &&
+                data.client_email.toLowerCase() === auth.profile.email.toLowerCase()) ||
+              auth.role === 'admin';
+            if (!isParticipant) {
+              return NextResponse.json(
+                { success: false, error: 'Forbidden: you are not an authorized recipient of this handover.' },
+                { status: 403 }
+              );
+            }
             return NextResponse.json({ success: true, handover: data });
           }
           if (!isDevSandboxMode()) {
@@ -54,7 +70,7 @@ export async function GET(request: NextRequest) {
           id: 'ho_mock_1',
           handover_token: token,
           client_name: 'TechCorp Solutions',
-          client_email: 'finance@techcorp.bd',
+          client_email: auth.profile.email || 'finance@techcorp.bd',
           project_title: 'Next.js Enterprise eCommerce & ERP Portal',
           plan_slug: 'developer-pro',
           billing_cycle: 'annual',
@@ -70,10 +86,6 @@ export async function GET(request: NextRequest) {
         },
       });
     }
-
-    // List handovers for authenticated developer only
-    const auth = await requireUser(request);
-    if (!auth.ok) return auth.response;
 
     const targetDevId = auth.role === 'admin' && devUserId ? devUserId : auth.user.id;
     if (isSupabaseConfigured()) {
@@ -121,7 +133,6 @@ export async function POST(request: NextRequest) {
       planSlug = 'developer-pro',
       billingCycle = 'annual',
       developerSetupFeeBDT = 0,
-      hostingPriceBDT = 4320,
     } = body;
 
     if (serviceId) {
@@ -142,23 +153,30 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const db = isSupabaseConfigured() ? getServiceSupabase() : null;
+    const planMeta = await resolveAuthoritativePlanMeta(db, String(planSlug || 'developer-pro'));
+    const cycleMonths = String(billingCycle).toLowerCase() === 'monthly' ? 1 : 12;
+    const annualDiscountFactor = cycleMonths === 12 ? 0.8 : 1;
+    const authoritativeHostingPriceBDT = Math.round(planMeta.monthlyPriceBDT * cycleMonths * annualDiscountFactor);
+    const safeSetupFeeBDT = Math.max(0, Math.round(Number(developerSetupFeeBDT) || 0));
+
     const handoverToken = `dh_ho_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 7)}`;
     const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
 
     const handoverRecord = {
       id: `ho_${Date.now()}`,
       handover_token: handoverToken,
-      developer_user_id: developerUserId || 'dev_master',
+      developer_user_id: developerUserId,
       developer_name: developerName || 'Agency Lead Developer',
-      service_id: serviceId || `srv_${Date.now()}`,
+      service_id: serviceId || null,
       client_name: clientName.trim(),
       client_email: clientEmail.trim().toLowerCase(),
       project_title: projectTitle.trim(),
-      plan_slug: planSlug,
-      billing_cycle: billingCycle,
-      developer_setup_fee_bdt: Number(developerSetupFeeBDT) || 0,
-      hosting_price_bdt: Number(hostingPriceBDT) || 4320,
-      total_payable_bdt: (Number(developerSetupFeeBDT) || 0) + (Number(hostingPriceBDT) || 4320),
+      plan_slug: planMeta.slug,
+      billing_cycle: cycleMonths === 1 ? 'monthly' : 'annual',
+      developer_setup_fee_bdt: safeSetupFeeBDT,
+      hosting_price_bdt: authoritativeHostingPriceBDT,
+      total_payable_bdt: safeSetupFeeBDT + authoritativeHostingPriceBDT,
       keep_developer_ssh_git_access: true,
       lock_recurring_affiliate_commission: true,
       status: 'pending_client_claim',
@@ -166,28 +184,23 @@ export async function POST(request: NextRequest) {
       created_at: new Date().toISOString(),
     };
 
-    if (isSupabaseConfigured()) {
-      try {
-        const db = getServiceSupabase();
-        await db.from('agency_handover_transfers').insert({
-          handover_token: handoverToken,
-          developer_user_id: developerUserId,
-          service_id: serviceId,
-          client_name: handoverRecord.client_name,
-          client_email: handoverRecord.client_email,
-          project_title: handoverRecord.project_title,
-          plan_slug: handoverRecord.plan_slug,
-          billing_cycle: handoverRecord.billing_cycle,
-          developer_setup_fee_bdt: handoverRecord.developer_setup_fee_bdt,
-          hosting_price_bdt: handoverRecord.hosting_price_bdt,
-          keep_developer_ssh_git_access: true,
-          lock_recurring_affiliate_commission: true,
-          status: 'pending_client_claim',
-          expires_at: expiresAt,
-        });
-      } catch (err) {
-        console.warn('[Handover DB Insert Warning]', err);
-      }
+    if (db) {
+      await db.from('agency_handover_transfers').insert({
+        handover_token: handoverToken,
+        developer_user_id: developerUserId,
+        service_id: serviceId || null,
+        client_name: handoverRecord.client_name,
+        client_email: handoverRecord.client_email,
+        project_title: handoverRecord.project_title,
+        plan_slug: handoverRecord.plan_slug,
+        billing_cycle: handoverRecord.billing_cycle,
+        developer_setup_fee_bdt: handoverRecord.developer_setup_fee_bdt,
+        hosting_price_bdt: handoverRecord.hosting_price_bdt,
+        keep_developer_ssh_git_access: true,
+        lock_recurring_affiliate_commission: true,
+        status: 'pending_client_claim',
+        expires_at: expiresAt,
+      });
     }
 
     inMemoryHandovers.set(handoverToken, handoverRecord);
@@ -210,7 +223,7 @@ export async function PUT(request: NextRequest) {
     if (!auth.ok) return auth.response;
 
     const body = await request.json();
-    const { handoverToken, trxId } = body;
+    const { handoverToken, trxId, invoiceNumber, payFromWallet } = body;
     const clientUserId = auth.user.id;
 
     if (!isSupabaseConfigured() && !isDevSandboxMode()) {
@@ -221,29 +234,111 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'Handover token is required' }, { status: 400 });
     }
 
+    let resolvedTrxId = typeof trxId === 'string' && trxId.trim() ? trxId.trim() : '';
+
     if (isSupabaseConfigured()) {
       const db = getServiceSupabase();
       const { data: existingHo } = await db
         .from('agency_handover_transfers')
-        .select('id, status, client_email')
+        .select('id, status, client_email, service_id, developer_setup_fee_bdt, hosting_price_bdt, plan_slug, project_title, expires_at')
         .eq('handover_token', handoverToken)
         .maybeSingle();
 
-      if (existingHo?.status === 'claimed_and_paid') {
+      if (!existingHo) {
+        return NextResponse.json({ error: 'Handover invitation not found.' }, { status: 404 });
+      }
+
+      if (existingHo.status === 'claimed_and_paid') {
         return NextResponse.json(
           { error: 'Handover token has already been claimed.' },
           { status: 409 }
         );
       }
 
+      if (existingHo.expires_at && new Date(String(existingHo.expires_at)).getTime() < Date.now()) {
+        return NextResponse.json(
+          { error: 'Handover invitation has expired.' },
+          { status: 410 }
+        );
+      }
+
       if (
-        existingHo?.client_email &&
+        existingHo.client_email &&
         existingHo.client_email.toLowerCase() !== auth.profile.email &&
         auth.role !== 'admin'
       ) {
         return NextResponse.json(
           { error: 'Forbidden: This handover invitation belongs to a different client email address.' },
           { status: 403 }
+        );
+      }
+
+      const requiredTotalBDT =
+        Number(existingHo.developer_setup_fee_bdt || 0) + Number(existingHo.hosting_price_bdt || 0);
+
+      // Verify genuine settlement (paid invoice, completed transaction, atomic wallet debit, or admin)
+      let paymentVerified = auth.role === 'admin' || requiredTotalBDT <= 0;
+
+      if (!paymentVerified && invoiceNumber) {
+        const { data: paidInv } = await db
+          .from('invoices')
+          .select('id, user_id, status, total_bdt, order_type, trx_id')
+          .eq('invoice_number', String(invoiceNumber).trim())
+          .eq('user_id', clientUserId)
+          .eq('status', 'paid')
+          .maybeSingle();
+
+        if (paidInv && Number(paidInv.total_bdt || 0) + 1 >= requiredTotalBDT) {
+          paymentVerified = true;
+          resolvedTrxId = String(paidInv.trx_id || resolvedTrxId || invoiceNumber);
+        }
+      }
+
+      if (!paymentVerified && resolvedTrxId) {
+        const { data: paidTx } = await db
+          .from('transactions')
+          .select('id, user_id, amount_bdt, status, trx_id')
+          .eq('trx_id', resolvedTrxId)
+          .eq('user_id', clientUserId)
+          .maybeSingle();
+
+        const txStatus = String(paidTx?.status || '').toLowerCase();
+        if (
+          paidTx &&
+          ['completed', 'settled', 'succeeded', 'paid'].includes(txStatus) &&
+          Number(paidTx.amount_bdt || 0) + 1 >= requiredTotalBDT
+        ) {
+          paymentVerified = true;
+        }
+      }
+
+      if (!paymentVerified && payFromWallet === true) {
+        const chargeRes = await chargeWalletAtomic({
+          db,
+          userId: clientUserId,
+          amountBDT: requiredTotalBDT,
+          description: `Agency Handover Claim: ${String(existingHo.project_title || handoverToken)}`,
+          orderType: 'agency_handover',
+          planId: existingHo.plan_slug ? String(existingHo.plan_slug) : null,
+        });
+        if (!chargeRes.ok) {
+          return NextResponse.json(
+            { error: chargeRes.error || 'Wallet settlement failed.', code: 'PAYMENT_REQUIRED' },
+            { status: chargeRes.statusCode || 402 }
+          );
+        }
+        paymentVerified = true;
+        resolvedTrxId = chargeRes.trxId || resolvedTrxId;
+      }
+
+      if (!paymentVerified) {
+        return NextResponse.json(
+          {
+            error: `Payment Required: Verify a paid gateway invoice/transaction for ৳${requiredTotalBDT} BDT or pay via Cloud Wallet before claiming ownership.`,
+            code: 'PAYMENT_REQUIRED',
+            requiredAmountBDT: requiredTotalBDT,
+          },
+          { status: 402 }
         );
       }
 
@@ -254,6 +349,16 @@ export async function PUT(request: NextRequest) {
           claimed_by_user_id: clientUserId,
         })
         .eq('handover_token', handoverToken);
+
+      if (existingHo.service_id) {
+        await db
+          .from('hosting_services')
+          .update({
+            user_id: clientUserId,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', existingHo.service_id);
+      }
     }
 
     const cached = inMemoryHandovers.get(handoverToken);
@@ -266,7 +371,7 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({
       success: true,
       message: 'Project claimed and service ownership successfully transferred to client account.',
-      trxId: trxId || `CLAIM-${Date.now()}`,
+      trxId: resolvedTrxId || `CLAIM-${Date.now()}`,
     });
   } catch (error: any) {
     console.error('[Handover Claim Error]', error);

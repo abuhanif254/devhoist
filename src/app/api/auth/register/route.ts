@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isSupabaseConfigured, getServiceSupabase, supabase } from '@/lib/supabase';
+import { isSupabaseConfigured, isDevSandboxMode, getServiceSupabase, supabase } from '@/lib/supabase';
+import { serviceUnavailableResponse } from '@/lib/authGuard';
 import { checkRateLimit } from '@/lib/edgeRateLimit';
+import { resolveSiteOrigin } from '@/lib/paymentGateways';
 
 
 export async function POST(req: NextRequest) {
@@ -32,21 +34,32 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (typeof password !== 'string' || password.length < 6) {
+    if (typeof password !== 'string' || password.length < 8) {
       return NextResponse.json(
-        { success: false, error: 'Password must be at least 6 characters long.' },
+        { success: false, error: 'Password must be at least 8 characters long.' },
         { status: 400 }
       );
     }
 
     const cleanEmail = String(email).trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(cleanEmail)) {
+      return NextResponse.json(
+        { success: false, error: 'Please provide a valid email address.' },
+        { status: 400 }
+      );
+    }
+
     const cleanName = String(fullName).trim();
     const cleanCompany = company ? String(company).trim() : '';
 
     if (!isSupabaseConfigured()) {
+      if (!isDevSandboxMode()) {
+        return serviceUnavailableResponse('Account Registration');
+      }
       return NextResponse.json({
         success: true,
-        message: 'Account registered successfully.',
+        requiresEmailVerification: true,
+        message: 'Account created in sandbox mode. Email verification required in production.',
         user: {
           id: `usr_${Date.now()}`,
           email: cleanEmail,
@@ -58,69 +71,49 @@ export async function POST(req: NextRequest) {
     }
 
     const db = getServiceSupabase();
-    let newUserId: string | null = null;
+    const siteOrigin = resolveSiteOrigin(req.nextUrl?.origin);
 
-    // 1. Try creating user via Admin API (which bypasses confirmation if service role key is present)
-    try {
-      const { data: authData, error: authError } = await db.auth.admin.createUser({
-        email: cleanEmail,
-        password: password,
-        email_confirm: true,
-        user_metadata: {
+    // Execute standard Supabase email-confirmed sign-up flow (never auto-verify emails via admin API)
+    const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+      email: cleanEmail,
+      password,
+      options: {
+        emailRedirectTo: `${siteOrigin}/login?verified=1`,
+        data: {
           full_name: cleanName,
           company: cleanCompany,
         },
-      });
+      },
+    });
 
-      if (!authError && authData?.user) {
-        newUserId = authData.user.id;
-      } else if (authError) {
-        const msg = authError.message || '';
-        if (msg.toLowerCase().includes('already registered') || msg.toLowerCase().includes('duplicate') || msg.toLowerCase().includes('exists')) {
-          return NextResponse.json(
-            { success: false, error: 'An account with this email address already exists. Please log in.' },
-            { status: 400 }
-          );
-        }
-        // If service key is invalid or not authorized, fallback to standard signUp below
-        console.warn('[Register Admin createUser notice]:', msg);
-      }
-    } catch (adminErr: any) {
-      console.warn('[Register Admin Exception]:', adminErr?.message);
-    }
-
-    // 2. Fallback to standard signUp if Admin API was not applicable
-    if (!newUserId) {
-      const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-        email: cleanEmail,
-        password: password,
-        options: {
-          data: {
-            full_name: cleanName,
-            company: cleanCompany,
-          },
-        },
-      });
-
-      if (signUpError) {
-        const msg = signUpError.message || 'Registration failed.';
-        if (msg.toLowerCase().includes('already registered') || msg.toLowerCase().includes('exists')) {
-          return NextResponse.json(
-            { success: false, error: 'An account with this email address already exists. Please sign in.' },
-            { status: 400 }
-          );
-        }
+    if (signUpError) {
+      const msg = signUpError.message || 'Registration failed.';
+      if (
+        msg.toLowerCase().includes('already registered') ||
+        msg.toLowerCase().includes('duplicate') ||
+        msg.toLowerCase().includes('exists')
+      ) {
         return NextResponse.json(
-          { success: false, error: msg },
+          { success: false, error: 'An account with this email address already exists. Please sign in.' },
           { status: 400 }
         );
       }
-
-      if (signUpData?.user) {
-        newUserId = signUpData.user.id;
-      }
+      return NextResponse.json({ success: false, error: msg }, { status: 400 });
     }
 
+    // Supabase returns an empty identities array when email confirmation is on and email already exists
+    if (
+      signUpData?.user &&
+      Array.isArray(signUpData.user.identities) &&
+      signUpData.user.identities.length === 0
+    ) {
+      return NextResponse.json(
+        { success: false, error: 'An account with this email address already exists. Please sign in.' },
+        { status: 400 }
+      );
+    }
+
+    const newUserId = signUpData?.user?.id || null;
     if (!newUserId) {
       return NextResponse.json(
         { success: false, error: 'Failed to create user record. Please try again.' },
@@ -128,7 +121,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 3. Ensure a clean profile record in public.profiles with strictly role='client' and wallet_balance_bdt=0
+    // Ensure a clean profile record in public.profiles with strictly role='client' and wallet_balance_bdt=0
     try {
       await db.from('profiles').upsert(
         {
@@ -136,8 +129,8 @@ export async function POST(req: NextRequest) {
           email: cleanEmail,
           full_name: cleanName,
           company_name: cleanCompany,
-          role: 'client', // Strictly client role on registration!
-          wallet_balance_bdt: 0, // Zero starting balance!
+          role: 'client',
+          wallet_balance_bdt: 0,
           created_at: new Date().toISOString(),
         },
         { onConflict: 'id' }
@@ -146,9 +139,13 @@ export async function POST(req: NextRequest) {
       console.warn('[Register Profile Upsert Warning]:', profileErr);
     }
 
+    const requiresVerification = !signUpData.session;
     return NextResponse.json({
       success: true,
-      message: 'Account created successfully! You can now log in.',
+      requiresEmailVerification: requiresVerification,
+      message: requiresVerification
+        ? 'Account created! Please confirm your email address via the verification link we sent before logging in.'
+        : 'Account created successfully! You can now log in.',
       user: {
         id: newUserId,
         email: cleanEmail,

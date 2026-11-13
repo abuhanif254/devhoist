@@ -3,6 +3,8 @@
  * AES-256-GCM .ENV Vault, Command Security Firewall, Cron Validator & GitHub HMAC Verifier
  */
 
+import { validateContainerCommand } from '@/lib/security';
+
 // ==============================================================================
 // 1. AES-256-GCM WEB CRYPTO .ENV VAULT
 // ==============================================================================
@@ -102,7 +104,7 @@ export async function decryptEnvValue(encryptedBase64: string): Promise<string> 
     );
 
     return new TextDecoder().decode(decryptedBuffer);
-  } catch (err) {
+  } catch {
     return '••••••••••••';
   }
 }
@@ -140,7 +142,7 @@ export function parseDotEnvFile(fileContent: string): ParsedEnvItem[] {
   const items: ParsedEnvItem[] = [];
   const keyRegex = /^[A-Z_][A-Z0-9_]*$/;
 
-  for (let rawLine of lines) {
+  for (const rawLine of lines) {
     const line = rawLine.trim();
     if (!line || line.startsWith('#')) continue;
 
@@ -155,7 +157,7 @@ export function parseDotEnvFile(fileContent: string): ParsedEnvItem[] {
       continue;
     }
 
-    let key = line.substring(0, eqIdx).trim();
+    const key = line.substring(0, eqIdx).trim();
     let value = line.substring(eqIdx + 1).trim();
 
     // Remove quotes if present
@@ -189,22 +191,6 @@ export function parseDotEnvFile(fileContent: string): ParsedEnvItem[] {
 // 3. COMMAND INJECTION SECURITY FIREWALL & CRON VALIDATOR
 // ==============================================================================
 
-const DANGEROUS_COMMAND_PATTERNS = [
-  /rm\s+-rf\s+(\/|\*|~|\$HOME|\/etc|\/bin|\/usr|\/var)/i,
-  /mkfs/i,
-  /dd\s+if=/i,
-  /:\(\)\s*\{\s*:\|:&\s*\}\s*;\s*:/, // Fork bomb
-  /\/dev\/tcp\//i,
-  /nc\s+.*-e/i,
-  /curl\s+.*\|\s*(sh|bash)/i,
-  /wget\s+.*\|\s*(sh|bash)/i,
-  /chmod\s+(-R\s+)?777\s+\//i,
-  />\s*\/etc\//i,
-  /cat\s+\/etc\/(shadow|passwd)/i,
-  /sudo\s+/i,
-  /iptables\s+-F/i,
-];
-
 export interface CommandValidationResult {
   allowed: boolean;
   reason?: string;
@@ -212,21 +198,16 @@ export interface CommandValidationResult {
 }
 
 export function validateShellCommand(cmd: string): CommandValidationResult {
-  const trimmed = cmd.trim();
-  if (!trimmed) {
-    return { allowed: false, reason: 'Command cannot be empty.' };
+  const result = validateContainerCommand(cmd, 'cron');
+  if (!result.valid) {
+    return {
+      allowed: false,
+      reason:
+        result.error ||
+        'CRITICAL SECURITY ALERT: Command rejected by DevHost Security Shield.',
+      isMalicious: true,
+    };
   }
-
-  for (const pattern of DANGEROUS_COMMAND_PATTERNS) {
-    if (pattern.test(trimmed)) {
-      return {
-        allowed: false,
-        reason: 'CRITICAL SECURITY ALERT: Potentially destructive shell command or reverse shell pattern detected and blocked by DevHost Security Shield.',
-        isMalicious: true,
-      };
-    }
-  }
-
   return { allowed: true };
 }
 
@@ -236,7 +217,7 @@ export function describeCronExpression(expression: string): { valid: boolean; de
     return { valid: false, description: 'Invalid syntax. Standard cron requires exactly 5 parts: min hour day month weekday.' };
   }
 
-  const [min, hour, dom, mon, dow] = parts;
+  const [min, hour, dom] = parts;
 
   if (expression === '* * * * *') return { valid: true, description: 'Runs every minute' };
   if (expression === '*/5 * * * *') return { valid: true, description: 'Runs every 5 minutes' };

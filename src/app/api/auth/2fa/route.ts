@@ -10,6 +10,7 @@ import {
   generateQrCodeSvg,
 } from '@/lib/totpEngine';
 import { getServiceSupabase } from '@/lib/supabase';
+import { checkKeyedRateLimit, checkRateLimit } from '@/lib/edgeRateLimit';
 import {
   requireUser,
   signSudoToken,
@@ -217,6 +218,19 @@ export async function POST(req: NextRequest) {
     // ACTION 4: VERIFY 2FA OR SUDO STEP-UP (Strictly server-stored secrets only)
     // -------------------------------------------------------------------------
     if (action === 'verify' || action === 'verify_sudo') {
+      const ipLimit = checkRateLimit(req, 10, 5 * 60 * 1000);
+      const userLimit = checkKeyedRateLimit(`2fa_verify:${auth.user.id}`, 5, 5 * 60 * 1000);
+      if (!ipLimit.allowed || !userLimit.allowed) {
+        const retryAfter = Math.max(ipLimit.reset, userLimit.reset);
+        return NextResponse.json(
+          {
+            success: false,
+            error: `Too many 2FA / Sudo verification attempts. Locked for ${retryAfter} seconds.`,
+          },
+          { status: 429, headers: { 'Retry-After': String(retryAfter) } }
+        );
+      }
+
       const tokenInput = body.token || body.code;
       const sudoPinInput = body.sudoPin;
       const backupCodeInput = body.backupCode;
@@ -330,6 +344,17 @@ export async function POST(req: NextRequest) {
     // ACTION 6: DISABLE 2FA (Requires active verified Sudo cookie OR valid TOTP/PIN)
     // -------------------------------------------------------------------------
     if (action === 'disable') {
+      const userDisableLimit = checkKeyedRateLimit(`2fa_disable:${auth.user.id}`, 5, 5 * 60 * 1000);
+      if (!userDisableLimit.allowed) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: `Too many 2FA disable attempts. Retry in ${userDisableLimit.reset} seconds.`,
+          },
+          { status: 429, headers: { 'Retry-After': String(userDisableLimit.reset) } }
+        );
+      }
+
       const hasActiveSudo = await verifySudoToken(req, auth.user.id);
       let authorized = hasActiveSudo;
 

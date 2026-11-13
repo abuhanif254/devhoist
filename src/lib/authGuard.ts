@@ -164,7 +164,8 @@ export async function requireUser(req: Request): Promise<AuthSuccess | AuthFailu
     };
   }
 
-  const resolvedRole: 'client' | 'admin' = profileRow?.role === 'admin' ? 'admin' : 'client';
+  const resolvedRole: 'client' | 'admin' =
+    profileRow?.role === 'admin' || profileRow?.role === 'superadmin' ? 'admin' : 'client';
   const profile: AuthenticatedProfile = {
     id: user.id,
     email: String(profileRow?.email || user.email || '').toLowerCase(),

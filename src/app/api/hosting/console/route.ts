@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServiceSupabase, isDevSandboxMode } from '@/lib/supabase';
-import { validateCronCommand, logSecurityAudit } from '@/lib/security';
+import {
+  validateContainerCommand,
+  validateScopedSqlQuery,
+  logSecurityAudit,
+} from '@/lib/security';
 import { requireServiceAccess, serviceUnavailableResponse } from '@/lib/authGuard';
 import {
   execContainerCommandOnAgent,
@@ -493,7 +497,7 @@ export async function POST(req: NextRequest) {
     const target = await resolveServiceComputeTarget(supabaseAdmin, serviceId, userId);
 
     if (consoleType === 'jailed_ssh') {
-      const check = validateCronCommand(commandOrQuery);
+      const check = validateContainerCommand(commandOrQuery, 'ssh');
       if (!check.valid) {
         if (supabaseAdmin && userId) {
           await supabaseAdmin.from('terminal_and_sql_logs').insert({
@@ -574,13 +578,13 @@ export async function POST(req: NextRequest) {
     }
 
     // Mode B: SQL Query Runner
-    const upperSql = commandOrQuery.trim().toUpperCase();
-    if (upperSql.includes('DROP DATABASE') || upperSql.includes('SHUTDOWN')) {
+    const sqlCheck = validateScopedSqlQuery(commandOrQuery);
+    if (!sqlCheck.valid) {
       return NextResponse.json(
         {
           success: false,
           blockedByFirewall: true,
-          error: 'Security Alert: DROP DATABASE and server SHUTDOWN statements are prohibited in the SQL Query Lab.',
+          error: sqlCheck.error,
         },
         { status: 403 }
       );

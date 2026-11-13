@@ -372,9 +372,17 @@ export async function POST(request: NextRequest) {
               .from('project_deployments')
               .select('id, commit_sha, r2_artifact_key')
               .eq('id', targetDeploymentId)
+              .eq('service_id', serviceId)
               .maybeSingle()
           ).data
         : null;
+
+      if (db && !targetDepRow) {
+        return NextResponse.json(
+          { success: false, error: 'Forbidden or missing deployment for this hosting service.' },
+          { status: 404 }
+        );
+      }
 
       if (target.runtimeFamily === 'static_edge') {
         if (!isR2ArtifactsConfigured() && !sandbox) {
@@ -421,14 +429,15 @@ export async function POST(request: NextRequest) {
           .eq('service_id', serviceId)
           .eq('is_current_production', true);
 
-        // Promote target deployment to current production
+        // Promote target deployment to current production (strictly scoped to service_id)
         const { error } = await db
           .from('project_deployments')
           .update({
             is_current_production: true,
             status: 'live_production',
           })
-          .eq('id', targetDeploymentId);
+          .eq('id', targetDeploymentId)
+          .eq('service_id', serviceId);
 
         if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
       }

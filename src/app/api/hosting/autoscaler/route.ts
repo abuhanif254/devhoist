@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServiceSupabase, isDevSandboxMode } from '@/lib/supabase';
 import { calculatePlanUpgradeProRata } from '@/lib/profitEngine';
-import { requireServiceAccess, serviceUnavailableResponse } from '@/lib/authGuard';
+import { requireServiceAccess, serviceUnavailableResponse, verifySudoToken } from '@/lib/authGuard';
+import { chargeWalletAtomic, resolveAuthoritativePlanMeta } from '@/lib/billingEntitlements';
 import {
   isComputeAgentConfigured,
   scaleContainerResourcesOnAgent,
@@ -114,10 +115,6 @@ export async function POST(req: NextRequest) {
       edgeWafMode = 'standard',
       blockedCountries = [],
       rateLimitReqPerMin = 300,
-      currentPlanMonthlyBDT = 499,
-      targetPlanMonthlyBDT = 999,
-      remainingDaysInCycle = 18,
-      walletBalanceBDT = 1500,
     } = body as {
       action: 'save_rules' | 'simulate_spike_autoscale' | 'scale_now';
       serviceId: string;
@@ -224,12 +221,87 @@ export async function POST(req: NextRequest) {
         return serviceUnavailableResponse('Compute Auto-Scaler Agent');
       }
 
+      if (action === 'scale_now' && access.role !== 'admin') {
+        const sudoOk = await verifySudoToken(req, userId);
+        if (!sudoOk) {
+          return NextResponse.json(
+            { success: false, error: 'Sudo verification required before billing a container scale upgrade.', requireSudo: true },
+            { status: 403 }
+          );
+        }
+      }
+
+      let billingOwnerId = userId;
+      let currentPlanSlug = 'developer-pro';
+      let currentMonthlyPrice: number | null = null;
+      let remainingDays = 15;
+      let ruleTargetSlug = 'business-max';
+      let ruleBudgetCap = 1200;
+      let ruleAutoscaleEnabled = false;
+      let authorWalletBalanceBDT = 0;
+
+      if (supabaseAdmin) {
+        const { data: srvRow } = await supabaseAdmin
+          .from('hosting_services')
+          .select('user_id, plan_id, price_bdt, next_due_date, domain')
+          .eq('id', serviceId)
+          .maybeSingle();
+
+        if (srvRow) {
+          if (srvRow.user_id) billingOwnerId = String(srvRow.user_id);
+          if (srvRow.plan_id) currentPlanSlug = String(srvRow.plan_id);
+          if (Number(srvRow.price_bdt) > 0) currentMonthlyPrice = Number(srvRow.price_bdt);
+          if (srvRow.next_due_date) {
+            const daysLeft = Math.ceil((new Date(String(srvRow.next_due_date)).getTime() - Date.now()) / 86400000);
+            remainingDays = Math.max(1, Math.min(30, Number.isFinite(daysLeft) ? daysLeft : 15));
+          }
+        }
+
+        const { data: ruleRow } = await supabaseAdmin
+          .from('service_autoscaling_rules')
+          .select('autoscale_enabled, target_upgrade_plan_slug, max_monthly_budget_cap_bdt')
+          .eq('service_id', serviceId)
+          .maybeSingle();
+
+        if (ruleRow) {
+          ruleAutoscaleEnabled = Boolean(ruleRow.autoscale_enabled);
+          if (ruleRow.target_upgrade_plan_slug) ruleTargetSlug = String(ruleRow.target_upgrade_plan_slug);
+          if (Number(ruleRow.max_monthly_budget_cap_bdt) > 0) {
+            ruleBudgetCap = Number(ruleRow.max_monthly_budget_cap_bdt);
+          }
+        }
+
+        const { data: profRow } = await supabaseAdmin
+          .from('profiles')
+          .select('wallet_balance_bdt')
+          .eq('id', billingOwnerId)
+          .maybeSingle();
+        authorWalletBalanceBDT = Number(profRow?.wallet_balance_bdt ?? 0);
+      } else if (sandbox) {
+        authorWalletBalanceBDT = 1500;
+      }
+
+      if (action === 'simulate_spike_autoscale' && !ruleAutoscaleEnabled && !sandbox) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'Autonomous spike auto-scaling is disabled in service rules. Enable Auto-Scale first.',
+          },
+          { status: 403 }
+        );
+      }
+
+      const currentPlanMeta = await resolveAuthoritativePlanMeta(supabaseAdmin, currentPlanSlug);
+      const targetPlanMeta = await resolveAuthoritativePlanMeta(supabaseAdmin, ruleTargetSlug);
+      const effectiveCurrentMonthly = currentMonthlyPrice ?? currentPlanMeta.monthlyPriceBDT;
+      const effectiveTargetMonthly = targetPlanMeta.monthlyPriceBDT;
+
       const proRata = calculatePlanUpgradeProRata({
-        currentPlanMonthlyBDT: Number(currentPlanMonthlyBDT) || 499,
-        targetPlanMonthlyBDT: Number(targetPlanMonthlyBDT) || 999,
-        remainingDaysInCycle: Number(remainingDaysInCycle) || 18,
-        customerMaxBudgetCapBDT: Number(maxMonthlyBudgetCapBdt) || 1200,
-        walletBalanceBDT: Number(walletBalanceBDT) || 1500,
+        currentPlanMonthlyBDT: effectiveCurrentMonthly,
+        targetPlanMonthlyBDT: effectiveTargetMonthly,
+        remainingDaysInCycle: remainingDays,
+        customerMaxBudgetCapBDT: ruleBudgetCap,
+        walletBalanceBDT: authorWalletBalanceBDT,
       });
 
       if (!proRata.isWithinBudgetCap) {
@@ -241,8 +313,43 @@ export async function POST(req: NextRequest) {
         });
       }
 
-      const upgradedRamMB = proRata.targetPlanMonthlyBDT >= 999 ? 4096 : 2048;
-      const upgradedCpuCores = proRata.targetPlanMonthlyBDT >= 999 ? 2 : 1;
+      if (proRata.proRataChargeBDT > 0 && !proRata.walletCoversUpgrade) {
+        return NextResponse.json(
+          {
+            success: false,
+            proRata,
+            blockedReason: 'insufficient_wallet_balance',
+            code: 'PAYMENT_REQUIRED',
+            error: `Insufficient Cloud Wallet balance (৳${authorWalletBalanceBDT} BDT) for pro-rata upgrade charge of ৳${proRata.proRataChargeBDT} BDT.`,
+          },
+          { status: 402 }
+        );
+      }
+
+      if (supabaseAdmin && proRata.proRataChargeBDT > 0) {
+        const chargeRes = await chargeWalletAtomic({
+          db: supabaseAdmin,
+          userId: billingOwnerId,
+          amountBDT: proRata.proRataChargeBDT,
+          description: `Autoscaler Upgrade (${currentPlanMeta.slug} -> ${targetPlanMeta.slug}) for ${domain || target.domain}`,
+          orderType: 'autoscaler_upgrade',
+          planId: targetPlanMeta.slug,
+          domain: domain || target.domain,
+        });
+        if (!chargeRes.ok) {
+          return NextResponse.json(
+            {
+              success: false,
+              blockedReason: 'wallet_charge_failed',
+              error: chargeRes.error || 'Failed to settle pro-rata upgrade charge.',
+            },
+            { status: chargeRes.statusCode || 402 }
+          );
+        }
+      }
+
+      const upgradedRamMB = Math.max(2048, targetPlanMeta.ramMb);
+      const upgradedCpuCores = Math.max(1, targetPlanMeta.cpuCores);
 
       const scaleRes = await scaleContainerResourcesOnAgent(
         {
@@ -269,8 +376,10 @@ export async function POST(req: NextRequest) {
         await supabaseAdmin
           .from('hosting_services')
           .update({
+            plan_id: targetPlanMeta.slug,
+            plan_name: targetPlanMeta.name,
+            price_bdt: effectiveTargetMonthly,
             ram_limit_mb: upgradedRamMB,
-            cpu_limit: upgradedCpuCores * 100,
             updated_at: now,
           })
           .eq('id', serviceId);

@@ -186,10 +186,25 @@ export async function POST(req: NextRequest) {
       const branch = branchName || 'feat/bkash-instant-webhook';
 
       if (supabaseAdmin && previewId) {
+        const { data: targetPreview } = await supabaseAdmin
+          .from('hosting_preview_environments')
+          .select('id')
+          .eq('id', previewId)
+          .eq('service_id', serviceId)
+          .maybeSingle();
+
+        if (!targetPreview) {
+          return NextResponse.json(
+            { success: false, error: 'Preview environment not found for this hosting service.' },
+            { status: 404 }
+          );
+        }
+
         await supabaseAdmin
           .from('hosting_preview_environments')
           .update({ status: 'promoted_to_prod' })
-          .eq('id', previewId);
+          .eq('id', previewId)
+          .eq('service_id', serviceId);
 
         if (userId) {
           await supabaseAdmin
@@ -224,10 +239,25 @@ export async function POST(req: NextRequest) {
 
     if (action === 'destroy_preview') {
       if (supabaseAdmin && previewId) {
+        const { data: targetPreview } = await supabaseAdmin
+          .from('hosting_preview_environments')
+          .select('id')
+          .eq('id', previewId)
+          .eq('service_id', serviceId)
+          .maybeSingle();
+
+        if (!targetPreview) {
+          return NextResponse.json(
+            { success: false, error: 'Preview environment not found for this hosting service.' },
+            { status: 404 }
+          );
+        }
+
         await supabaseAdmin
           .from('hosting_preview_environments')
           .delete()
-          .eq('id', previewId);
+          .eq('id', previewId)
+          .eq('service_id', serviceId);
       }
 
       return NextResponse.json({

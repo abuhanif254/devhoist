@@ -78,17 +78,27 @@ export async function GET(req: Request) {
       },
     });
 
-    if (!txErr || txErr.code !== '23505') {
-      await fulfillPaidInvoiceAndAffiliate({
-        db,
-        invoice,
-        gateway: 'bkash',
-        trxId: execRes.trxID,
-        amountBDT: execRes.amountBDT || expectedTotal,
-        buyerIp: clientIp,
-        senderPhone: execRes.customerMsisdn,
-      });
+    if (txErr) {
+      if (txErr.code === '23505') {
+        return NextResponse.redirect(
+          `${siteUrl}/dashboard?payment=success&gateway=bkash&invoice=${encodeURIComponent(invoiceNumber)}&trx=${encodeURIComponent(execRes.trxID)}&duplicate=1`
+        );
+      }
+      console.error('[bKash Callback] Transaction ledger insert failed:', txErr);
+      return NextResponse.redirect(
+        `${siteUrl}/dashboard?payment=failed&gateway=bkash&invoice=${encodeURIComponent(invoiceNumber)}&reason=ledger_error`
+      );
     }
+
+    await fulfillPaidInvoiceAndAffiliate({
+      db,
+      invoice,
+      gateway: 'bkash',
+      trxId: execRes.trxID,
+      amountBDT: execRes.amountBDT || expectedTotal,
+      buyerIp: clientIp,
+      senderPhone: execRes.customerMsisdn,
+    });
   }
 
   return NextResponse.redirect(

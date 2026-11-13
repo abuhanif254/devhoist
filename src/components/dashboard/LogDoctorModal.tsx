@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   X,
   Stethoscope,
@@ -9,16 +9,11 @@ import {
   AlertCircle,
   Wrench,
   Sparkles,
-  ArrowRight,
   ShieldCheck,
   RefreshCw,
   Loader2,
 } from 'lucide-react';
-import {
-  DiagnosticReport,
-  DiagnosticIssue,
-  ServiceDiagnosticInput,
-} from '@/lib/logDoctorEngine';
+import { DiagnosticReport } from '@/lib/logDoctorEngine';
 
 interface LogDoctorModalProps {
   isOpen: boolean;
@@ -38,10 +33,10 @@ export default function LogDoctorModal({
   onClose,
   serviceId,
   domain,
-  serverIp = '103.151.102.45',
-  inodesUsed = 38400,
+  serverIp = '',
+  inodesUsed = 0,
   inodeLimit = 250000,
-  ramUsedMB = 420,
+  ramUsedMB = 0,
   ramLimitMB = 2048,
   onAutoFixComplete,
 }: LogDoctorModalProps) {
@@ -50,7 +45,7 @@ export default function LogDoctorModal({
   const [fixingAction, setFixingAction] = useState<string | null>(null);
   const [fixSuccessMessages, setFixSuccessMessages] = useState<Record<string, string>>({});
 
-  const runDiagnosticScan = async () => {
+  const runDiagnosticScan = useCallback(async () => {
     setLoading(true);
     setFixSuccessMessages({});
 
@@ -75,13 +70,20 @@ export default function LogDoctorModal({
     } finally {
       setLoading(false);
     }
-  };
+  }, [serviceId, domain, serverIp, inodesUsed, inodeLimit, ramUsedMB, ramLimitMB]);
 
   useEffect(() => {
-    if (isOpen) {
-      runDiagnosticScan();
-    }
-  }, [isOpen, serviceId, domain]);
+    if (!isOpen || !serviceId) return;
+    let active = true;
+    void Promise.resolve().then(async () => {
+      if (active) {
+        await runDiagnosticScan();
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [isOpen, serviceId, runDiagnosticScan]);
 
   const handleExecuteFix = async (fixActionCode: string) => {
     setFixingAction(fixActionCode);

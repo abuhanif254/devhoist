@@ -12,6 +12,7 @@ import {
   resolveSiteOrigin,
 } from '@/lib/paymentGateways';
 import { calculateOrderProfitBreakdown } from '@/lib/profitEngine';
+import { resolveDomainTldPriceBDT } from '@/lib/billingEntitlements';
 
 export async function POST(req: Request) {
   const rateLimit = checkRateLimit(req, 20, 60 * 1000);
@@ -61,6 +62,10 @@ export async function POST(req: Request) {
       return serviceUnavailableResponse('Payment Checkout');
     }
 
+    if (gateway === 'stripe' && !process.env.STRIPE_SECRET_KEY?.trim() && !isDevSandboxMode()) {
+      return serviceUnavailableResponse('Stripe Checkout');
+    }
+
     const billingCycle: 'monthly' | 'annually' =
       body.billingCycle === 'annually' || firstItem.billingCycle === 'annually'
         ? 'annually'
@@ -68,6 +73,7 @@ export async function POST(req: Request) {
     const freeDomainApplied = Boolean(body.freeDomainApplied ?? firstItem.freeDomainApplied);
     const domain = String(body.domain || firstItem.domain || '').trim();
     const planSlugOrId = String(body.planSlug || body.planId || firstItem.planSlug || firstItem.planId || '').trim();
+    const handoverToken = String(body.handoverToken || firstItem.handoverToken || '').trim();
     const promoCodeInput = String(body.promoCode || '').trim().toUpperCase();
 
     // Parse referral attribution from body or Edge middleware devhost_aff_ref cookie
@@ -93,20 +99,27 @@ export async function POST(req: Request) {
     let totalBDT = rawAmountBDT;
     let verifiedPlanName = String(body.planName || firstItem.name || 'DevHost Cloud Service');
 
-    if (db && orderType !== 'wallet_topup' && planSlugOrId) {
-      const pidSlugMap: Record<string, string> = {
-        '1': 'starter',
-        '2': 'developer-pro',
-        '3': 'business-max',
-      };
-      const resolvedSlug = (pidSlugMap[planSlugOrId] || planSlugOrId).toLowerCase();
-      const { data: planRow } = await db
-        .from('catalog_hosting_plans')
-        .select('id, slug, name_en, selling_price_monthly_bdt, unit_server_cost_bdt, min_owner_profit_bdt, annual_discount_percent, whm_package_name')
-        .eq('slug', resolvedSlug)
-        .maybeSingle();
+    if (db && orderType !== 'wallet_topup') {
+      if (planSlugOrId) {
+        const pidSlugMap: Record<string, string> = {
+          '1': 'starter',
+          '2': 'developer-pro',
+          '3': 'business-max',
+        };
+        const resolvedSlug = (pidSlugMap[planSlugOrId] || planSlugOrId).toLowerCase();
+        const { data: planRow } = await db
+          .from('catalog_hosting_plans')
+          .select('id, slug, name_en, selling_price_monthly_bdt, unit_server_cost_bdt, min_owner_profit_bdt, annual_discount_percent, whm_package_name')
+          .eq('slug', resolvedSlug)
+          .maybeSingle();
 
-      if (planRow) {
+        if (!planRow) {
+          return NextResponse.json(
+            { error: `Unknown or inactive hosting plan "${planSlugOrId}". Cannot verify server pricing.` },
+            { status: 400 }
+          );
+        }
+
         verifiedPlanName = String(planRow.name_en || verifiedPlanName);
         const monthlyPrice = Number(planRow.selling_price_monthly_bdt || 0);
         const annualDiscount = Number(planRow.annual_discount_percent ?? 20);
@@ -168,8 +181,8 @@ export async function POST(req: Request) {
           }
         }
 
-        // Prevent client amount tampering (> ৳5 delta vs server price)
-        if (Math.abs(totalBDT - rawAmountBDT) > 5 && !firstItem.customBundleTotal) {
+        // Prevent client amount tampering (> ৳5 delta vs server price; zero customBundleTotal bypass!)
+        if (Math.abs(totalBDT - rawAmountBDT) > 5) {
           return NextResponse.json(
             {
               error: `Price tampering detected: client supplied ৳${rawAmountBDT} BDT, authoritative server total is ৳${totalBDT} BDT.`,
@@ -177,6 +190,90 @@ export async function POST(req: Request) {
             { status: 400 }
           );
         }
+      } else if (
+        orderType === 'domain_registration' ||
+        orderType === 'domain_renewal' ||
+        orderType === 'domain_transfer'
+      ) {
+        if (!domain || !domain.includes('.')) {
+          return NextResponse.json(
+            { error: 'A valid domain name is required for domain billing verification.' },
+            { status: 400 }
+          );
+        }
+        const years = Math.max(1, Math.min(10, Number(body.years ?? firstItem.years ?? 1)));
+        const op =
+          orderType === 'domain_renewal'
+            ? 'renew'
+            : orderType === 'domain_transfer'
+            ? 'transfer'
+            : 'register';
+        const tldPricing = await resolveDomainTldPriceBDT(db, domain, op);
+        if (!tldPricing.found || tldPricing.unitPriceBDT <= 0) {
+          return NextResponse.json(
+            { error: `Unsupported or inactive TLD "${tldPricing.tld}" for checkout.` },
+            { status: 400 }
+          );
+        }
+        const effectiveYears = op === 'transfer' ? 1 : years;
+        subtotalBDT = Math.round(tldPricing.unitPriceBDT * effectiveYears);
+        discountBDT = 0;
+        totalBDT = subtotalBDT;
+        verifiedPlanName = `Domain ${op.toUpperCase()}: ${domain} (${effectiveYears}y)`;
+
+        if (Math.abs(totalBDT - rawAmountBDT) > 5) {
+          return NextResponse.json(
+            {
+              error: `Price tampering detected: client supplied ৳${rawAmountBDT} BDT, authoritative domain price is ৳${totalBDT} BDT.`,
+            },
+            { status: 400 }
+          );
+        }
+      } else if (orderType === 'agency_handover') {
+        if (!handoverToken) {
+          return NextResponse.json(
+            { error: 'handoverToken is required to settle an agency handover invoice.' },
+            { status: 400 }
+          );
+        }
+        const { data: ho } = await db
+          .from('agency_handover_transfers')
+          .select('id, status, client_email, developer_setup_fee_bdt, hosting_price_bdt, project_title, plan_slug')
+          .eq('handover_token', handoverToken)
+          .maybeSingle();
+
+        if (!ho || ho.status !== 'pending_client_claim') {
+          return NextResponse.json(
+            { error: 'Handover invitation not found or already claimed.' },
+            { status: 404 }
+          );
+        }
+
+        const expectedTotal = Math.max(
+          1,
+          Number(ho.developer_setup_fee_bdt || 0) + Number(ho.hosting_price_bdt || 0)
+        );
+        subtotalBDT = expectedTotal;
+        discountBDT = 0;
+        totalBDT = expectedTotal;
+        verifiedPlanName = `Agency Handover: ${String(ho.project_title || ho.plan_slug || 'Project')}`;
+
+        if (Math.abs(totalBDT - rawAmountBDT) > 5) {
+          return NextResponse.json(
+            {
+              error: `Price tampering detected: client supplied ৳${rawAmountBDT} BDT, authoritative handover total is ৳${totalBDT} BDT.`,
+            },
+            { status: 400 }
+          );
+        }
+      } else {
+        return NextResponse.json(
+          {
+            error:
+              'A valid catalog planId, domain orderType, or handoverToken is required so the server can enforce pricing.',
+          },
+          { status: 400 }
+        );
       }
     }
 

@@ -227,25 +227,81 @@ export async function verifyBackupCode(
   return { valid: true, remainingHashedCodes };
 }
 
+const PIN_PBKDF2_ITERATIONS = 100000;
+
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function hexToBytes(hex: string): Uint8Array {
+  const clean = hex.trim().toLowerCase();
+  const out = new Uint8Array(Math.floor(clean.length / 2));
+  for (let i = 0; i < out.length; i++) {
+    out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+}
+
+async function derivePinPbkdf2Hex(pin: string, salt: Uint8Array, iterations: number): Promise<string> {
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(`devhost_sudo_pin_${pin}`),
+    { name: 'PBKDF2' },
+    false,
+    ['deriveBits']
+  );
+  const derivedBits = await crypto.subtle.deriveBits(
+    {
+      name: 'PBKDF2',
+      salt: salt.buffer.slice(salt.byteOffset, salt.byteOffset + salt.byteLength) as ArrayBuffer,
+      iterations,
+      hash: 'SHA-256',
+    },
+    keyMaterial,
+    256
+  );
+  return bytesToHex(new Uint8Array(derivedBits));
+}
+
 /**
- * Hashes a 6-digit Master Sudo PIN using SHA-256
+ * Hashes a 6-digit Master Sudo PIN using salted PBKDF2-SHA256 (100,000 iterations)
  */
 export async function hashSecurityPin(pin: string): Promise<string> {
   const clean = pin.trim();
   if (!/^\d{6}$/.test(clean)) {
     throw new Error('Sudo PIN must be exactly 6 digits');
   }
-  return sha256Hex(`devhost_sudo_pin_${clean}`);
+  const salt = new Uint8Array(16);
+  crypto.getRandomValues(salt);
+  const derivedHex = await derivePinPbkdf2Hex(clean, salt, PIN_PBKDF2_ITERATIONS);
+  return `pbkdf2_sha256$${PIN_PBKDF2_ITERATIONS}$${bytesToHex(salt)}$${derivedHex}`;
 }
 
 /**
- * Verifies a 6-digit Master Sudo PIN against stored hash
+ * Verifies a 6-digit Master Sudo PIN against stored salted PBKDF2 hash (with legacy SHA-256 fallback)
  */
 export async function verifySecurityPin(pin: string, storedHash: string): Promise<boolean> {
   const clean = pin.trim();
-  if (!/^\d{6}$/.test(clean)) return false;
-  const computed = await hashSecurityPin(clean);
-  return constantTimeEquals(computed, storedHash);
+  if (!/^\d{6}$/.test(clean) || !storedHash) return false;
+
+  if (storedHash.startsWith('pbkdf2_sha256$')) {
+    const parts = storedHash.split('$');
+    if (parts.length !== 4) return false;
+    const iterations = Number(parts[1]);
+    const saltHex = parts[2];
+    const expectedHex = parts[3];
+    if (!Number.isFinite(iterations) || iterations < 10000 || !saltHex || !expectedHex) {
+      return false;
+    }
+    const derivedHex = await derivePinPbkdf2Hex(clean, hexToBytes(saltHex), iterations);
+    return constantTimeEquals(derivedHex, expectedHex);
+  }
+
+  // Backward-compatible check for legacy unsalted SHA-256 PIN rows
+  const legacyHash = await sha256Hex(`devhost_sudo_pin_${clean}`);
+  return constantTimeEquals(legacyHash, storedHash);
 }
 
 /**

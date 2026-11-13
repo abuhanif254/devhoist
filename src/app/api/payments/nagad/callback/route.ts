@@ -79,17 +79,27 @@ export async function GET(req: Request) {
       },
     });
 
-    if (!txErr || txErr.code !== '23505') {
-      await fulfillPaidInvoiceAndAffiliate({
-        db,
-        invoice,
-        gateway: 'nagad',
-        trxId: verified.trxId,
-        amountBDT: verified.amountBDT || expectedTotal,
-        buyerIp: clientIp,
-        senderPhone: verified.clientMobileNo,
-      });
+    if (txErr) {
+      if (txErr.code === '23505') {
+        return NextResponse.redirect(
+          `${siteUrl}/dashboard?payment=success&gateway=nagad&invoice=${encodeURIComponent(invoiceNumber)}&trx=${encodeURIComponent(verified.trxId)}&duplicate=1`
+        );
+      }
+      console.error('[Nagad Callback] Transaction ledger insert failed:', txErr);
+      return NextResponse.redirect(
+        `${siteUrl}/dashboard?payment=failed&gateway=nagad&invoice=${encodeURIComponent(invoiceNumber)}&reason=ledger_error`
+      );
     }
+
+    await fulfillPaidInvoiceAndAffiliate({
+      db,
+      invoice,
+      gateway: 'nagad',
+      trxId: verified.trxId,
+      amountBDT: verified.amountBDT || expectedTotal,
+      buyerIp: clientIp,
+      senderPhone: verified.clientMobileNo,
+    });
   }
 
   return NextResponse.redirect(

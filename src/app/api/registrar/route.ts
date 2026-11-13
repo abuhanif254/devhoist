@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { checkRateLimit } from '@/lib/edgeRateLimit';
 import { getServiceSupabase, isSupabaseConfigured, isDevSandboxMode } from '@/lib/supabase';
 import { requireUser, requireDomainAccess, serviceUnavailableResponse } from '@/lib/authGuard';
+import { verifyPaidDomainEntitlement } from '@/lib/billingEntitlements';
 import { validateDnsRecord } from '@/lib/dnsEngine';
 import type { DnsRecord } from '@/context/PortalContext';
 import { sendTelegramAlert } from '@/lib/adminNotifier';
@@ -43,19 +44,25 @@ export async function POST(request: Request) {
     }
 
     let ownerUserId: string;
+    let actorRole = 'client';
     if (action === 'register') {
       const auth = await requireUser(request);
       if (!auth.ok) return auth.response;
       ownerUserId = auth.user.id;
+      actorRole = auth.role;
     } else {
       const access = await requireDomainAccess(request, { domainName: rawDomain });
       if (!access.ok) return access.response;
       ownerUserId = access.user.id;
+      actorRole = access.role || (access.isAdmin ? 'admin' : 'client');
     }
 
     if (!isSupabaseConfigured() && !isDevSandboxMode()) {
       return serviceUnavailableResponse('Domain Registrar Gateway');
     }
+
+    const invoiceNumber =
+      typeof body.invoiceNumber === 'string' ? body.invoiceNumber.trim() : null;
 
     // 1. UPDATE NAMESERVERS
     if (action === 'update_nameservers') {
@@ -251,9 +258,24 @@ export async function POST(request: Request) {
 
     // 4. REGISTER DOMAIN (Live ResellerClub/Namecheap EPP or .bd BTCL Manual Queue)
     if (action === 'register') {
-      if (isSupabaseConfigured()) {
-        const supabase = getServiceSupabase();
-        const { data: existing } = await supabase
+      const regDb = isSupabaseConfigured() ? getServiceSupabase() : null;
+      const entitlement = await verifyPaidDomainEntitlement({
+        db: regDb,
+        userId: ownerUserId,
+        role: actorRole,
+        domain: rawDomain,
+        operation: 'register',
+        invoiceNumber,
+      });
+      if (!entitlement.entitled) {
+        return NextResponse.json(
+          { error: 'Payment Required', code: 'PAYMENT_REQUIRED', message: entitlement.reason },
+          { status: 402 }
+        );
+      }
+
+      if (regDb) {
+        const { data: existing } = await regDb
           .from('domains')
           .select('id, user_id')
           .eq('domain_name', rawDomain)
@@ -352,6 +374,22 @@ export async function POST(request: Request) {
 
     // 5. RENEW DOMAIN
     if (action === 'renew') {
+      const regDb = isSupabaseConfigured() ? getServiceSupabase() : null;
+      const entitlement = await verifyPaidDomainEntitlement({
+        db: regDb,
+        userId: ownerUserId,
+        role: actorRole,
+        domain: rawDomain,
+        operation: 'renew',
+        invoiceNumber,
+      });
+      if (!entitlement.entitled) {
+        return NextResponse.json(
+          { error: 'Payment Required', code: 'PAYMENT_REQUIRED', message: entitlement.reason },
+          { status: 402 }
+        );
+      }
+
       const years = Math.max(1, Math.min(10, Number(body.years || 1)));
       const regRes = await renewDomainWithRegistrar({ domain: rawDomain, years });
       if (!regRes.ok) {
@@ -399,6 +437,22 @@ export async function POST(request: Request) {
 
     // 6. TRANSFER DOMAIN (EPP Submission)
     if (action === 'transfer') {
+      const regDb = isSupabaseConfigured() ? getServiceSupabase() : null;
+      const entitlement = await verifyPaidDomainEntitlement({
+        db: regDb,
+        userId: ownerUserId,
+        role: actorRole,
+        domain: rawDomain,
+        operation: 'transfer',
+        invoiceNumber,
+      });
+      if (!entitlement.entitled) {
+        return NextResponse.json(
+          { error: 'Payment Required', code: 'PAYMENT_REQUIRED', message: entitlement.reason },
+          { status: 402 }
+        );
+      }
+
       const eppCode = String(body.eppCode || body.authCode || '').trim();
       if (!eppCode) {
         return NextResponse.json(

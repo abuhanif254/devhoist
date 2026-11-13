@@ -475,6 +475,27 @@ describe('Phase 4: Real Domain Registrar & Cloudflare Anycast Edge Plane', () =>
   });
 
   it('POST /api/registrar fails closed with HTTP 503 when registrar unconfigured outside sandbox, and routes .bd to Pending BTCL queue', async () => {
+    mockStore.state.invoices.push(
+      {
+        id: 'inv-reg-1',
+        invoice_number: 'DEV-INV-REG1',
+        user_id: USER_ID,
+        status: 'paid',
+        order_type: 'domain_registration',
+        bundled_domain_name: 'newstartup.com',
+        items: [{ type: 'domain_registration', domain: 'newstartup.com' }],
+      },
+      {
+        id: 'inv-reg-2',
+        invoice_number: 'DEV-INV-REG2',
+        user_id: USER_ID,
+        status: 'paid',
+        order_type: 'domain_registration',
+        bundled_domain_name: 'dhakamart.com.bd',
+        items: [{ type: 'domain_registration', domain: 'dhakamart.com.bd' }],
+      }
+    );
+
     const unconfRes = await registrarPost(
       jsonReq('http://localhost/api/registrar', 'POST', {
         action: 'register',
@@ -507,6 +528,18 @@ describe('Phase 4: Real Domain Registrar & Cloudflare Anycast Edge Plane', () =>
   });
 
   it('POST /api/registrar executes live ResellerClub registration + Cloudflare zone creation for .com domains', async () => {
+    mockStore.state.invoices.push({
+      id: 'inv-reg-3',
+      invoice_number: 'DEV-INV-REG3',
+      user_id: USER_ID,
+      status: 'paid',
+      order_type: 'hosting_order',
+      billing_cycle: 'annually',
+      free_domain_bundle_applied: true,
+      bundled_domain_name: 'cloudbengal.com',
+      items: [{ type: 'hosting_order', domain: 'cloudbengal.com' }],
+    });
+
     process.env.REGISTRAR_PROVIDER = 'resellerclub';
     process.env.REGISTRAR_API_USER = 'rc_user';
     process.env.REGISTRAR_API_KEY = 'rc_key';

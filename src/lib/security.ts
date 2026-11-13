@@ -186,7 +186,6 @@ export function clearLoginAttempts(identifier: string) {
 // 4. bKASH & NAGAD trxID ANTI-FRAUD VALIDATOR
 // ------------------------------------------------------------------------------
 const usedTrxIdCache = new Set<string>();
-const failedTrxSubmissionCounter = new Map<string, number>();
 
 export interface TrxValidationResult {
   valid: boolean;
@@ -369,6 +368,170 @@ export function validateCronCommand(command: string): CronValidationResult {
         error: 'Security Alert: Command blocked by platform shell firewall (potential destructive or remote injection pattern detected).',
       };
     }
+  }
+
+  return { valid: true };
+}
+
+const ALLOWED_SSH_BINARIES = new Set([
+  'ls',
+  'pwd',
+  'whoami',
+  'id',
+  'cat',
+  'head',
+  'tail',
+  'grep',
+  'find',
+  'stat',
+  'du',
+  'df',
+  'env',
+  'printenv',
+  'uname',
+  'ps',
+  'free',
+  'top',
+  'node',
+  'npm',
+  'npx',
+  'pnpm',
+  'yarn',
+  'bun',
+  'php',
+  'composer',
+  'python3',
+  'python',
+  'pip',
+  'pip3',
+  'git',
+  'pm2',
+  'help',
+]);
+
+const ALLOWED_CRON_BINARIES = new Set([
+  ...ALLOWED_SSH_BINARIES,
+  'curl',
+]);
+
+const DISALLOWED_CLI_EXEC_FLAGS = new Set([
+  '-e',
+  '--eval',
+  '-c',
+  '--exec',
+  '-p',
+  '--print',
+  '-r',
+  '--require',
+  '--upload-pack',
+]);
+
+/**
+ * Strict binary-allowlist and operator-free validator replacing fragile regex denylists
+ * for jailed container SSH & scheduled cron jobs.
+ */
+export function validateContainerCommand(
+  command: string,
+  context: 'ssh' | 'cron' = 'ssh'
+): { valid: boolean; binary?: string; args?: string[]; error?: string } {
+  const baseCheck = validateCronCommand(command);
+  if (!baseCheck.valid) {
+    return { valid: false, error: baseCheck.error };
+  }
+
+  let body = command.trim();
+  if (body.length > 512) {
+    return { valid: false, error: 'Command exceeds 512 character limit.' };
+  }
+
+  if (/[\r\n\0]/.test(body)) {
+    return { valid: false, error: 'Control characters and multi-line commands are prohibited.' };
+  }
+
+  if (context === 'cron') {
+    body = body.replace(/\s*>\s*\/dev\/null(?:\s+2>&1)?\s*$/i, '').trim();
+  }
+
+  if (/[;|&$`<>(){}\\]/.test(body)) {
+    return {
+      valid: false,
+      error: 'Security Alert: Shell chaining, subshells, pipes, and redirection operators are blocked.',
+    };
+  }
+
+  const tokens = body.split(/\s+/).filter(Boolean);
+  if (tokens.length === 0 || tokens.length > 16) {
+    return { valid: false, error: 'Invalid command token count.' };
+  }
+
+  const binary = tokens[0].toLowerCase();
+  const allowedSet = context === 'cron' ? ALLOWED_CRON_BINARIES : ALLOWED_SSH_BINARIES;
+  if (!allowedSet.has(binary)) {
+    return {
+      valid: false,
+      error: `Security Alert: Executable "${tokens[0]}" is not permitted in jailed ${context} mode.`,
+    };
+  }
+
+  for (const arg of tokens.slice(1)) {
+    if (arg.includes('..')) {
+      return { valid: false, error: 'Path traversal ".." is prohibited in command arguments.' };
+    }
+    const flagName = arg.toLowerCase().split('=')[0];
+    if (DISALLOWED_CLI_EXEC_FLAGS.has(flagName)) {
+      return {
+        valid: false,
+        error: `Security Alert: Inline code evaluation flag "${arg}" is blocked.`,
+      };
+    }
+  }
+
+  return { valid: true, binary, args: tokens.slice(1) };
+}
+
+/**
+ * Scoped SQL validator allowing analytical reads & tenant table DML while blocking
+ * stacked statements, file system reads/writes, and cluster-wide DDL/admin commands.
+ */
+export function validateScopedSqlQuery(query: string): { valid: boolean; error?: string } {
+  const raw = String(query || '').trim();
+  if (!raw) {
+    return { valid: false, error: 'SQL query cannot be empty.' };
+  }
+  if (raw.length > 8192) {
+    return { valid: false, error: 'SQL query exceeds 8192 character limit.' };
+  }
+
+  const withoutTrailingSemi = raw.replace(/;\s*$/, '');
+  if (withoutTrailingSemi.includes(';')) {
+    return {
+      valid: false,
+      error: 'Security Alert: Multi-statement SQL execution with semicolons is prohibited.',
+    };
+  }
+
+  const normalized = withoutTrailingSemi
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/--[^\r\n]*/g, ' ')
+    .trim()
+    .toUpperCase();
+
+  if (
+    /\b(DROP\s+DATABASE|DROP\s+SCHEMA|SHUTDOWN|ALTER\s+SYSTEM|CREATE\s+EXTENSION|COPY\b.*\bPROGRAM|INTO\s+(OUTFILE|DUMPFILE)|LOAD_FILE|PG_READ_FILE|PG_EXECUTE_SERVER_PROGRAM|GRANT\s+ALL)\b/i.test(
+      normalized
+    )
+  ) {
+    return {
+      valid: false,
+      error: 'Security Alert: Privileged administrative or filesystem SQL statements are prohibited.',
+    };
+  }
+
+  if (!/^(SELECT|SHOW|DESCRIBE|DESC|EXPLAIN|WITH|INSERT|UPDATE|DELETE)\b/i.test(normalized)) {
+    return {
+      valid: false,
+      error: 'Only SELECT, SHOW, DESCRIBE, EXPLAIN, WITH, INSERT, UPDATE, and DELETE queries are permitted.',
+    };
   }
 
   return { valid: true };

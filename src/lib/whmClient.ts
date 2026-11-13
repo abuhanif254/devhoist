@@ -84,6 +84,70 @@ export interface WhmUapiActionResult {
   data?: unknown;
 }
 
+export interface WhmNodeCredentials {
+  host: string;
+  username?: string;
+  apiToken: string;
+}
+
+export interface WhmPackageInfo {
+  success: boolean;
+  packageName: string;
+  diskLimitMb: number;
+  diskLimitGb: number;
+  bandwidthLimitMb: number;
+  bandwidthLimitGb: number;
+  ramLimitMb: number;
+  cpuCores: number;
+  inodeLimit: number;
+  maxAddons: number;
+  error?: string;
+}
+
+export interface WhmAccountSummary {
+  success: boolean;
+  username: string;
+  domain: string;
+  plan: string;
+  ip: string;
+  suspended: boolean;
+  diskUsedMb: number;
+  diskUsedGb: number;
+  diskLimitMb: number;
+  diskLimitGb: number;
+  inodesUsed: number;
+  inodeLimit: number;
+  bandwidthUsedGb: number;
+  bandwidthLimitGb: number;
+  error?: string;
+}
+
+function parseWhmCapacityMb(raw: unknown): number {
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    return Math.max(0, raw);
+  }
+  const str = String(raw ?? '').trim().toLowerCase();
+  if (!str || str === 'unlimited' || str === 'null') return 0;
+  const match = /^([0-9]+(?:\.[0-9]+)?)\s*([kmgt]?b?)$/i.exec(str);
+  if (!match) return 0;
+  const num = Number(match[1]);
+  const unit = match[2].toLowerCase();
+  if (unit.startsWith('t')) return num * 1024 * 1024;
+  if (unit.startsWith('g')) return num * 1024;
+  if (unit.startsWith('k')) return Number((num / 1024).toFixed(4));
+  return num;
+}
+
+function parseWhmPositiveInt(raw: unknown, fallback = 0): number {
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    return Math.max(0, Math.round(raw));
+  }
+  const str = String(raw ?? '').trim().toLowerCase();
+  if (!str || str === 'unlimited' || str === 'null') return fallback;
+  const cleaned = Number(str.replace(/[^0-9.]/g, ''));
+  return Number.isFinite(cleaned) && cleaned >= 0 ? Math.round(cleaned) : fallback;
+}
+
 export interface WhmListedAccount {
   user: string;
   domain: string;
@@ -97,20 +161,38 @@ export interface WhmListedAccount {
 }
 
 export class WhmClient {
-  private host: string;
-  private username: string;
-  private apiToken: string;
-  private isConfigured: boolean;
+  private readonly overrideCreds?: WhmNodeCredentials;
 
-  constructor() {
-    this.host = process.env.WHM_HOST || '';
-    this.username = process.env.WHM_USERNAME || '';
-    this.apiToken = process.env.WHM_API_TOKEN || '';
-    this.isConfigured = Boolean(
+  constructor(overrideCreds?: WhmNodeCredentials) {
+    this.overrideCreds = overrideCreds;
+  }
+
+  public static forNode(creds: WhmNodeCredentials): WhmClient {
+    return new WhmClient(creds);
+  }
+
+  private get host(): string {
+    return (this.overrideCreds?.host ?? process.env.WHM_HOST ?? '').trim();
+  }
+
+  private get username(): string {
+    return (this.overrideCreds?.username ?? process.env.WHM_USERNAME ?? 'root').trim();
+  }
+
+  private get apiToken(): string {
+    return (this.overrideCreds?.apiToken ?? process.env.WHM_API_TOKEN ?? '').trim();
+  }
+
+  private get isConfigured(): boolean {
+    return Boolean(
       this.host &&
-      this.username &&
-      this.apiToken &&
-      !this.apiToken.includes('your-whm-token')
+        this.host !== 'undefined' &&
+        this.username &&
+        this.username !== 'undefined' &&
+        this.apiToken &&
+        this.apiToken !== 'undefined' &&
+        !this.apiToken.includes('your-whm-') &&
+        !this.apiToken.startsWith('your-')
     );
   }
 
@@ -693,6 +775,175 @@ export class WhmClient {
       email: `${params.localPart}@${params.domain}`,
       domain: params.domain,
     });
+  }
+
+  /**
+   * Query WHM getpkginfo to fetch live server package limits (disk/bandwidth/LVE/inodes).
+   */
+  public async getPackageInfo(packageName: string): Promise<WhmPackageInfo> {
+    const cleanPkg = String(packageName || '').trim();
+    if (!cleanPkg) {
+      return {
+        success: false,
+        packageName: '',
+        diskLimitMb: 0,
+        diskLimitGb: 0,
+        bandwidthLimitMb: 0,
+        bandwidthLimitGb: 0,
+        ramLimitMb: 0,
+        cpuCores: 0,
+        inodeLimit: 0,
+        maxAddons: 0,
+        error: 'Package name is required.',
+      };
+    }
+
+    if (!this.isConfigured) {
+      return {
+        success: false,
+        packageName: cleanPkg,
+        diskLimitMb: 0,
+        diskLimitGb: 0,
+        bandwidthLimitMb: 0,
+        bandwidthLimitGb: 0,
+        ramLimitMb: 0,
+        cpuCores: 0,
+        inodeLimit: 0,
+        maxAddons: 0,
+        error: 'WHM server is not configured.',
+      };
+    }
+
+    const res = await this.executeWhmApi('getpkginfo', { pkg: cleanPkg });
+    const rawPkg = (res?.data?.pkg ?? res?.data) as Record<string, unknown> | undefined;
+    if (!res || res.metadata?.result !== 1 || !rawPkg) {
+      return {
+        success: false,
+        packageName: cleanPkg,
+        diskLimitMb: 0,
+        diskLimitGb: 0,
+        bandwidthLimitMb: 0,
+        bandwidthLimitGb: 0,
+        ramLimitMb: 0,
+        cpuCores: 0,
+        inodeLimit: 0,
+        maxAddons: 0,
+        error: res?.metadata?.reason || `Package "${cleanPkg}" lookup failed in WHM.`,
+      };
+    }
+
+    const diskLimitMb = parseWhmCapacityMb(rawPkg.QUOTA ?? rawPkg.quota);
+    const bandwidthLimitMb = parseWhmCapacityMb(rawPkg.BWLIMIT ?? rawPkg.bwlimit);
+    const ramLimitMb = parseWhmCapacityMb(rawPkg.lve_pmem ?? rawPkg.LVE_PMEM ?? rawPkg.ram_mb);
+    const cpuRaw = Number(rawPkg.lve_cpu ?? rawPkg.LVE_CPU ?? 0);
+    const cpuCores = cpuRaw >= 100 ? Math.max(1, Math.round(cpuRaw / 100)) : Math.max(0, cpuRaw);
+    const inodeLimit = parseWhmPositiveInt(rawPkg.lve_inodes ?? rawPkg.LVE_INODES ?? rawPkg.INODE_LIMIT, 0);
+    const maxAddons = parseWhmPositiveInt(rawPkg.MAXADDON ?? rawPkg.maxaddon, 0);
+
+    return {
+      success: true,
+      packageName: cleanPkg,
+      diskLimitMb,
+      diskLimitGb: diskLimitMb > 0 ? Number((diskLimitMb / 1024).toFixed(2)) : 0,
+      bandwidthLimitMb,
+      bandwidthLimitGb: bandwidthLimitMb > 0 ? Number((bandwidthLimitMb / 1024).toFixed(2)) : 0,
+      ramLimitMb,
+      cpuCores,
+      inodeLimit,
+      maxAddons,
+    };
+  }
+
+  /**
+   * Query WHM accountsummary for real-time tenant disk, inode, bandwidth & status metrics.
+   */
+  public async getAccountSummary(cpanelUsername: string): Promise<WhmAccountSummary> {
+    const cleanUser = String(cpanelUsername || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 16);
+    if (!cleanUser) {
+      return {
+        success: false,
+        username: '',
+        domain: '',
+        plan: '',
+        ip: '',
+        suspended: false,
+        diskUsedMb: 0,
+        diskUsedGb: 0,
+        diskLimitMb: 0,
+        diskLimitGb: 0,
+        inodesUsed: 0,
+        inodeLimit: 0,
+        bandwidthUsedGb: 0,
+        bandwidthLimitGb: 0,
+        error: 'cPanel username is required.',
+      };
+    }
+
+    if (!this.isConfigured) {
+      return {
+        success: false,
+        username: cleanUser,
+        domain: '',
+        plan: '',
+        ip: '',
+        suspended: false,
+        diskUsedMb: 0,
+        diskUsedGb: 0,
+        diskLimitMb: 0,
+        diskLimitGb: 0,
+        inodesUsed: 0,
+        inodeLimit: 0,
+        bandwidthUsedGb: 0,
+        bandwidthLimitGb: 0,
+        error: 'WHM reseller server is not configured.',
+      };
+    }
+
+    const res = await this.executeWhmApi('accountsummary', { user: cleanUser });
+    const acct = res?.data?.acct?.[0];
+    if (!res || res.metadata?.result !== 1 || !acct) {
+      return {
+        success: false,
+        username: cleanUser,
+        domain: '',
+        plan: '',
+        ip: '',
+        suspended: false,
+        diskUsedMb: 0,
+        diskUsedGb: 0,
+        diskLimitMb: 0,
+        diskLimitGb: 0,
+        inodesUsed: 0,
+        inodeLimit: 0,
+        bandwidthUsedGb: 0,
+        bandwidthLimitGb: 0,
+        error: res?.metadata?.reason || `Account summary not found for "${cleanUser}".`,
+      };
+    }
+
+    const diskUsedMb = parseWhmCapacityMb(acct.diskused);
+    const diskLimitMb = parseWhmCapacityMb(acct.disklimit);
+    const inodesUsed = parseWhmPositiveInt(acct.inodesused, 0);
+    const inodeLimit = parseWhmPositiveInt(acct.inodeslimit, 0);
+    const bwUsedMb = parseWhmCapacityMb(acct.bwused ?? acct.bandwidth);
+    const bwLimitMb = parseWhmCapacityMb(acct.bwlimit ?? acct.bandwidthlimit);
+
+    return {
+      success: true,
+      username: String(acct.user || cleanUser),
+      domain: String(acct.domain || ''),
+      plan: String(acct.plan || ''),
+      ip: String(acct.ip || ''),
+      suspended: Number(acct.suspended) === 1 || acct.suspended === true,
+      diskUsedMb,
+      diskUsedGb: Number((diskUsedMb / 1024).toFixed(2)),
+      diskLimitMb,
+      diskLimitGb: diskLimitMb > 0 ? Number((diskLimitMb / 1024).toFixed(2)) : 0,
+      inodesUsed,
+      inodeLimit,
+      bandwidthUsedGb: Number((bwUsedMb / 1024).toFixed(2)),
+      bandwidthLimitGb: bwLimitMb > 0 ? Number((bwLimitMb / 1024).toFixed(2)) : 0,
+    };
   }
 }
 

@@ -32,8 +32,14 @@ export interface DayUptimeBar {
   dayIndex: number;
   dateStr: string;
   uptimePercent: number;
-  status: 'up' | 'degraded' | 'down';
+  status: 'up' | 'degraded' | 'down' | 'no_data';
   incidentCount: number;
+}
+
+export interface PersistedTelemetrySample {
+  http_status?: number;
+  incident_type?: string | null;
+  checked_at: string;
 }
 
 export interface HealingResult {
@@ -46,12 +52,67 @@ export interface HealingResult {
 }
 
 /**
+ * Aggregates genuine 30-day uptime bars from persisted service_uptime_telemetry rows.
+ */
+export function aggregate30DayUptimeBars(samples: PersistedTelemetrySample[]): DayUptimeBar[] {
+  const buckets = new Map<string, { total: number; healthy: number; incidents: number }>();
+  for (const sample of samples) {
+    const dayKey = String(sample.checked_at || '').slice(0, 10);
+    if (!dayKey) continue;
+    const prev = buckets.get(dayKey) || { total: 0, healthy: 0, incidents: 0 };
+    const isOk =
+      (sample.http_status === undefined || (sample.http_status >= 200 && sample.http_status < 400)) &&
+      (!sample.incident_type || sample.incident_type === 'healthy');
+    buckets.set(dayKey, {
+      total: prev.total + 1,
+      healthy: prev.healthy + (isOk ? 1 : 0),
+      incidents: prev.incidents + (isOk ? 0 : 1),
+    });
+  }
+
+  const bars: DayUptimeBar[] = [];
+  const now = new Date();
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - i);
+    const dateStr = d.toISOString().split('T')[0];
+    const stats = buckets.get(dateStr);
+
+    if (!stats || stats.total === 0) {
+      bars.push({
+        dayIndex: 29 - i,
+        dateStr,
+        uptimePercent: 0,
+        status: 'no_data',
+        incidentCount: 0,
+      });
+    } else {
+      const pct = Number(((stats.healthy / stats.total) * 100).toFixed(2));
+      bars.push({
+        dayIndex: 29 - i,
+        dateStr,
+        uptimePercent: pct,
+        status: pct >= 99.5 ? 'up' : pct >= 90 ? 'degraded' : 'down',
+        incidentCount: stats.incidents,
+      });
+    }
+  }
+  return bars;
+}
+
+/**
  * Generates deterministic 30-day visual uptime status bars for dashboard display
+ * when supplied explicit persisted samples or SLA target summary.
  */
 export function generate30DayUptimeBars(
   targetUptime = 99.99,
-  recentIncidents: Array<{ dayOffset: number; type: string }> = []
+  recentIncidents: Array<{ dayOffset: number; type: string }> = [],
+  telemetrySamples?: PersistedTelemetrySample[]
 ): DayUptimeBar[] {
+  if (telemetrySamples && telemetrySamples.length > 0) {
+    return aggregate30DayUptimeBars(telemetrySamples);
+  }
+
   const bars: DayUptimeBar[] = [];
   const now = new Date();
 
@@ -71,13 +132,10 @@ export function generate30DayUptimeBars(
         incidentCount: 1,
       });
     } else {
-      // Deterministic slight jitter around target uptime
-      const variance = (Math.sin(i * 1.7) * 0.02);
-      const dayUptime = Math.min(100, Math.max(99.90, targetUptime + variance));
       bars.push({
         dayIndex: 29 - i,
         dateStr,
-        uptimePercent: Number(dayUptime.toFixed(2)),
+        uptimePercent: Number(Math.min(100, Math.max(99.9, targetUptime)).toFixed(2)),
         status: 'up',
         incidentCount: 0,
       });
@@ -167,11 +225,11 @@ export async function executeSelfHealingSequence({
         domain: cleanDomain,
         http_status: probe.statusCode,
         response_time_ms: probe.responseTimeMs,
-        ssl_days_remaining: 88,
+        ssl_days_remaining: null,
         incident_type: incidentType,
         auto_healed: true,
         healing_action_taken: fullActionTaken,
-        uptime_30d_percent: probe.isHealthy ? 99.99 : 99.5,
+        uptime_30d_percent: probe.isHealthy ? 100.0 : 95.0,
         checked_at: new Date().toISOString(),
       });
     } catch (err) {

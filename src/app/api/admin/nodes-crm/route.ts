@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, getServiceSupabase, isDevSandboxMode } from '@/lib/supabase';
 import { requireAdmin, verifySudoToken, serviceUnavailableResponse } from '@/lib/authGuard';
 import { isComputeAgentConfigured, pingComputeAgent } from '@/lib/computeAgentClient';
+import { encryptEnvValue } from '@/lib/projectEngine';
 
 
 async function logNodeAudit(
@@ -97,12 +98,14 @@ export async function GET(req: NextRequest) {
 
     const services = servicesRes.data || [];
     const nodes = (nodesRes.data || []).map((node) => {
+      const { whm_api_token_encrypted: encryptedToken, ...safeNode } = node as Record<string, unknown>;
       // Re-calculate dynamic slots and disk usage from services
       const matchingServices = services.filter((s) => s.ip_address === node.ipv4_address || s.server_location?.toLowerCase().includes('singapore') && node.node_code.startsWith('sg'));
       const activeSlots = matchingServices.length;
       const allocatedDisk = matchingServices.reduce((sum, s) => sum + (Number(s.disk_limit_gb) || 2), 0);
       return {
-        ...node,
+        ...safeNode,
+        has_whm_token: Boolean(encryptedToken),
         used_cpanel_slots: activeSlots > 0 ? activeSlots : node.used_cpanel_slots,
         allocated_disk_gb: allocatedDisk > 0 ? allocatedDisk : node.allocated_disk_gb,
       };
@@ -179,26 +182,26 @@ export async function POST(req: NextRequest) {
 
       if (isSupabaseConfigured()) {
         const db = getServiceSupabase();
-        await db.from('whm_server_nodes').upsert(
-          {
-            node_code: nodeCode.trim(),
-            node_name: nodeName.trim(),
-            datacenter_location: datacenterLocation.trim(),
-            ipv4_address: ipv4Address.trim(),
-            whm_hostname: whmHostname.trim(),
-            whm_username: whmUsername.trim(),
-            whm_api_token_encrypted: whmApiToken ? whmApiToken.trim() : null,
-            monthly_node_cost_bdt: monthlyCostBdt,
-            max_cpanel_slots: maxSlots,
-            max_disk_gb: maxDiskGb,
-            node_driver: nodeDriver,
-            agent_endpoint: agentEndpoint ? String(agentEndpoint).trim() : null,
-            agent_region: agentRegion ? String(agentRegion).trim() : null,
-            max_ram_mb: Number(maxRamMb) || 65536,
-            cpu_cores: Number(cpuCores) || 16,
-          },
-          { onConflict: 'node_code' }
-        );
+        const nodeUpsertPayload: Record<string, unknown> = {
+          node_code: nodeCode.trim(),
+          node_name: nodeName.trim(),
+          datacenter_location: datacenterLocation.trim(),
+          ipv4_address: ipv4Address.trim(),
+          whm_hostname: whmHostname.trim(),
+          whm_username: whmUsername.trim(),
+          monthly_node_cost_bdt: monthlyCostBdt,
+          max_cpanel_slots: maxSlots,
+          max_disk_gb: maxDiskGb,
+          node_driver: nodeDriver,
+          agent_endpoint: agentEndpoint ? String(agentEndpoint).trim() : null,
+          agent_region: agentRegion ? String(agentRegion).trim() : null,
+          max_ram_mb: Number(maxRamMb) || 65536,
+          cpu_cores: Number(cpuCores) || 16,
+        };
+        if (typeof whmApiToken === 'string' && whmApiToken.trim()) {
+          nodeUpsertPayload.whm_api_token_encrypted = await encryptEnvValue(whmApiToken.trim());
+        }
+        await db.from('whm_server_nodes').upsert(nodeUpsertPayload, { onConflict: 'node_code' });
       }
 
       await logNodeAudit('SERVER_NODE_SAVED', `node:${nodeCode}`, { nodeName, ipv4Address, nodeDriver, agentEndpoint }, 'high', ip);

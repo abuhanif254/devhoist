@@ -4,8 +4,8 @@
 // Zero Manual Admin Approval Required for Automated Gateway & Wallet Payments
 // ==============================================================================
 
-import { getServiceSupabase, isSupabaseConfigured } from '@/lib/supabase';
-import { whmClient } from '@/lib/whmClient';
+import { getServiceSupabase, isSupabaseConfigured, isDevSandboxMode } from '@/lib/supabase';
+import { WhmClient, WhmAccountResult, whmClient } from '@/lib/whmClient';
 import { calculateOrderProfitBreakdown } from '@/lib/profitEngine';
 import { renderHostingProvisionedEmail, sendEmail } from '@/lib/emailEngine';
 import { notifyNewPaidOrder, sendTelegramAlert } from '@/lib/adminNotifier';
@@ -13,6 +13,10 @@ import { scanDomainForPhishing, quarantineAbuseDomain } from '@/lib/abuseShieldE
 import { selectOptimalServerNode, checkNodeCapacityThreshold, WhmServerNodeRecord } from '@/lib/nodeBalancer';
 import { provisionMarketplaceStack, resolveStackSlug } from '@/lib/stackProvisioner';
 import { isBdManualTld, registerDomainWithRegistrar } from '@/lib/registrarClient';
+import { resolveAuthoritativePlanMeta } from '@/lib/billingEntitlements';
+import { decryptEnvValue } from '@/lib/projectEngine';
+import { logSecurityAudit } from '@/lib/security';
+import { isComputeAgentConfigured } from '@/lib/computeAgentClient';
 import {
   createCloudflareCustomHostname,
   ensureCloudflareZone,
@@ -244,6 +248,19 @@ export async function executeZeroTouchProvisioning(
     // =========================================================================
     let selectedNodeAgentEndpoint: string | null = null;
     let selectedNodeDriver: string = 'whm_cpanel';
+    let selectedNodeForWhm: Record<string, unknown> | null = null;
+    let selectedNodeIncrementedId: string | null = null;
+    let prevUsedSlots = 0;
+    let prevAllocatedDiskGb = 0;
+
+    // Resolve authoritative plan quotas from catalog_hosting_plans / fallback catalog
+    const planMeta = await resolveAuthoritativePlanMeta(db, String(params.planId || 'developer-pro'));
+    const resolvedWhmPackage = params.whmPackageName || planMeta.whmPackageName || 'devhost_devpro_5g';
+    let diskLimitGb = planMeta.storageGb;
+    let ramLimitMb = planMeta.ramMb;
+    let cpuCores = planMeta.cpuCores;
+    let inodeLimit = planMeta.inodeLimit;
+    let bandwidthLimitGb = planMeta.bandwidthLimitGb;
 
     // Smart Multi-Node Bin-Packing Placement
     if (db) {
@@ -258,10 +275,11 @@ export async function executeZeroTouchProvisioning(
           const balancerResult = selectOptimalServerNode({
             nodes: activeNodes as WhmServerNodeRecord[],
             preferredRegion: params.targetServerNode || 'sg',
-            requiredDiskGB: 5,
+            requiredDiskGB: diskLimitGb,
           });
 
           const selectedNode = balancerResult.selectedNode;
+          selectedNodeForWhm = selectedNode as unknown as Record<string, unknown>;
           serverNodeCode = selectedNode.node_code || 'sg1';
           serverIp = selectedNode.ipv4_address || defaultIp;
           selectedNodeAgentEndpoint = selectedNode.agent_endpoint || null;
@@ -274,12 +292,15 @@ export async function executeZeroTouchProvisioning(
           // Check if this node is crossing 80% threshold and trigger proactive alert
           checkNodeCapacityThreshold(selectedNode);
 
-          // Atomically increment node capacity counters
+          // Atomically increment node capacity counters using actual plan disk quota
+          selectedNodeIncrementedId = selectedNode.id;
+          prevUsedSlots = Number(selectedNode.used_cpanel_slots || 0);
+          prevAllocatedDiskGb = Number(selectedNode.allocated_disk_gb || 0);
           await db
             .from('whm_server_nodes')
             .update({
-              used_cpanel_slots: (selectedNode.used_cpanel_slots || 0) + 1,
-              allocated_disk_gb: (selectedNode.allocated_disk_gb || 0) + 5,
+              used_cpanel_slots: prevUsedSlots + 1,
+              allocated_disk_gb: prevAllocatedDiskGb + diskLimitGb,
             })
             .eq('id', selectedNode.id);
         }
@@ -288,13 +309,57 @@ export async function executeZeroTouchProvisioning(
       }
     }
 
-    // Call WHM API createacct
-    const whmResult = await whmClient.createCpanelAccount({
-      username: cpanelUser,
-      domain: cleanDomain,
-      plan: params.whmPackageName || 'devhost_devpro_5g',
-      contactEmail: params.customerEmail || 'client@devhost.cloud',
-    });
+    // Resolve per-node WHM client if encrypted credentials exist on node row
+    let activeWhmClient = whmClient;
+    if (selectedNodeForWhm?.whm_hostname && typeof selectedNodeForWhm.whm_api_token_encrypted === 'string') {
+      try {
+        const decryptedToken = await decryptEnvValue(selectedNodeForWhm.whm_api_token_encrypted);
+        if (decryptedToken) {
+          activeWhmClient = WhmClient.forNode({
+            host: String(selectedNodeForWhm.whm_hostname),
+            username: String(selectedNodeForWhm.whm_username || 'root'),
+            apiToken: decryptedToken,
+          });
+        }
+      } catch {
+        activeWhmClient = whmClient;
+      }
+    }
+
+    // Sync exact server package limits when live WHM node is configured
+    if (activeWhmClient.getStatus().configured) {
+      const pkgInfo = await activeWhmClient.getPackageInfo(resolvedWhmPackage);
+      if (pkgInfo.success) {
+        if (pkgInfo.diskLimitGb > 0) diskLimitGb = pkgInfo.diskLimitGb;
+        if (pkgInfo.ramLimitMb > 0) ramLimitMb = pkgInfo.ramLimitMb;
+        if (pkgInfo.cpuCores > 0) cpuCores = pkgInfo.cpuCores;
+        if (pkgInfo.inodeLimit > 0) inodeLimit = pkgInfo.inodeLimit;
+        if (pkgInfo.bandwidthLimitGb > 0) bandwidthLimitGb = pkgInfo.bandwidthLimitGb;
+      }
+    }
+
+    const whmConfigured = activeWhmClient.getStatus().configured;
+    const agentConfigured = isComputeAgentConfigured(selectedNodeAgentEndpoint);
+    const shouldFailUnprovisionedProd =
+      !whmConfigured && !agentConfigured && !isDevSandboxMode() && process.env.NODE_ENV !== 'test';
+
+    // Call WHM API createacct (skipped on pure devhost_docker driver)
+    const whmResult: WhmAccountResult =
+      selectedNodeDriver !== 'devhost_docker'
+        ? await activeWhmClient.createCpanelAccount({
+            username: cpanelUser,
+            domain: cleanDomain,
+            plan: resolvedWhmPackage,
+            contactEmail: params.customerEmail || 'client@devhost.cloud',
+          })
+        : {
+            success: true,
+            username: cpanelUser,
+            domain: cleanDomain,
+            ip: serverIp,
+            nameservers: serverNameservers,
+            message: 'Skipped WHM for Docker driver',
+          };
 
     if (whmResult.ip) {
       serverIp = whmResult.ip;
@@ -302,6 +367,10 @@ export async function executeZeroTouchProvisioning(
     if (whmResult.nameservers && whmResult.nameservers.length > 0) {
       serverNameservers = whmResult.nameservers;
     }
+
+    const whmHardFailure =
+      selectedNodeDriver !== 'devhost_docker' &&
+      ((whmConfigured && !whmResult.success) || shouldFailUnprovisionedProd);
 
     // Record or update hosting_services
     if (db) {
@@ -315,23 +384,29 @@ export async function executeZeroTouchProvisioning(
             {
               user_id: params.userId || null,
               domain: cleanDomain,
-              plan_id: String(params.planId || 'developer-pro'),
-              plan_name: params.planName || 'Developer Pro Cloud',
-              whm_package_name: params.whmPackageName || 'devhost_devpro_5g',
+              plan_id: planMeta.slug || String(params.planId || 'developer-pro'),
+              plan_name: params.planName || planMeta.name,
+              whm_package_name: resolvedWhmPackage,
               cpanel_username: cpanelUser,
-              server_node: serverNodeCode.includes('us') ? 'us1' : 'sg1',
+              server_node: serverNodeCode.toLowerCase(),
               ip_address: serverIp,
-              status: 'active',
-              disk_limit_gb: 5.0,
-              disk_used_gb: 0.1,
-              ram_limit_mb: 2048,
-              ram_used_mb: 180,
-              inode_limit: 300000,
-              inode_used: 1250,
+              status: whmHardFailure ? 'provisioning_failed' : 'active',
+              provisioning_error: whmHardFailure
+                ? whmResult.message || 'WHM createacct failed on compute node.'
+                : null,
+              disk_limit_gb: diskLimitGb,
+              disk_used_gb: 0,
+              ram_limit_mb: ramLimitMb,
+              ram_used_mb: 0,
+              cpu_cores: cpuCores,
+              inode_limit: inodeLimit,
+              inode_used: 0,
+              bandwidth_limit_gb: bandwidthLimitGb,
+              bandwidth_used_gb: 0,
               price_bdt: params.amountBDT,
               billing_cycle: isAnnual ? 'annually' : 'monthly',
               next_due_date: nextDueDate.toISOString().split('T')[0],
-              ssl_status: 'active_tls13',
+              ssl_status: whmHardFailure ? 'provisioning' : 'active_tls13',
               force_https: true,
               updated_at: new Date().toISOString(),
             },
@@ -346,6 +421,47 @@ export async function executeZeroTouchProvisioning(
       } catch (srvErr) {
         console.warn('[ZeroTouch Warning] hosting_services upsert:', srvErr);
       }
+    }
+
+    if (whmHardFailure) {
+      const failMsg = whmResult.message || 'WHM account provisioning failed.';
+      if (db && selectedNodeIncrementedId) {
+        await db
+          .from('whm_server_nodes')
+          .update({
+            used_cpanel_slots: prevUsedSlots,
+            allocated_disk_gb: prevAllocatedDiskGb,
+          })
+          .eq('id', selectedNodeIncrementedId);
+      }
+      await logSecurityAudit({
+        actorId: params.userId,
+        actorRole: 'system',
+        actionType: 'PROVISIONING_WHM_FAILED',
+        targetResource: cleanDomain,
+        riskLevel: 'critical',
+        metadata: { serverNodeCode, reason: failMsg },
+      });
+      await sendTelegramAlert(
+        `🚨 <b>Provisioning Failed (WHM)</b>\nDomain: <code>${cleanDomain}</code>\nNode: ${serverNodeCode}\nError: ${failMsg}`,
+        'fraud'
+      ).catch(() => {});
+
+      return {
+        success: false,
+        message: failMsg,
+        cpanelUsername: cpanelUser,
+        domain: cleanDomain,
+        serverNode: serverNodeCode,
+        serverIp,
+        nameservers: serverNameservers,
+        sslStatus: 'provisioning',
+        ledgerEntryCode,
+        serviceId: assignedServiceId,
+        stepsCompleted,
+        durationMs: Date.now() - startTime,
+        error: failMsg,
+      };
     }
 
     stepsCompleted.push(`Step 2: cPanel Container Provisioned on Node ${serverNodeCode} (${serverIp})`);
@@ -553,10 +669,50 @@ export async function executeZeroTouchProvisioning(
           domain: cleanDomain,
           cpanelUser,
           agentEndpoint: selectedNodeAgentEndpoint,
-          ramMb: selectedNodeDriver === 'devhost_docker' ? 2048 : 2048,
-          cpuCores: 2,
-          diskGb: 5,
+          ramMb: ramLimitMb,
+          cpuCores,
+          diskGb: diskLimitGb,
+          inodeLimit,
         });
+
+        if (!stackProvision.success) {
+          const agentFailMsg = stackProvision.error || 'Container runtime provisioning failed on compute agent.';
+          if (db) {
+            await db
+              .from('hosting_services')
+              .update({
+                status: 'provisioning_failed',
+                provisioning_error: agentFailMsg,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', assignedServiceId);
+          }
+          await sendTelegramAlert(
+            `🚨 <b>Provisioning Failed (Compute Agent)</b>\nDomain: <code>${cleanDomain}</code>\nError: ${agentFailMsg}`,
+            'fraud'
+          ).catch(() => {});
+
+          return {
+            success: false,
+            message: agentFailMsg,
+            cpanelUsername: cpanelUser,
+            domain: cleanDomain,
+            serverNode: serverNodeCode,
+            serverIp,
+            nameservers: serverNameservers,
+            sslStatus: resolvedSslStatus,
+            ledgerEntryCode,
+            serviceId: assignedServiceId,
+            domainId: assignedDomainId,
+            cloudflareZoneId,
+            registrarProvider,
+            registrarOrderId,
+            stepsCompleted,
+            durationMs: Date.now() - startTime,
+            error: agentFailMsg,
+          };
+        }
+
         stepsCompleted.push(
           `Step 4a: Universal Stack Blueprint Provisioned (${stackProvision.stack.name} | ${stackProvision.runtimeVersion} | Mode: ${stackProvision.deploymentMode || 'whm_cpanel'})`
         );

@@ -125,6 +125,17 @@ type DomainDrawerSubTab =
   | 'whois_lock'
   | 'redirects';
 
+function generateEphemeralSecret(prefix: string, bytesLength = 6): string {
+  const bytes = new Uint8Array(bytesLength);
+  if (typeof window !== 'undefined' && window.crypto?.getRandomValues) {
+    window.crypto.getRandomValues(bytes);
+  }
+  const suffix = Array.from(bytes, (b) => b.toString(36).padStart(2, '0'))
+    .join('')
+    .slice(0, bytesLength * 2);
+  return `${prefix}${suffix}`;
+}
+
 export default function CustomerDashboardPage() {
   const router = useRouter();
   const { requireSudo } = useSudoGate();
@@ -231,12 +242,18 @@ export default function CustomerDashboardPage() {
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const [isNotifPopoverOpen, setIsNotifPopoverOpen] = useState(false);
   const [impersonatedUser, setImpersonatedUser] = useState<{ id: string; name: string; email: string } | null>(null);
+  const [newCpanelPass, setNewCpanelPass] = useState('');
+  const [newDbPass, setNewDbPass] = useState('');
 
   useEffect(() => {
-    try {
-      const imp = sessionStorage.getItem('devhost_impersonate');
-      if (imp) setImpersonatedUser(JSON.parse(imp));
-    } catch {}
+    queueMicrotask(() => {
+      try {
+        const imp = sessionStorage.getItem('devhost_impersonate');
+        if (imp) setImpersonatedUser(JSON.parse(imp));
+      } catch {}
+      setNewCpanelPass((prev) => prev || generateEphemeralSecret('DhcSecure_2026!#', 4));
+      setNewDbPass((prev) => prev || generateEphemeralSecret('Pass_', 5));
+    });
   }, []);
 
   useEffect(() => {
@@ -257,7 +274,6 @@ export default function CustomerDashboardPage() {
   const [serviceSubTab, setServiceSubTab] = useState<ServiceSubTab>('overview');
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
   const [isLogDoctorOpen, setIsLogDoctorOpen] = useState(false);
-  const [newCpanelPass, setNewCpanelPass] = useState('DhcSecure_2026!#' + Math.random().toString(36).substring(2, 6));
   const [isDeploying, setIsDeploying] = useState(false);
   const [deployLogs, setDeployLogs] = useState<string[]>([]);
   const [envKeyInput, setEnvKeyInput] = useState('');
@@ -290,7 +306,6 @@ export default function CustomerDashboardPage() {
   // Database Tab State
   const [newDbName, setNewDbName] = useState('');
   const [newDbUser, setNewDbUser] = useState('');
-  const [newDbPass, setNewDbPass] = useState('Pass_' + Math.random().toString(36).substring(2, 8));
   const [phpMyAdminModalDb, setPhpMyAdminModalDb] = useState<string | null>(null);
 
   // Subdomain & Staging State
@@ -2416,7 +2431,7 @@ export default function CustomerDashboardPage() {
                     </label>
                     <select
                       value={affiliatePayoutMethod}
-                      onChange={(e) => setAffiliatePayoutMethod(e.target.value as any)}
+                      onChange={(e) => setAffiliatePayoutMethod(e.target.value as 'bKash' | 'Nagad' | 'Bank')}
                       className="mt-1 w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs"
                     >
                       <option value="bKash">bKash (Personal or Merchant)</option>
@@ -2722,7 +2737,7 @@ export default function CustomerDashboardPage() {
                     <DnsZoneManager
                       domainId={selectedDomainForDrawer.id}
                       domainName={selectedDomainForDrawer.domain}
-                      serverIp={activeService?.ipAddress || '103.151.102.45'}
+                      serverIp={activeService?.ipAddress || ''}
                       initialRecords={selectedDomainForDrawer.dnsRecords}
                     />
                   </div>
@@ -2926,7 +2941,7 @@ export default function CustomerDashboardPage() {
                         />
                         <select
                           value={newRedirectType}
-                          onChange={(e) => setNewRedirectType(e.target.value as any)}
+                          onChange={(e) => setNewRedirectType(e.target.value as '301' | '302')}
                           className="px-3 py-2 rounded-xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-white/10 text-xs font-mono"
                         >
                           <option value="301">301 Permanent</option>
@@ -3322,8 +3337,8 @@ export default function CustomerDashboardPage() {
                         setTopUpManualInfo(null);
                         setTopUpTrxId('');
                         alert(`TrxID ${submitData.trxId} queued for verification. Wallet balance will credit automatically once verified.`);
-                      } catch (err: any) {
-                        setTopUpError(err?.message || 'Submission failed.');
+                      } catch (err: unknown) {
+                        setTopUpError(err instanceof Error ? err.message : 'Submission failed.');
                         setIsTopUpSubmitting(false);
                       }
                     }}
@@ -3403,7 +3418,7 @@ export default function CustomerDashboardPage() {
                   <label className="text-xs font-mono text-slate-500">Priority:</label>
                   <select
                     value={ticketPriority}
-                    onChange={(e) => setTicketPriority(e.target.value as any)}
+                    onChange={(e) => setTicketPriority(e.target.value as SupportTicket['priority'])}
                     className="w-full mt-1 px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono"
                   >
                     <option value="Normal">Normal</option>
@@ -3485,13 +3500,13 @@ export default function CustomerDashboardPage() {
       <LogDoctorModal
         isOpen={isLogDoctorOpen}
         onClose={() => setIsLogDoctorOpen(false)}
-        serviceId={activeService?.id || 'srv_default'}
-        domain={activeService?.domain || 'ecommerce-live.com'}
-        serverIp={activeService?.ipAddress || '103.151.102.45'}
-        inodesUsed={activeService?.inodesUsed || 38400}
-        inodeLimit={activeService?.inodeLimit || 250000}
-        ramUsedMB={activeService?.ramUsedMB || 420}
-        ramLimitMB={activeService?.ramLimitMB || 2048}
+        serviceId={activeService?.id || ''}
+        domain={activeService?.domain || ''}
+        serverIp={activeService?.ipAddress || ''}
+        inodesUsed={activeService?.inodesUsed ?? 0}
+        inodeLimit={activeService?.inodeLimit ?? 250000}
+        ramUsedMB={activeService?.ramUsedMB ?? 0}
+        ramLimitMB={activeService?.ramLimitMB ?? 2048}
       />
     </div>
   );

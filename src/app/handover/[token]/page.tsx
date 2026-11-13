@@ -73,14 +73,33 @@ export default function ClientHandoverPage() {
     setClaiming(true);
 
     try {
+      const sessionRes = await fetch('/api/payments/create-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          gateway: selectedGateway === 'card' ? 'stripe' : selectedGateway,
+          orderType: 'agency_handover',
+          handoverToken: handover.handover_token,
+          amountBDT: handover.total_payable_bdt,
+        }),
+      });
+      const sessionData = await sessionRes.json();
+      if (!sessionRes.ok) {
+        alert(sessionData.error || 'Please sign in as the invited client email to pay and claim this project.');
+        return;
+      }
+
+      if (sessionData.paymentUrl) {
+        window.location.href = sessionData.paymentUrl;
+        return;
+      }
+
       const res = await fetch('/api/agency/handover', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           handoverToken: handover.handover_token,
-          clientUserId: `client_${Date.now()}`,
-          paymentMethod: selectedGateway,
-          trxId: `${selectedGateway.toUpperCase()}-${Math.random().toString(36).substring(2, 10).toUpperCase()}`,
+          invoiceNumber: sessionData.invoiceNumber,
         }),
       });
 
@@ -88,10 +107,10 @@ export default function ClientHandoverPage() {
       if (result.success) {
         setClaimedSuccess(true);
       } else {
-        alert(result.error || 'Payment claim failed');
+        alert(result.error || 'Complete the gateway invoice settlement to claim project ownership.');
       }
     } catch {
-      setClaimedSuccess(true);
+      alert('Network error while initializing handover payment. Please try again.');
     } finally {
       setClaiming(false);
     }

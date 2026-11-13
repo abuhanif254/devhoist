@@ -1,13 +1,13 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { ShieldCheck, Server } from 'lucide-react';
+import { ShieldCheck } from 'lucide-react';
 
 interface DayUptime {
   dayIndex: number;
   date: string;
-  status: 'operational' | 'degraded';
-  uptimePercentage: number;
+  status: 'operational' | 'degraded' | 'outage' | 'no_data';
+  uptimePercentage: number | null;
 }
 
 interface ServiceData {
@@ -15,12 +15,14 @@ interface ServiceData {
   name: string;
   category: string;
   uptime90d: string;
+  currentStatus?: 'operational' | 'degraded' | 'outage' | 'unprobed';
   dailyHistory: DayUptime[];
 }
 
 export default function UptimeHistoryGraph() {
   const [services, setServices] = useState<ServiceData[]>([]);
-  const [overallUptime, setOverallUptime] = useState('99.98%');
+  const [overallUptime, setOverallUptime] = useState('Syncing...');
+  const [systemStatus, setSystemStatus] = useState('monitoring_syncing');
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -29,11 +31,12 @@ export default function UptimeHistoryGraph() {
       .then((data) => {
         if (data.services) {
           setServices(data.services);
-          setOverallUptime(data.overallUptime90d || '99.98%');
+          setOverallUptime(data.overallUptime90d || 'Syncing...');
+          setSystemStatus(data.status || 'monitoring_syncing');
         }
       })
       .catch(() => {
-        // Fallback
+        // Leave empty on network failure instead of fabricating metrics
       })
       .finally(() => setIsLoading(false));
   }, []);
@@ -45,8 +48,26 @@ export default function UptimeHistoryGraph() {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-white/[0.08]">
           <div>
             <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-zinc-800 border border-white/10 text-zinc-300 text-xs font-mono mb-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              <span>All 5 Core Services Operational</span>
+              <span
+                className={`w-1.5 h-1.5 rounded-full animate-pulse ${
+                  systemStatus === 'all_systems_operational'
+                    ? 'bg-emerald-500'
+                    : systemStatus === 'degraded_performance'
+                      ? 'bg-amber-400'
+                      : systemStatus === 'major_outage'
+                        ? 'bg-rose-500'
+                        : 'bg-zinc-400'
+                }`}
+              />
+              <span>
+                {systemStatus === 'all_systems_operational'
+                  ? 'All Core Services Operational'
+                  : systemStatus === 'degraded_performance'
+                    ? 'Partial Service Degradation Detected'
+                    : systemStatus === 'major_outage'
+                      ? 'Service Outage Detected'
+                      : 'Telemetry Probes Syncing'}
+              </span>
             </div>
             <h3 className="text-xl sm:text-2xl font-semibold text-zinc-100">
               90-Day System Uptime History
@@ -87,11 +108,17 @@ export default function UptimeHistoryGraph() {
                   {srv.dailyHistory.map((day) => (
                     <div
                       key={day.dayIndex}
-                      title={`${day.date}: ${day.uptimePercentage}%`}
+                      title={`${day.date}: ${
+                        day.uptimePercentage !== null ? `${day.uptimePercentage}%` : 'No probe data yet'
+                      }`}
                       className={`h-full flex-1 rounded-[1px] transition-opacity hover:opacity-100 ${
                         day.status === 'operational'
                           ? 'bg-emerald-500 hover:bg-emerald-600 dark:bg-emerald-500/80 dark:hover:bg-emerald-400'
-                          : 'bg-amber-500 hover:bg-amber-600 dark:bg-amber-400 dark:hover:bg-amber-300'
+                          : day.status === 'degraded'
+                            ? 'bg-amber-500 hover:bg-amber-600 dark:bg-amber-400 dark:hover:bg-amber-300'
+                            : day.status === 'outage'
+                              ? 'bg-rose-500 hover:bg-rose-600 dark:bg-rose-400'
+                              : 'bg-slate-200 dark:bg-zinc-800/70'
                       }`}
                     />
                   ))}
@@ -99,7 +126,25 @@ export default function UptimeHistoryGraph() {
 
                 <div className="flex items-center justify-between text-[10px] font-mono text-slate-500 dark:text-zinc-500 pt-0.5">
                   <span>90 days ago</span>
-                  <span className="font-semibold text-emerald-600 dark:text-emerald-400">100% Operational Today</span>
+                  <span
+                    className={`font-semibold ${
+                      srv.currentStatus === 'operational'
+                        ? 'text-emerald-600 dark:text-emerald-400'
+                        : srv.currentStatus === 'degraded'
+                          ? 'text-amber-500'
+                          : srv.currentStatus === 'outage'
+                            ? 'text-rose-500'
+                            : 'text-zinc-400'
+                    }`}
+                  >
+                    {srv.currentStatus === 'operational'
+                      ? 'Operational'
+                      : srv.currentStatus === 'degraded'
+                        ? 'Degraded'
+                        : srv.currentStatus === 'outage'
+                          ? 'Outage'
+                          : 'Awaiting First Probe'}
+                  </span>
                 </div>
               </div>
             ))}

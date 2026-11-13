@@ -26,15 +26,15 @@ export async function GET(request: NextRequest) {
     const diagnosticInput: ServiceDiagnosticInput = {
       serviceId,
       domain,
-      serverIp: searchParams.get('serverIp') || '103.151.102.45',
-      dnsARecordIp: searchParams.get('dnsARecordIp') || '103.151.102.45',
+      serverIp: searchParams.get('serverIp') || '',
+      dnsARecordIp: searchParams.get('dnsARecordIp') || '',
       startupFile: searchParams.get('startupFile') || 'server.js',
-      inodesUsed: Number(searchParams.get('inodesUsed') || 38400),
+      inodesUsed: Number(searchParams.get('inodesUsed') || 0),
       inodeLimit: Number(searchParams.get('inodeLimit') || 250000),
       sslStatus: searchParams.get('sslStatus') || 'active_tls13',
       forceHttps: searchParams.get('forceHttps') !== 'false',
       hasDatabasesWithoutEnvUrl: searchParams.get('missingDbEnv') === 'true',
-      ramUsedMB: Number(searchParams.get('ramUsedMB') || 420),
+      ramUsedMB: Number(searchParams.get('ramUsedMB') || 0),
       ramLimitMB: Number(searchParams.get('ramLimitMB') || 2048),
     };
 
@@ -44,13 +44,14 @@ export async function GET(request: NextRequest) {
         const { data: srv } = await db.from('hosting_services').select('*').eq('id', serviceId).single();
         if (srv) {
           diagnosticInput.domain = srv.domain;
-          diagnosticInput.serverIp = srv.ip_address || '103.151.102.45';
-          diagnosticInput.inodesUsed = srv.inode_used || 38400;
-          diagnosticInput.inodeLimit = srv.inode_limit || 250000;
+          diagnosticInput.serverIp = srv.ip_address || '';
+          diagnosticInput.dnsARecordIp = srv.ip_address || diagnosticInput.dnsARecordIp;
+          diagnosticInput.inodesUsed = Number(srv.inode_used ?? 0);
+          diagnosticInput.inodeLimit = Number(srv.inode_limit ?? 250000);
           diagnosticInput.sslStatus = srv.ssl_status || diagnosticInput.sslStatus;
           diagnosticInput.forceHttps = srv.force_https ?? diagnosticInput.forceHttps;
-          diagnosticInput.ramUsedMB = srv.ram_used_mb || 420;
-          diagnosticInput.ramLimitMB = srv.ram_limit_mb || 2048;
+          diagnosticInput.ramUsedMB = Number(srv.ram_used_mb ?? 0);
+          diagnosticInput.ramLimitMB = Number(srv.ram_limit_mb ?? 2048);
           diagnosticInput.userId = srv.user_id;
         }
 
@@ -107,7 +108,16 @@ export async function GET(request: NextRequest) {
     }
 
     const report = diagnoseServiceHealth(diagnosticInput);
-    return NextResponse.json({ success: true, report });
+    return NextResponse.json({
+      success: true,
+      report,
+      metricsSummary: {
+        inodesUsed: diagnosticInput.inodesUsed,
+        inodeLimit: diagnosticInput.inodeLimit,
+        ramUsedMB: diagnosticInput.ramUsedMB,
+        ramLimitMB: diagnosticInput.ramLimitMB,
+      },
+    });
   } catch (error: unknown) {
     console.error('[Log Doctor Scan Error]', error);
     return NextResponse.json(
@@ -132,16 +142,16 @@ export async function POST(request: NextRequest) {
     const defaultInput: ServiceDiagnosticInput = {
       serviceId: access.serviceId,
       domain: serviceData?.domain || 'ecommerce-live.com',
-      serverIp: serviceData?.serverIp || '103.151.102.45',
-      dnsARecordIp: serviceData?.dnsARecordIp || '103.151.102.45',
+      serverIp: serviceData?.serverIp || '',
+      dnsARecordIp: serviceData?.dnsARecordIp || '',
       startupFile: serviceData?.startupFile || 'server.js',
-      inodesUsed: serviceData?.inodesUsed || 38400,
-      inodeLimit: serviceData?.inodeLimit || 250000,
+      inodesUsed: Number(serviceData?.inodesUsed ?? 0),
+      inodeLimit: Number(serviceData?.inodeLimit ?? 250000),
       sslStatus: serviceData?.sslStatus || 'active_tls13',
       forceHttps: serviceData?.forceHttps ?? true,
       hasDatabasesWithoutEnvUrl: serviceData?.hasDatabasesWithoutEnvUrl ?? false,
-      ramUsedMB: serviceData?.ramUsedMB || 420,
-      ramLimitMB: serviceData?.ramLimitMB || 2048,
+      ramUsedMB: Number(serviceData?.ramUsedMB ?? 0),
+      ramLimitMB: Number(serviceData?.ramLimitMB ?? 2048),
       userId: access.user.id,
     };
 

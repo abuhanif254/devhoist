@@ -6,6 +6,7 @@
 import { getServiceSupabase } from '@/lib/supabase';
 import { decryptEnvValue } from '@/lib/projectEngine';
 import { getStackBlueprintBySlug, resolveStackSlug } from '@/lib/stackProvisioner';
+import { WhmClient, whmClient } from '@/lib/whmClient';
 
 type ServiceSupabase = NonNullable<ReturnType<typeof getServiceSupabase>>;
 
@@ -33,6 +34,9 @@ export interface ResolvedComputeTarget {
   ramLimitMb: number;
   cpuCores: number;
   diskLimitGb: number;
+  whmHost: string | null;
+  whmUsername: string | null;
+  whmApiToken: string | null;
 }
 
 export async function resolveServiceComputeTarget(
@@ -66,6 +70,9 @@ export async function resolveServiceComputeTarget(
       ramLimitMb: 2048,
       cpuCores: 2,
       diskLimitGb: 5,
+      whmHost: null,
+      whmUsername: null,
+      whmApiToken: null,
     };
   }
 
@@ -78,9 +85,18 @@ export async function resolveServiceComputeTarget(
   const serverNode = String(srv?.server_node || 'sg1');
   const { data: nodeRow } = await supabaseAdmin
     .from('whm_server_nodes')
-    .select('node_code, agent_endpoint, node_driver')
+    .select('node_code, agent_endpoint, node_driver, whm_hostname, whm_username, whm_api_token_encrypted')
     .eq('node_code', serverNode)
     .maybeSingle();
+
+  let decryptedWhmToken: string | null = null;
+  if (nodeRow?.whm_api_token_encrypted && typeof nodeRow.whm_api_token_encrypted === 'string') {
+    try {
+      decryptedWhmToken = await decryptEnvValue(nodeRow.whm_api_token_encrypted);
+    } catch {
+      decryptedWhmToken = null;
+    }
+  }
 
   const { data: settingsRow } = await supabaseAdmin
     .from('hosting_project_settings')
@@ -117,7 +133,25 @@ export async function resolveServiceComputeTarget(
     ramLimitMb: Number(srv?.ram_limit_mb ?? srv?.ram_mb ?? 2048),
     cpuCores: Number(srv?.cpu_cores ?? 2),
     diskLimitGb: Number(srv?.disk_limit_gb ?? 5),
+    whmHost: (nodeRow?.whm_hostname as string | null | undefined) || null,
+    whmUsername: (nodeRow?.whm_username as string | null | undefined) || null,
+    whmApiToken: decryptedWhmToken,
   };
+}
+
+/**
+ * Instantiate a WHM client using decrypted per-node credentials when present,
+ * falling back cleanly to the singleton WHM_HOST/WHM_API_TOKEN env client.
+ */
+export function resolveWhmClientForTarget(target: ResolvedComputeTarget): WhmClient {
+  if (target.whmHost && target.whmApiToken) {
+    return WhmClient.forNode({
+      host: target.whmHost,
+      username: target.whmUsername || 'root',
+      apiToken: target.whmApiToken,
+    });
+  }
+  return whmClient;
 }
 
 export async function loadDecryptedEnvMap(

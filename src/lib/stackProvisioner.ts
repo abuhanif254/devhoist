@@ -1240,6 +1240,7 @@ export interface ProvisionMarketplaceStackResult {
     liveUrl?: string;
     edgeRouterUrl?: string;
     r2ArtifactKey?: string;
+    error?: string;
 }
 
 /**
@@ -1433,6 +1434,7 @@ export async function provisionMarketplaceStack(
     let liveUrl: string | undefined = `https://${params.domain}`;
     let edgeRouterUrl: string | undefined;
     let r2ArtifactKey: string | undefined;
+    let agentProvisionError: string | undefined;
     const planeNotes: string[] = [];
 
     if (stack.runtime_family === 'static_edge') {
@@ -1541,6 +1543,9 @@ export async function provisionMarketplaceStack(
                     `[00:03.95] Provisioned isolated container ${containerId} with Caddy TLS reverse proxy on ${agentRes.mode} compute node.`
                 );
             } else {
+                if (agentConfigured) {
+                    agentProvisionError = agentRes.error || 'Container provisioning failed on live compute agent.';
+                }
                 planeNotes.push(`[00:03.95] Compute agent dispatch warning: ${agentRes.error || 'queued'}`);
             }
 
@@ -1590,11 +1595,13 @@ export async function provisionMarketplaceStack(
     ].join('\n');
 
     if (supabaseAdmin) {
-        await supabaseAdmin
-            .from('project_deployments')
-            .update({ status: 'superseded', is_current_production: false })
-            .eq('service_id', params.serviceId)
-            .eq('status', 'live_production');
+        if (!agentProvisionError) {
+            await supabaseAdmin
+                .from('project_deployments')
+                .update({ status: 'superseded', is_current_production: false })
+                .eq('service_id', params.serviceId)
+                .eq('status', 'live_production');
+        }
 
         await supabaseAdmin.from('project_deployments').insert({
             service_id: params.serviceId,
@@ -1605,8 +1612,8 @@ export async function provisionMarketplaceStack(
             branch: gitBranch,
             trigger_source: 'stack_blueprint',
             environment: 'production',
-            status: 'live_production',
-            is_current_production: true,
+            status: agentProvisionError ? 'failed' : 'live_production',
+            is_current_production: !agentProvisionError,
             duration_seconds: 4,
             build_logs: buildLog,
             r2_artifact_key: r2ArtifactKey || null,
@@ -1627,7 +1634,7 @@ export async function provisionMarketplaceStack(
                         git_repo_url: gitRepoUrl,
                         git_branch: gitBranch,
                         commit_sha: commitHash,
-                        status: 'live',
+                        status: agentProvisionError ? 'failed' : 'live',
                         container_id: containerId || null,
                         r2_artifact_key: r2ArtifactKey || null,
                         live_url: liveUrl || null,
@@ -1645,6 +1652,7 @@ export async function provisionMarketplaceStack(
                     stack_slug: stack.slug,
                     container_id: containerId || null,
                     deployment_mode: deploymentMode,
+                    health_check_status: agentProvisionError ? 'unhealthy' : 'healthy',
                     live_preview_url: liveUrl || null,
                     r2_bucket_prefix: r2ArtifactKey ? `sites/${params.serviceId}` : null,
                     updated_at: new Date().toISOString(),
@@ -1656,7 +1664,7 @@ export async function provisionMarketplaceStack(
     }
 
     return {
-        success: true,
+        success: !agentProvisionError,
         stack,
         runtimeVersion: stack.default_runtime_version,
         startupEntryFile: stack.startup_entry_file,
@@ -1672,5 +1680,6 @@ export async function provisionMarketplaceStack(
         liveUrl,
         edgeRouterUrl,
         r2ArtifactKey,
+        ...(agentProvisionError ? { error: agentProvisionError } : {}),
     };
 }

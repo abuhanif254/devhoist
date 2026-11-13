@@ -14,13 +14,133 @@ import {
   isR2ArtifactsConfigured,
 } from '@/lib/cloudflareStorageQueue';
 import {
+  ContainerTelemetryPayload,
   controlContainerLifecycleOnAgent,
   dispatchBuildAndDeploy,
   fetchContainerTelemetryAndLogs,
   getComputeNodeConfig,
   isComputeAgentConfigured,
 } from '@/lib/computeAgentClient';
-import { loadDecryptedEnvMap, resolveServiceComputeTarget } from '@/lib/computeTargetResolver';
+import {
+  loadDecryptedEnvMap,
+  ResolvedComputeTarget,
+  resolveServiceComputeTarget,
+  resolveWhmClientForTarget,
+} from '@/lib/computeTargetResolver';
+
+interface MergedTelemetryResult {
+  telemetry: (ContainerTelemetryPayload & { source: string; bandwidthUsedGb?: number }) | null;
+  whmSummary: Awaited<ReturnType<ReturnType<typeof resolveWhmClientForTarget>['getAccountSummary']>> | null;
+  liveAgentOk: boolean;
+  liveAgentError?: string;
+}
+
+async function collectAndSyncServiceTelemetry(
+  supabaseAdmin: ReturnType<typeof getServiceSupabase> | null,
+  target: ResolvedComputeTarget,
+  actorUserId: string
+): Promise<MergedTelemetryResult> {
+  const agentConfigured = isComputeAgentConfigured(target.agentEndpoint);
+  const sandbox = isDevSandboxMode();
+  let telemetry: (ContainerTelemetryPayload & { source: string; bandwidthUsedGb?: number }) | null = null;
+  let liveAgentOk = false;
+  let liveAgentError: string | undefined;
+
+  if (agentConfigured || sandbox) {
+    const tRes = await fetchContainerTelemetryAndLogs(
+      target.serviceId,
+      target.domain,
+      target.agentEndpoint || undefined
+    );
+    if (tRes.ok && tRes.data) {
+      liveAgentOk = tRes.mode === 'live_agent';
+      telemetry = {
+        ...tRes.data,
+        source: tRes.mode,
+      };
+    } else if (agentConfigured) {
+      liveAgentError = tRes.error || 'Telemetry probe failed';
+    }
+  }
+
+  // Also query live WHM/cPanel accountsummary when WHM reseller node is configured
+  const nodeWhmClient = resolveWhmClientForTarget(target);
+  let whmSummary: MergedTelemetryResult['whmSummary'] = null;
+  if (
+    nodeWhmClient.getStatus().configured &&
+    target.cpanelUser &&
+    target.nodeDriver !== 'devhost_docker'
+  ) {
+    const summaryRes = await nodeWhmClient.getAccountSummary(target.cpanelUser);
+    if (summaryRes.success) {
+      whmSummary = summaryRes;
+      if (telemetry) {
+        telemetry = {
+          ...telemetry,
+          diskUsedGb: summaryRes.diskUsedGb || telemetry.diskUsedGb,
+          inodesUsed: summaryRes.inodesUsed || telemetry.inodesUsed,
+          bandwidthUsedGb: summaryRes.bandwidthUsedGb,
+          status: summaryRes.suspended ? 'suspended' : telemetry.status,
+        };
+      } else {
+        telemetry = {
+          serviceId: target.serviceId,
+          domain: target.domain,
+          containerId: target.containerId || `cpanel_${target.cpanelUser}`,
+          status: summaryRes.suspended ? 'suspended' : 'running',
+          cpuPercent: 0,
+          ramUsedMb: 0,
+          ramLimitMb: target.ramLimitMb,
+          diskUsedGb: summaryRes.diskUsedGb,
+          inodesUsed: summaryRes.inodesUsed,
+          bandwidthUsedGb: summaryRes.bandwidthUsedGb,
+          httpStatus: summaryRes.suspended ? 503 : 200,
+          uptimeSeconds: 0,
+          logs: `[whm:accountsummary] user=${summaryRes.username} disk=${summaryRes.diskUsedMb}MB inodes=${summaryRes.inodesUsed} bw=${summaryRes.bandwidthUsedGb}GB`,
+          checkedAt: new Date().toISOString(),
+          source: 'whm_accountsummary',
+        };
+      }
+    }
+  }
+
+  // Persist real usage counters back into hosting_services & heartbeat log
+  if (supabaseAdmin && telemetry && (telemetry.source === 'live_agent' || telemetry.source === 'whm_accountsummary')) {
+    const nowIso = new Date().toISOString();
+    try {
+      await supabaseAdmin
+        .from('hosting_services')
+        .update({
+          disk_used_gb: telemetry.diskUsedGb,
+          inode_used: telemetry.inodesUsed,
+          ram_used_mb: telemetry.ramUsedMb > 0 ? telemetry.ramUsedMb : undefined,
+          bandwidth_used_gb: telemetry.bandwidthUsedGb ?? undefined,
+          health_check_status: telemetry.httpStatus === 200 ? 'healthy' : 'unhealthy',
+          last_telemetry_at: nowIso,
+          updated_at: nowIso,
+        })
+        .eq('id', target.serviceId);
+
+      const telemetryOwner = target.userId || actorUserId;
+      if (telemetryOwner) {
+        await supabaseAdmin.from('service_uptime_telemetry').insert({
+          service_id: target.serviceId,
+          user_id: telemetryOwner,
+          domain: target.domain,
+          http_status: telemetry.httpStatus || 200,
+          response_time_ms: telemetry.httpStatus === 200 ? 45 : 0,
+          incident_type: telemetry.httpStatus === 200 ? 'healthy' : 'http_502_bad_gateway',
+          auto_healed: false,
+          checked_at: nowIso,
+        });
+      }
+    } catch {
+      // Tolerate missing optional telemetry columns in lightweight mock DBs
+    }
+  }
+
+  return { telemetry, whmSummary, liveAgentOk, liveAgentError };
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -41,20 +161,11 @@ export async function GET(request: NextRequest) {
     const storageQueue = getStorageAndQueueStatus();
     const nodeCfg = getComputeNodeConfig(target.agentEndpoint);
 
-    let telemetry = null;
-    if (isComputeAgentConfigured(target.agentEndpoint) || isDevSandboxMode()) {
-      const tRes = await fetchContainerTelemetryAndLogs(
-        serviceId,
-        target.domain,
-        target.agentEndpoint || undefined
-      );
-      if (tRes.ok && tRes.data) {
-        telemetry = {
-          ...tRes.data,
-          source: tRes.mode,
-        };
-      }
-    }
+    const { telemetry, whmSummary } = await collectAndSyncServiceTelemetry(
+      supabaseAdmin,
+      target,
+      access.user.id
+    );
 
     let buildJobs: Record<string, unknown>[] = [];
     if (supabaseAdmin) {
@@ -76,6 +187,7 @@ export async function GET(request: NextRequest) {
         storageQueue,
       },
       telemetry,
+      whmSummary,
       buildJobs,
     });
   } catch (err: unknown) {
@@ -340,18 +452,19 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === 'recheck_health') {
-      if (!isComputeAgentConfigured(target.agentEndpoint) && !isDevSandboxMode()) {
+      const whmConfigured = resolveWhmClientForTarget(target).getStatus().configured;
+      if (!isComputeAgentConfigured(target.agentEndpoint) && !whmConfigured && !isDevSandboxMode()) {
         return serviceUnavailableResponse('Compute Agent Node');
       }
 
-      const tRes = await fetchContainerTelemetryAndLogs(
-        serviceId,
-        target.domain,
-        target.agentEndpoint || undefined
+      const { telemetry, whmSummary, liveAgentError } = await collectAndSyncServiceTelemetry(
+        supabaseAdmin,
+        target,
+        access.user.id
       );
-      if (!tRes.ok) {
+      if (!telemetry) {
         return NextResponse.json(
-          { error: tRes.error || 'Telemetry probe failed' },
+          { error: liveAgentError || 'Telemetry probe failed' },
           { status: 502 }
         );
       }
@@ -359,8 +472,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         success: true,
         action: 'recheck_health',
-        mode: tRes.mode,
-        telemetry: tRes.data,
+        mode: telemetry.source,
+        telemetry,
+        whmSummary,
       });
     }
 

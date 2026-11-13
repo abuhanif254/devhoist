@@ -85,10 +85,10 @@ export default function DomainChecker() {
       {/* Search Bar Input Container */}
       <form
         onSubmit={handleManualSearch}
-        className="relative flex items-center p-1.5 rounded-2xl bg-white dark:bg-zinc-950/80 border border-slate-300 dark:border-white/[0.08] focus-within:border-blue-500 dark:focus-within:border-white/20 shadow-md glass-card transition-all"
+        className="relative flex items-center p-1.5 rounded-2xl bg-white dark:bg-slate-950/90 border border-slate-300 dark:border-white/[0.08] focus-within:border-blue-500 dark:focus-within:border-blue-400/50 shadow-md glass-card transition-all"
       >
-        <div className="pl-3 sm:pl-3.5 text-slate-400 dark:text-zinc-400">
-          <Globe className="w-4 h-4 text-blue-600 dark:text-zinc-400" />
+        <div className="pl-3 sm:pl-3.5 text-slate-400 dark:text-slate-400">
+          <Globe className="w-4 h-4 text-blue-600 dark:text-blue-400" />
         </div>
 
         <input
@@ -96,7 +96,7 @@ export default function DomainChecker() {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Find your perfect domain (e.g. mynextapp.com, devbrand.io)..."
-          className="w-full px-3 py-2 bg-transparent text-slate-900 dark:text-zinc-100 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none text-sm font-sans"
+          className="w-full px-3 py-2 bg-transparent text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none text-sm font-sans min-w-0"
         />
 
         {query && (
@@ -107,7 +107,7 @@ export default function DomainChecker() {
               setResults([]);
               setHasSearched(false);
             }}
-            className="p-1 text-slate-400 hover:text-slate-700 dark:text-zinc-500 dark:hover:text-zinc-200 mr-1 text-xs cursor-pointer"
+            className="p-1 text-slate-400 hover:text-slate-700 dark:text-slate-500 dark:hover:text-slate-200 mr-1 text-xs cursor-pointer shrink-0"
           >
             Clear
           </button>
@@ -116,7 +116,7 @@ export default function DomainChecker() {
         <button
           type="submit"
           disabled={isLoading || query.trim().length < 2}
-          className="inline-flex items-center gap-1.5 h-10 px-5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs shadow-md shadow-blue-600/20 transition-all disabled:opacity-50 shrink-0 cursor-pointer"
+          className="inline-flex items-center gap-1.5 h-10 px-4 sm:px-5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs shadow-md shadow-blue-600/20 transition-all disabled:opacity-50 shrink-0 cursor-pointer"
         >
           {isLoading ? (
             <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -129,46 +129,46 @@ export default function DomainChecker() {
       </form>
 
       {/* Featured TLD Quick Pills from Exact Matrix */}
-      <div className="flex flex-wrap items-center justify-center gap-2 mt-3.5 text-xs text-slate-600 dark:text-zinc-400">
-        <span className="font-mono text-slate-500 dark:text-zinc-500">Popular:</span>
+      <div className="flex flex-wrap items-center justify-center gap-2 mt-3.5 text-xs text-slate-600 dark:text-slate-400">
+        <span className="font-mono text-slate-500 dark:text-slate-500">Popular:</span>
         <button
           type="button"
           onClick={() => setQuery('mystartup.com')}
-          className="px-2.5 py-0.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-zinc-900 dark:hover:bg-zinc-800 border border-slate-200 dark:border-white/10 text-slate-800 dark:text-zinc-300 font-mono text-[11px] transition-colors cursor-pointer"
+          className="px-2.5 py-0.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-900 dark:hover:bg-slate-800 border border-slate-200 dark:border-white/10 text-slate-800 dark:text-slate-300 font-mono text-[11px] transition-colors cursor-pointer"
         >
-          .com <span className="font-semibold text-blue-600 dark:text-zinc-100">{getFormattedDomainPrice(1350, currency)}</span>
+          .com <span className="font-semibold text-blue-600 dark:text-blue-400">{getFormattedDomainPrice(1350, currency)}</span>
         </button>
         <button
           type="button"
           onClick={() => setQuery('nextproject.xyz')}
-          className="px-2.5 py-0.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-zinc-900 dark:hover:bg-zinc-800 border border-slate-200 dark:border-white/10 text-slate-800 dark:text-zinc-300 font-mono text-[11px] transition-colors cursor-pointer"
+          className="px-2.5 py-0.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-900 dark:hover:bg-slate-800 border border-slate-200 dark:border-white/10 text-slate-800 dark:text-slate-300 font-mono text-[11px] transition-colors cursor-pointer"
         >
-          .xyz <span className="font-semibold text-blue-600 dark:text-zinc-100">{getFormattedDomainPrice(290, currency)}</span>
+          .xyz <span className="font-semibold text-blue-600 dark:text-blue-400">{getFormattedDomainPrice(290, currency)}</span>
         </button>
         <button
           type="button"
           onClick={() => setQuery('cloudapp.io')}
-          className="px-2.5 py-0.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-zinc-900 dark:hover:bg-zinc-800 border border-slate-200 dark:border-white/10 text-slate-800 dark:text-zinc-300 font-mono text-[11px] transition-colors cursor-pointer"
+          className="px-2.5 py-0.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-900 dark:hover:bg-slate-800 border border-slate-200 dark:border-white/10 text-slate-800 dark:text-slate-300 font-mono text-[11px] transition-colors cursor-pointer"
         >
-          .io <span className="font-semibold text-blue-600 dark:text-zinc-100">{getFormattedDomainPrice(4800, currency)}</span>
+          .io <span className="font-semibold text-blue-600 dark:text-blue-400">{getFormattedDomainPrice(4800, currency)}</span>
         </button>
         <button
           type="button"
           onClick={() => setQuery('intellect.ai')}
-          className="px-2.5 py-0.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-zinc-900 dark:hover:bg-zinc-800 border border-slate-200 dark:border-white/10 text-slate-800 dark:text-zinc-300 font-mono text-[11px] transition-colors cursor-pointer"
+          className="px-2.5 py-0.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-900 dark:hover:bg-slate-800 border border-slate-200 dark:border-white/10 text-slate-800 dark:text-slate-300 font-mono text-[11px] transition-colors cursor-pointer"
         >
-          .ai <span className="font-semibold text-blue-600 dark:text-zinc-100">{getFormattedDomainPrice(9500, currency)}</span>
+          .ai <span className="font-semibold text-blue-600 dark:text-blue-400">{getFormattedDomainPrice(9500, currency)}</span>
         </button>
       </div>
 
       {/* Real-time Dynamic Results List */}
       {hasSearched && results.length > 0 && (
-        <div className="mt-5 rounded-2xl border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-zinc-950 p-4 sm:p-5 shadow-xl glass-card animate-in fade-in duration-150">
-          <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-white/[0.08] text-xs text-slate-600 dark:text-zinc-400">
-            <span className="font-mono">
-              Live DoH Verification: <strong className="text-slate-900 dark:text-zinc-200">&quot;{debouncedQuery}&quot;</strong>
+        <div className="mt-5 rounded-2xl border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-[#0B1120] p-4 sm:p-5 shadow-xl glass-card animate-in fade-in duration-150">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-200 dark:border-white/[0.08] text-xs text-slate-600 dark:text-slate-400">
+            <span className="font-mono truncate">
+              Live DoH Verification: <strong className="text-slate-900 dark:text-slate-200">&quot;{debouncedQuery}&quot;</strong>
             </span>
-            <span className="font-mono text-[11px] flex items-center gap-1.5 text-slate-600 dark:text-zinc-400">
+            <span className="font-mono text-[11px] flex items-center gap-1.5 text-slate-600 dark:text-slate-400 shrink-0">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
               bKash / Nagad / Card Checkout
             </span>
@@ -182,18 +182,18 @@ export default function DomainChecker() {
               return (
                 <div
                   key={item.domain}
-                  className="flex flex-col sm:flex-row sm:items-center justify-between py-3 gap-3 hover:bg-slate-50 dark:hover:bg-zinc-900/40 px-2 rounded-xl transition-colors"
+                  className="flex flex-col sm:flex-row sm:items-center justify-between py-3 gap-3 hover:bg-slate-50 dark:hover:bg-slate-900/50 px-2 rounded-xl transition-colors"
                 >
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
                     {item.available ? (
                       <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
                     ) : (
-                      <XCircle className="w-4 h-4 text-slate-400 dark:text-zinc-600 shrink-0" />
+                      <XCircle className="w-4 h-4 text-slate-400 dark:text-slate-600 shrink-0" />
                     )}
 
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-bold text-slate-900 dark:text-zinc-100 font-mono">
+                    <div className="min-w-0">
+                      <div className="flex items-center flex-wrap gap-2">
+                        <span className="text-sm font-bold text-slate-900 dark:text-slate-100 font-mono truncate">
                           {item.domain}
                         </span>
                         {item.available ? (
@@ -201,32 +201,32 @@ export default function DomainChecker() {
                             Available
                           </span>
                         ) : (
-                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-100 dark:bg-zinc-800 text-slate-500 dark:text-zinc-400 border border-slate-200 dark:border-white/5 font-semibold">
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-white/5 font-semibold">
                             Registered
                           </span>
                         )}
                         {item.badge && (
-                          <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-100 dark:bg-zinc-900 text-slate-600 dark:text-zinc-400 border border-slate-200 dark:border-white/10 hidden md:inline-block font-mono">
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-900 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-white/10 hidden md:inline-block font-mono">
                             {item.badge}
                           </span>
                         )}
                       </div>
-                      <div className="text-[11px] text-slate-500 dark:text-zinc-500 mt-0.5">
+                      <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
                         Renews at {renPrice}/yr • Zero hidden fee
                       </div>
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between sm:justify-end gap-4">
-                    <div className="text-right">
-                      <div className="text-sm font-bold text-slate-900 dark:text-zinc-100 font-mono">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between sm:justify-end gap-2.5 sm:gap-4 shrink-0">
+                    <div className="flex items-baseline justify-between sm:block sm:text-right">
+                      <div className="text-sm font-bold text-slate-900 dark:text-slate-100 font-mono">
                         {regPrice}
                       </div>
-                      <div className="text-[10px] text-slate-500 dark:text-zinc-500">1st Year</div>
+                      <div className="text-[10px] text-slate-500 dark:text-slate-500">1st Year</div>
                     </div>
 
                     {item.available ? (
-                      <div className="flex items-center gap-2">
+                      <div className="grid grid-cols-2 sm:flex items-center gap-2">
                         <button
                           type="button"
                           onClick={() =>
@@ -244,7 +244,7 @@ export default function DomainChecker() {
                               },
                             })
                           }
-                          className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg bg-blue-50 hover:bg-blue-100 dark:bg-emerald-500/15 text-blue-700 dark:text-emerald-400 border border-blue-200 dark:border-emerald-500/30 text-xs font-mono font-semibold transition-all shrink-0 cursor-pointer"
+                          className="inline-flex items-center justify-center gap-1.5 h-8 px-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white border border-blue-600 text-xs font-mono font-semibold transition-all shrink-0 cursor-pointer shadow-xs"
                           title="Bundle with Developer Pro Cloud Hosting"
                         >
                           <span>Bundle + Host</span>
@@ -261,7 +261,7 @@ export default function DomainChecker() {
                               basePriceUSD: item.pricing.registerUSD,
                             })
                           }
-                          className="inline-flex items-center gap-1.5 h-8 px-3.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 text-slate-900 dark:text-white font-semibold text-xs border border-slate-300 dark:border-white/10 transition-all shrink-0 cursor-pointer shadow-xs"
+                          className="inline-flex items-center justify-center gap-1.5 h-8 px-3.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-900 dark:text-white font-semibold text-xs border border-slate-300 dark:border-white/10 transition-all shrink-0 cursor-pointer shadow-xs"
                         >
                           <span>Domain Only</span>
                           <ArrowRight className="w-3 h-3" />
@@ -270,7 +270,7 @@ export default function DomainChecker() {
                     ) : (
                       <button
                         disabled
-                        className="h-8 px-3 rounded-md bg-slate-100 dark:bg-zinc-900 text-slate-400 dark:text-zinc-600 text-xs border border-slate-200 dark:border-white/5 cursor-not-allowed shrink-0"
+                        className="h-8 px-3 rounded-md bg-slate-100 dark:bg-slate-900 text-slate-400 dark:text-slate-600 text-xs border border-slate-200 dark:border-white/5 cursor-not-allowed shrink-0"
                       >
                         Unavailable
                       </button>
@@ -281,10 +281,10 @@ export default function DomainChecker() {
             })}
           </div>
 
-          <div className="mt-3 pt-3 border-t border-white/[0.08] text-center">
+          <div className="mt-3 pt-3 border-t border-slate-200 dark:border-white/[0.08] text-center">
             <a
               href={`/cheap-domain-registration-bd?q=${encodeURIComponent(debouncedQuery)}`}
-              className="text-xs text-zinc-400 hover:text-zinc-200 font-medium inline-flex items-center gap-1 transition-colors"
+              className="text-xs text-slate-600 hover:text-blue-600 dark:text-slate-400 dark:hover:text-slate-200 font-medium inline-flex items-center gap-1 transition-colors"
             >
               <span>View all 10 supported TLD extensions and renewal rates</span>
               <ArrowRight className="w-3 h-3" />

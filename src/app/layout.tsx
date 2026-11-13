@@ -152,7 +152,7 @@ export default function RootLayout({
           dangerouslySetInnerHTML={{ __html: JSON.stringify(websiteSchema) }}
         />
       </head>
-      <body className="min-h-screen bg-white text-slate-900 dark:bg-zinc-950 dark:text-zinc-100 font-sans antialiased selection:bg-blue-600 selection:text-white transition-colors duration-200">
+      <body className="min-h-screen bg-white text-slate-900 dark:bg-[#090D16] dark:text-slate-100 font-sans antialiased selection:bg-blue-600 selection:text-white transition-colors duration-200">
         <LanguageProvider>
           <BillingProvider>
             <PortalProvider>

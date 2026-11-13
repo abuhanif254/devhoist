@@ -64,31 +64,34 @@ export default function SpotlightCard({
       onBlur={handleBlur}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
-      className={`relative rounded-xl border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-zinc-950/80 overflow-hidden shadow-xs transition-colors ${className}`}
+      className={`relative rounded-xl border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-slate-950/90 shadow-xs transition-colors ${className}`}
       {...props}
     >
-      {/* Radial Spotlight Overlay */}
-      <div
-        className="pointer-events-none absolute -inset-px transition-opacity duration-300"
-        style={{
-          opacity,
-          background: `radial-gradient(450px circle at ${position.x}px ${position.y}px, ${defaultSpotlight}, transparent 40%)`,
-        }}
-      />
+      {/* Inner clipped layer keeps hover spotlight inside rounded corners without clipping floating badges */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-[inherit]">
+        {/* Radial Spotlight Overlay */}
+        <div
+          className="pointer-events-none absolute -inset-px transition-opacity duration-300"
+          style={{
+            opacity,
+            background: `radial-gradient(450px circle at ${position.x}px ${position.y}px, ${defaultSpotlight}, transparent 40%)`,
+          }}
+        />
 
-      {/* Dynamic Border Glow */}
-      <div
-        className="pointer-events-none absolute -inset-px rounded-xl transition-opacity duration-300"
-        style={{
-          opacity,
-          maskImage: `radial-gradient(250px circle at ${position.x}px ${position.y}px, black, transparent 70%)`,
-          WebkitMaskImage: `radial-gradient(250px circle at ${position.x}px ${position.y}px, black, transparent 70%)`,
-          border: `1px solid ${defaultBorder}`,
-        }}
-      />
+        {/* Dynamic Border Glow */}
+        <div
+          className="pointer-events-none absolute -inset-px rounded-[inherit] transition-opacity duration-300"
+          style={{
+            opacity,
+            maskImage: `radial-gradient(250px circle at ${position.x}px ${position.y}px, black, transparent 70%)`,
+            WebkitMaskImage: `radial-gradient(250px circle at ${position.x}px ${position.y}px, black, transparent 70%)`,
+            border: `1px solid ${defaultBorder}`,
+          }}
+        />
+      </div>
 
       {/* Content */}
-      <div className="relative z-10">{children}</div>
+      <div className="relative z-10 flex-1 flex flex-col">{children}</div>
     </div>
   );
 }

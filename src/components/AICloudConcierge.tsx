@@ -125,14 +125,14 @@ export default function AICloudConcierge() {
                     type="button"
                     onClick={() => setIsOpen(true)}
                     aria-label="Open AI Cloud Architect Concierge"
-                    className="fixed bottom-20 right-5 z-40 inline-flex items-center gap-2.5 px-4 py-3 rounded-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-xs shadow-2xl shadow-blue-600/35 border border-white/20 transition-all cursor-pointer group"
+                    className="fixed bottom-20 right-4 sm:right-5 z-40 inline-flex items-center gap-2 sm:gap-2.5 p-3 sm:px-4 sm:py-3 rounded-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-xs shadow-2xl shadow-blue-600/35 border border-white/20 transition-all cursor-pointer group"
                 >
                     <span className="relative flex h-2.5 w-2.5">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                        <span className="animate-ping motion-reduce:animate-none absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
                         <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-400" />
                     </span>
                     <Sparkles className="w-4 h-4" />
-                    <span>AI Cloud Concierge</span>
+                    <span className="hidden sm:inline">AI Cloud Concierge</span>
                 </button>
             )}
 

@@ -54,8 +54,22 @@ export default function Hero3DCloudAtmosphere() {
     const checkIsDark = () => document.documentElement.classList.contains('dark');
     let isDark = checkIsDark();
 
+    const reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    let reduceMotion = reducedMotionQuery.matches;
+    const handleMotionChange = () => {
+      reduceMotion = reducedMotionQuery.matches;
+      if (!reduceMotion) {
+        cancelAnimationFrame(animId);
+        render();
+      }
+    };
+    reducedMotionQuery.addEventListener?.('change', handleMotionChange);
+
     const themeObserver = new MutationObserver(() => {
       isDark = checkIsDark();
+      if (reduceMotion) {
+        render();
+      }
     });
     themeObserver.observe(document.documentElement, {
       attributes: true,
@@ -400,7 +414,9 @@ export default function Hero3DCloudAtmosphere() {
       });
 
       ctx.restore();
-      animId = requestAnimationFrame(render);
+      if (!reduceMotion) {
+        animId = requestAnimationFrame(render);
+      }
     };
 
     render();
@@ -428,6 +444,7 @@ export default function Hero3DCloudAtmosphere() {
       cancelAnimationFrame(animId);
       window.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      reducedMotionQuery.removeEventListener?.('change', handleMotionChange);
       themeObserver.disconnect();
       observer.disconnect();
     };
@@ -446,7 +463,7 @@ export default function Hero3DCloudAtmosphere() {
       />
 
       {/* Bottom atmospheric horizon fade into the page */}
-      <div className="absolute inset-x-0 bottom-0 h-28 bg-gradient-to-b from-transparent via-white/40 to-white dark:via-zinc-950/40 dark:to-zinc-950 pointer-events-none" />
+      <div className="absolute inset-x-0 bottom-0 h-28 bg-gradient-to-b from-transparent via-white/40 to-white dark:via-[#090D16]/45 dark:to-[#090D16] pointer-events-none" />
 
       {/* Subtle hairline vignette for depth */}
       <div className="absolute inset-0 bg-radial from-transparent via-transparent to-black/[0.04] dark:to-black/30 pointer-events-none" />

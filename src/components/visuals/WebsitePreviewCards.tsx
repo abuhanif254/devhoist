@@ -19,7 +19,7 @@ export interface TemplatePreviewItem {
 export const FEATURED_PREVIEWS: TemplatePreviewItem[] = [
   {
     id: 'nextjs-saas',
-    name: 'Next.js 15 SaaS Starter',
+    name: 'Next.js SaaS Starter',
     category: 'Full-Stack Web App',
     tagline: 'Tailwind CSS, Stripe subscriptions & Postgres auth pre-configured.',
     stack: 'Next.js + Prisma',
@@ -65,12 +65,12 @@ export const FEATURED_PREVIEWS: TemplatePreviewItem[] = [
 
 export default function WebsitePreviewCards() {
   return (
-    <div className="w-full py-6">
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+    <div className="w-full py-4 sm:py-6">
+      <div className="flex overflow-x-auto snap-x snap-mandatory gap-4 pb-3 -mx-4 px-4 md:mx-0 md:px-0 md:pb-0 md:grid md:grid-cols-2 lg:grid-cols-4 md:gap-6 md:overflow-visible">
         {FEATURED_PREVIEWS.map((item) => (
           <div
             key={item.id}
-            className="group rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-zinc-900 overflow-hidden shadow-md hover:shadow-2xl transition-all duration-300 hover:-translate-y-1 flex flex-col justify-between"
+            className="snap-start shrink-0 w-[82vw] sm:w-[320px] md:w-auto group rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-slate-900/90 overflow-hidden shadow-md hover:shadow-2xl transition-all duration-300 hover:-translate-y-1 flex flex-col justify-between"
           >
             {/* Visual Thumbnail Area */}
             <div className={`h-40 bg-gradient-to-br ${item.previewGradient} p-4 text-white relative flex flex-col justify-between overflow-hidden`}>
@@ -86,7 +86,7 @@ export default function WebsitePreviewCards() {
 
               {/* Decorative Window Preview Mockup */}
               <div className="z-10">
-                <span className="text-xs font-mono opacity-80">{item.stack}</span>
+                <span className="text-xs font-mono opacity-85">{item.stack}</span>
                 <h4 className="text-base font-bold leading-tight mt-0.5 tracking-tight">{item.name}</h4>
               </div>
 
@@ -100,7 +100,7 @@ export default function WebsitePreviewCards() {
                 <span className="text-[11px] font-mono font-semibold text-blue-600 dark:text-blue-400 uppercase tracking-wider">
                   {item.category}
                 </span>
-                <p className="text-xs text-slate-600 dark:text-zinc-400 mt-1.5 leading-relaxed font-normal">
+                <p className="text-xs text-slate-600 dark:text-slate-400 mt-1.5 leading-relaxed font-normal">
                   {item.tagline}
                 </p>
               </div>

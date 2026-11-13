@@ -5,19 +5,19 @@ export interface FaqItem {
 
 export const COMPLETE_FAQ_LIST: FaqItem[] = [
   {
-    question: 'How does GitHub Auto-Deployment avoid filling up my cPanel storage and Inodes?',
+    question: 'How does DevHost Deploy keep builds fast without bloating storage or Inodes?',
     answer:
-      'By building your Next.js or Node.js app on GitHub Actions\' free runner and syncing only the compiled production artifacts via our overwrite script, node_modules bloat is eliminated and old releases are automatically cleaned up—saving up to 80% storage and Inodes.',
+      'Static Next.js, Vite, and React apps deploy straight to R2 Global Edge via GitHub OAuth or Direct ZIP Upload with atomic URL routing, while full-stack SSR and Node.js apps run inside isolated Cloud Compute containers with clean release pruning.',
   },
   {
     question: 'Can I host custom Next.js, Node.js, Python, and Laravel apps alongside WordPress?',
     answer:
-      'Yes. Our Developer Pro and Business Max plans include CloudLinux Node.js Selector (up to Node v22), Python Selector, Composer, Jailed SSH access, and Softaculous 1-Click WordPress on the same cPanel account.',
+      'Yes. Deploy Next.js, Vite, and Node.js apps natively via DevHost Compute Engine & R2 Edge, or run CloudLinux Node.js Selector (up to Node v22), Python Selector, Composer, Jailed SSH, and Softaculous 1-Click WordPress on NVMe cPanel.',
   },
   {
-    question: 'How fast is account activation when paying via bKash or Nagad?',
+    question: 'How fast is account activation when paying via bKash, Nagad, Wallet, or Stripe?',
     answer:
-      '100% instant. Our billing portal uses automated bKash and Nagad API callbacks. As soon as your payment succeeds, WHMCS automatically creates your cPanel account and emails your login details within seconds.',
+      '100% instant. Our billing plane uses automated bKash, Nagad, Atomic Wallet, and Stripe webhooks. As soon as your payment succeeds, DevHost Cloud automatically provisions your hosting service or compute app within seconds.',
   },
   {
     question: 'Where are your global servers located, and will my site load fast in Bangladesh and worldwide?',

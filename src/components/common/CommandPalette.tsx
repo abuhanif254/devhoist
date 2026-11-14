@@ -27,19 +27,33 @@ import { EXACT_DOCS_ARTICLES } from '@/config/docsData';
 
 export default function CommandPalette() {
   const { isCommandPaletteOpen, setIsCommandPaletteOpen, currency, setCurrency } = useBilling();
+  if (!isCommandPaletteOpen) return null;
+  return (
+    <CommandPaletteDialog
+      isCommandPaletteOpen={isCommandPaletteOpen}
+      setIsCommandPaletteOpen={setIsCommandPaletteOpen}
+      currency={currency}
+      setCurrency={setCurrency}
+    />
+  );
+}
+
+function CommandPaletteDialog({
+  isCommandPaletteOpen,
+  setIsCommandPaletteOpen,
+  currency,
+  setCurrency,
+}: {
+  isCommandPaletteOpen: boolean;
+  setIsCommandPaletteOpen: (open: boolean) => void;
+  currency: 'BDT' | 'USD';
+  setCurrency: (c: 'BDT' | 'USD') => void;
+}) {
   const { language, toggleLanguage } = useLanguage();
   const [search, setSearch] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const router = useRouter();
   const listRef = useRef<HTMLDivElement>(null);
-
-  // Reset search & selectedIndex on open
-  useEffect(() => {
-    if (isCommandPaletteOpen) {
-      setSearch('');
-      setSelectedIndex(0);
-    }
-  }, [isCommandPaletteOpen]);
 
   const handleSelectRoute = (href: string) => {
     setIsCommandPaletteOpen(false);
@@ -177,7 +191,7 @@ export default function CommandPalette() {
         }
         for (const doc of filteredDocs) {
           if (counter === selectedIndex) {
-            handleSelectRoute(`/docs#${doc.slug}`);
+            handleSelectRoute(`/docs/${doc.slug}`);
             return;
           }
           counter++;
@@ -330,7 +344,7 @@ export default function CommandPalette() {
                   return (
                     <button
                       key={doc.id}
-                      onClick={() => handleSelectRoute(`/docs#${doc.slug}`)}
+                      onClick={() => handleSelectRoute(`/docs/${doc.slug}`)}
                       onMouseEnter={() => setSelectedIndex(itemIndex)}
                       className={`w-full flex items-start justify-between p-2 rounded-lg text-left transition-colors group cursor-pointer ${
                         isSelected

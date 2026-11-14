@@ -537,6 +537,36 @@ export async function verifyHmacSha256Hex(
   return timingSafeEqualStr(actualHex.toLowerCase(), expectedHexSignature.trim().toLowerCase());
 }
 
+function isPrivateOrReservedIpv4Octets(octets: number[]): boolean {
+  if (octets.length !== 4 || octets.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) {
+    return true;
+  }
+  const [a, b] = octets;
+  return (
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 198 && (b === 18 || b === 19)) ||
+    a >= 224
+  );
+}
+
+/**
+ * Escapes HTML meta-characters before interpolating untrusted values into HTML templates or messages.
+ */
+export function escapeHtml(input: unknown): string {
+  return String(input ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 /**
  * Validates external webhook / postback URLs to prevent SSRF against localhost, metadata IPs, and RFC1918 subnets.
  */
@@ -547,21 +577,61 @@ export function isSafeExternalHttpUrl(rawUrl: string): boolean {
       return false;
     }
 
-    const host = parsed.hostname.toLowerCase();
-    if (!host || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal')) {
+    if (parsed.username || parsed.password) {
       return false;
     }
 
-    // Block literal IPv6 loopback / unique-local / link-local
+    const host = parsed.hostname.toLowerCase();
+    if (
+      !host ||
+      host === 'localhost' ||
+      host.endsWith('.localhost') ||
+      host.endsWith('.local') ||
+      host.endsWith('.internal')
+    ) {
+      return false;
+    }
+
+    // Reject single-integer or hex/octal IPv4 encodings (e.g., 2130706433, 0x7f000001)
+    if (/^(?:\d+|0x[0-9a-f]+)$/i.test(host)) {
+      return false;
+    }
+
+    // Block literal IPv6 loopback / unique-local / link-local / multicast / IPv4-mapped IPv4
     if (host.startsWith('[') || host.includes(':')) {
-      const bareV6 = host.replace(/^\[|\]$/g, '');
+      const bareV6 = host.replace(/^\[|\]$/g, '').split('%')[0];
       if (
         bareV6 === '::1' ||
         bareV6 === '::' ||
+        bareV6 === '0:0:0:0:0:0:0:1' ||
+        bareV6 === '0:0:0:0:0:0:0:0' ||
         bareV6.startsWith('fe80:') ||
         bareV6.startsWith('fc') ||
-        bareV6.startsWith('fd')
+        bareV6.startsWith('fd') ||
+        bareV6.startsWith('ff')
       ) {
+        return false;
+      }
+
+      // Check IPv4-mapped IPv6 in both dotted (::ffff:127.0.0.1) and hex (::ffff:7f00:1) forms
+      const mappedDotted = /^::ffff:(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(bareV6);
+      if (mappedDotted) {
+        return !isPrivateOrReservedIpv4Octets(mappedDotted.slice(1).map(Number));
+      }
+      const mappedHex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(bareV6);
+      if (mappedHex) {
+        const hi = parseInt(mappedHex[1], 16);
+        const lo = parseInt(mappedHex[2], 16);
+        return !isPrivateOrReservedIpv4Octets([
+          (hi >> 8) & 0xff,
+          hi & 0xff,
+          (lo >> 8) & 0xff,
+          lo & 0xff,
+        ]);
+      }
+
+      // Fail closed on other IPv4-compatible / transition addresses (::xxxx:xxxx or 64:ff9b::)
+      if (bareV6.startsWith('::') || bareV6.startsWith('64:ff9b:')) {
         return false;
       }
     }
@@ -569,18 +639,10 @@ export function isSafeExternalHttpUrl(rawUrl: string): boolean {
     // Block private/loopback/link-local IPv4 ranges (RFC1918, 127.0.0.0/8, 169.254.0.0/16, 0.0.0.0/8, 100.64.0.0/10)
     const ipv4Match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
     if (ipv4Match) {
-      const octets = ipv4Match.slice(1).map((n) => Number(n));
-      if (octets.some((n) => n < 0 || n > 255)) return false;
-      const [a, b] = octets;
-      if (
-        a === 0 ||
-        a === 10 ||
-        a === 127 ||
-        (a === 100 && b >= 64 && b <= 127) ||
-        (a === 169 && b === 254) ||
-        (a === 172 && b >= 16 && b <= 31) ||
-        (a === 192 && b === 168)
-      ) {
+      if (ipv4Match.slice(1).some((part) => part.length > 1 && part.startsWith('0'))) {
+        return false;
+      }
+      if (isPrivateOrReservedIpv4Octets(ipv4Match.slice(1).map((n) => Number(n)))) {
         return false;
       }
     }

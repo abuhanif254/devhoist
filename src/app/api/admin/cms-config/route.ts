@@ -13,7 +13,7 @@ const PUBLIC_CMS_KEYS = new Set([
 async function logCmsAudit(
   actionType: string,
   targetResource: string,
-  metadata: Record<string, any>,
+  metadata: Record<string, unknown>,
   riskLevel: 'low' | 'medium' | 'high' | 'critical' = 'medium',
   ip: string = '127.0.0.1'
 ) {
@@ -46,7 +46,7 @@ export async function GET(req: NextRequest) {
       if (!adminAuth.ok) return adminAuth.response;
     }
 
-    const defaultConfigs: Record<string, any> = {
+    const defaultConfigs: Record<string, Record<string, unknown>> = {
       currency_settings: {
         usd_exchange_rate_bdt: 120,
         default_currency: 'BDT',
@@ -112,7 +112,7 @@ export async function GET(req: NextRequest) {
     }
 
     const { data } = await db.from('cms_global_config').select('*');
-    const configsMap: Record<string, any> = { ...defaultConfigs };
+    const configsMap: Record<string, unknown> = { ...defaultConfigs };
 
     (data || []).forEach((row) => {
       configsMap[row.config_key] = row.config_value;
@@ -122,8 +122,11 @@ export async function GET(req: NextRequest) {
       success: true,
       configs: configsMap,
     });
-  } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+  } catch (err: unknown) {
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : 'CMS fetch failed' },
+      { status: 500 }
+    );
   }
 }
 
@@ -169,7 +172,10 @@ export async function PUT(req: NextRequest) {
       message: `CMS configuration '${key}' updated live across platform.`,
       config: value,
     });
-  } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+  } catch (err: unknown) {
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : 'CMS update failed' },
+      { status: 500 }
+    );
   }
 }

@@ -13,7 +13,7 @@ import {
 } from '@/lib/computeAgentClient';
 import { resolveServiceComputeTarget } from '@/lib/computeTargetResolver';
 
-export interface SqlTableSchema {
+interface SqlTableSchema {
   tableName: string;
   engine: string;
   rowCount: number;
@@ -21,7 +21,7 @@ export interface SqlTableSchema {
   columns: { name: string; type: string; key?: string }[];
 }
 
-export const CONTAINER_SQL_SCHEMA: SqlTableSchema[] = [
+const CONTAINER_SQL_SCHEMA: SqlTableSchema[] = [
   {
     tableName: 'users',
     engine: 'InnoDB (NVMe)',
@@ -588,6 +588,27 @@ export async function POST(req: NextRequest) {
         },
         { status: 403 }
       );
+    }
+
+    if (dbName && typeof dbName === 'string' && supabaseAdmin) {
+      const cleanDbName = dbName.trim();
+      const { data: ownedDb } = await supabaseAdmin
+        .from('hosting_databases')
+        .select('id, db_name')
+        .eq('service_id', serviceId)
+        .eq('db_name', cleanDbName)
+        .maybeSingle();
+
+      const expectedPrefix = `${target.cpanelUser || ''}_`;
+      if (!ownedDb && (!target.cpanelUser || !cleanDbName.startsWith(expectedPrefix))) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: `Forbidden: Database "${cleanDbName}" does not belong to this hosting service.`,
+          },
+          { status: 403 }
+        );
+      }
     }
 
     const agentConfiguredForSql = isComputeAgentConfigured(target.agentEndpoint);

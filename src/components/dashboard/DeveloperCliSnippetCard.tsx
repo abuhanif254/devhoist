@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { Terminal, Copy, Check, Sparkles, Code2, Globe, Zap, ArrowRight } from 'lucide-react';
+import { buildPortalUrl } from '@/lib/siteUrl';
 
 interface DeveloperCliSnippetCardProps {
   apiToken?: string;
@@ -18,21 +19,22 @@ export default function DeveloperCliSnippetCard({
   const [shellType, setShellType] = useState<'bash' | 'powershell'>('bash');
   const [copied, setCopied] = useState(false);
 
+  const deployEndpoint = buildPortalUrl('/api/v1/deploy');
   let snippet = '';
 
   if (shellType === 'bash') {
     if (selectedAction === 'deploy') {
-      snippet = `curl -X POST https://devhost.cloud/api/v1/deploy \\
+      snippet = `curl -X POST ${deployEndpoint} \\
   -H "Authorization: Bearer ${apiToken}" \\
   -H "Content-Type: application/json" \\
   -d '{"action": "deploy", "domain": "${domain}", "branch": "main"}'`;
     } else if (selectedAction === 'cache_purge') {
-      snippet = `curl -X POST https://devhost.cloud/api/v1/deploy \\
+      snippet = `curl -X POST ${deployEndpoint} \\
   -H "Authorization: Bearer ${apiToken}" \\
   -H "Content-Type: application/json" \\
   -d '{"action": "cache_purge", "domain": "${domain}"}'`;
     } else {
-      snippet = `curl -X POST https://devhost.cloud/api/v1/deploy \\
+      snippet = `curl -X POST ${deployEndpoint} \\
   -H "Authorization: Bearer ${apiToken}" \\
   -H "Content-Type: application/json" \\
   -d '{"action": "dns_record", "domain": "${domain}", "recordType": "A", "recordName": "api", "recordContent": "103.151.102.45"}'`;
@@ -40,11 +42,11 @@ export default function DeveloperCliSnippetCard({
   } else {
     // PowerShell
     if (selectedAction === 'deploy') {
-      snippet = `Invoke-RestMethod -Uri "https://devhost.cloud/api/v1/deploy" -Method Post -Headers @{ Authorization = "Bearer ${apiToken}"; "Content-Type" = "application/json" } -Body '{"action":"deploy","domain":"${domain}","branch":"main"}'`;
+      snippet = `Invoke-RestMethod -Uri "${deployEndpoint}" -Method Post -Headers @{ Authorization = "Bearer ${apiToken}"; "Content-Type" = "application/json" } -Body '{"action":"deploy","domain":"${domain}","branch":"main"}'`;
     } else if (selectedAction === 'cache_purge') {
-      snippet = `Invoke-RestMethod -Uri "https://devhost.cloud/api/v1/deploy" -Method Post -Headers @{ Authorization = "Bearer ${apiToken}"; "Content-Type" = "application/json" } -Body '{"action":"cache_purge","domain":"${domain}"}'`;
+      snippet = `Invoke-RestMethod -Uri "${deployEndpoint}" -Method Post -Headers @{ Authorization = "Bearer ${apiToken}"; "Content-Type" = "application/json" } -Body '{"action":"cache_purge","domain":"${domain}"}'`;
     } else {
-      snippet = `Invoke-RestMethod -Uri "https://devhost.cloud/api/v1/deploy" -Method Post -Headers @{ Authorization = "Bearer ${apiToken}"; "Content-Type" = "application/json" } -Body '{"action":"dns_record","domain":"${domain}","recordType":"A","recordName":"api","recordContent":"103.151.102.45"}'`;
+      snippet = `Invoke-RestMethod -Uri "${deployEndpoint}" -Method Post -Headers @{ Authorization = "Bearer ${apiToken}"; "Content-Type" = "application/json" } -Body '{"action":"dns_record","domain":"${domain}","recordType":"A","recordName":"api","recordContent":"103.151.102.45"}'`;
     }
   }
 

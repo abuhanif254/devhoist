@@ -27,12 +27,6 @@ export default function DomainSearchEngine({ initialQuery = '' }: { initialQuery
   const [isLoading, setIsLoading] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
 
-  useEffect(() => {
-    if (initialQuery) {
-      searchDomain(initialQuery);
-    }
-  }, [initialQuery, currency]);
-
   const searchDomain = async (searchTerm: string) => {
     if (!searchTerm.trim()) return;
     setIsLoading(true);
@@ -50,6 +44,15 @@ export default function DomainSearchEngine({ initialQuery = '' }: { initialQuery
       setIsLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (!initialQuery) return;
+    const timer = window.setTimeout(() => {
+      void searchDomain(initialQuery);
+    }, 0);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialQuery, currency]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();

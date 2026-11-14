@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { Check, X, ArrowRight } from 'lucide-react';
 import { EXACT_14_POINT_MATRIX, HOSTING_PACKAGES } from '@/config/hostingData';
+import { convertBdtToUsd, formatCurrency } from '@/config/constants';
 import { useBilling } from '@/context/BillingContext';
 
 export default function ComparisonMatrix() {
@@ -17,10 +18,7 @@ export default function ComparisonMatrix() {
 
   const formatPlanPrice = (plan: typeof starterPlan) => {
     const monthlyPrice = isAnnual ? plan.yearlyEffectiveBDT : plan.baseMonthlyBDT;
-    if (currency === 'USD') {
-      return `$${(monthlyPrice / 120).toFixed(2)}/mo`;
-    }
-    return `৳${monthlyPrice}/mo`;
+    return `${formatCurrency(monthlyPrice, currency)}/mo`;
   };
 
   const renderCellContent = (value: string) => {
@@ -143,7 +141,7 @@ export default function ComparisonMatrix() {
                   pid: targetPlan.pid,
                   planName: targetPlan.name,
                   basePriceMonthlyBDT: targetPlan.baseMonthlyBDT,
-                  basePriceMonthlyUSD: Number((targetPlan.baseMonthlyBDT / 120).toFixed(2)),
+                  basePriceMonthlyUSD: convertBdtToUsd(targetPlan.baseMonthlyBDT),
                   specs: {
                     ram: targetPlan.ram,
                     cpu: targetPlan.cpu,
@@ -222,7 +220,7 @@ export default function ComparisonMatrix() {
                       pid: starterPlan.pid,
                       planName: starterPlan.name,
                       basePriceMonthlyBDT: starterPlan.baseMonthlyBDT,
-                      basePriceMonthlyUSD: Number((starterPlan.baseMonthlyBDT / 120).toFixed(2)),
+                      basePriceMonthlyUSD: convertBdtToUsd(starterPlan.baseMonthlyBDT),
                       specs: {
                         ram: starterPlan.ram,
                         cpu: starterPlan.cpu,
@@ -245,7 +243,7 @@ export default function ComparisonMatrix() {
                       pid: devPlan.pid,
                       planName: devPlan.name,
                       basePriceMonthlyBDT: devPlan.baseMonthlyBDT,
-                      basePriceMonthlyUSD: Number((devPlan.baseMonthlyBDT / 120).toFixed(2)),
+                      basePriceMonthlyUSD: convertBdtToUsd(devPlan.baseMonthlyBDT),
                       specs: {
                         ram: devPlan.ram,
                         cpu: devPlan.cpu,
@@ -268,7 +266,7 @@ export default function ComparisonMatrix() {
                       pid: businessPlan.pid,
                       planName: businessPlan.name,
                       basePriceMonthlyBDT: businessPlan.baseMonthlyBDT,
-                      basePriceMonthlyUSD: Number((businessPlan.baseMonthlyBDT / 120).toFixed(2)),
+                      basePriceMonthlyUSD: convertBdtToUsd(businessPlan.baseMonthlyBDT),
                       specs: {
                         ram: businessPlan.ram,
                         cpu: businessPlan.cpu,

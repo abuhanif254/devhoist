@@ -205,7 +205,16 @@ export default function AbuseReportingDeskPage() {
                                 </label>
                                 <select
                                     value={abuseType}
-                                    onChange={(e) => setAbuseType(e.target.value as any)}
+                                    onChange={(e) =>
+                                        setAbuseType(
+                                            e.target.value as
+                                                | 'phishing_fraud'
+                                                | 'malware_botnet'
+                                                | 'copyright_dmca'
+                                                | 'email_spam'
+                                                | 'ddos_network_attack'
+                                        )
+                                    }
                                     className="w-full h-10 px-3.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 font-semibold"
                                 >
                                     <option value="phishing_fraud">Phishing / Brand Spoofing / MFS Scam</option>

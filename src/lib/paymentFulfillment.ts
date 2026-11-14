@@ -251,12 +251,63 @@ export async function fulfillPaidInvoiceAndAffiliate(
     const renewalServiceId = String(
       invoice.service_id || firstItem.serviceId || metadata.serviceId || ''
     ).trim();
+
+    if (!input.skipInvoiceMarkPaid && invoiceId) {
+      await db
+        .from('invoices')
+        .update({
+          status: 'paid',
+          payment_method: gateway,
+          trx_id: trxId,
+          paid_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', invoiceId);
+    }
+
     if (renewalServiceId) {
       await extendAndUnsuspendHostingService(db, {
         serviceId: renewalServiceId,
         userId: userId || undefined,
         reason: `Renewal invoice ${invoiceNumber} settled via ${gateway}`,
       });
+    }
+
+    try {
+      await db.from('financial_profit_ledger').insert({
+        entry_code: `LEDG-REN-${Date.now().toString(36).toUpperCase()}`,
+        entry_type: 'hosting_renewal',
+        invoice_id: invoiceId || null,
+        user_id: userId || null,
+        gateway: normalizeLedgerGateway(gateway),
+        trx_id: trxId,
+        gross_amount_bdt: amountBDT,
+        base_cogs_cost_bdt: 0,
+        affiliate_commission_bdt: 0,
+        promo_discount_bdt: 0,
+        notes: `Hosting renewal settled (${invoiceNumber}) for service ${renewalServiceId || 'unspecified'}`,
+        created_at: new Date().toISOString(),
+      });
+    } catch {
+      // Idempotent / non-fatal ledger log
+    }
+
+    if (customerEmail) {
+      const receiptHtml = renderInvoicePaidEmail({
+        name: customerName,
+        invoiceNumber,
+        amountBDT,
+        paymentMethod: gateway,
+        trxId,
+        paidDate: new Date().toISOString().split('T')[0],
+        items: [{ desc: `Service Renewal (${invoiceNumber})`, amount: amountBDT }],
+      });
+      await sendEmail({
+        to: customerEmail,
+        subject: `Service Renewed: ${invoiceNumber}`,
+        template: 'invoice_paid_receipt',
+        html: receiptHtml,
+      }).catch(() => {});
     }
 
     return {
@@ -406,9 +457,26 @@ export async function fulfillPaidInvoiceAndAffiliate(
           serverNameservers = regRes.data.nameservers;
         }
 
+        const { data: existingRegDom } = await db
+          .from('domains')
+          .select('id, user_id')
+          .eq('domain_name', cleanDomain)
+          .maybeSingle();
+
+        if (
+          existingRegDom &&
+          existingRegDom.user_id &&
+          userId &&
+          existingRegDom.user_id !== userId
+        ) {
+          throw new Error(
+            `Ownership conflict: domain ${cleanDomain} already belongs to another customer account.`
+          );
+        }
+
         await db.from('domains').upsert(
           {
-            user_id: userId || null,
+            user_id: userId || existingRegDom?.user_id || null,
             domain_name: cleanDomain,
             tld,
             status: domainStatus,
@@ -477,9 +545,15 @@ export async function fulfillPaidInvoiceAndAffiliate(
 
         const { data: existingDom } = await db
           .from('domains')
-          .select('id, expiry_date')
+          .select('id, user_id, expiry_date')
           .eq('domain_name', cleanDomain)
           .maybeSingle();
+
+        if (existingDom && existingDom.user_id && userId && existingDom.user_id !== userId) {
+          throw new Error(
+            `Ownership conflict: domain ${cleanDomain} already belongs to another customer account.`
+          );
+        }
 
         const baseMs = existingDom?.expiry_date
           ? Math.max(Date.now(), new Date(String(existingDom.expiry_date)).getTime())
@@ -489,7 +563,7 @@ export async function fulfillPaidInvoiceAndAffiliate(
 
         await db.from('domains').upsert(
           {
-            user_id: userId || null,
+            user_id: userId || existingDom?.user_id || null,
             domain_name: cleanDomain,
             tld,
             status: nextStatus,
@@ -575,9 +649,26 @@ export async function fulfillPaidInvoiceAndAffiliate(
           .select('id')
           .single();
 
+        const { data: existingTrfDom } = await db
+          .from('domains')
+          .select('id, user_id')
+          .eq('domain_name', cleanDomain)
+          .maybeSingle();
+
+        if (
+          existingTrfDom &&
+          existingTrfDom.user_id &&
+          userId &&
+          existingTrfDom.user_id !== userId
+        ) {
+          throw new Error(
+            `Ownership conflict: domain ${cleanDomain} already belongs to another customer account.`
+          );
+        }
+
         await db.from('domains').upsert(
           {
-            user_id: userId || null,
+            user_id: userId || existingTrfDom?.user_id || null,
             domain_name: cleanDomain,
             tld,
             status: 'Transferring',

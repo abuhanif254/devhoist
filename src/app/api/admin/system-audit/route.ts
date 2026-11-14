@@ -11,7 +11,7 @@ import { getStorageAndQueueStatus } from '@/lib/cloudflareStorageQueue';
 import { getComputeNodeConfig, pingComputeAgent } from '@/lib/computeAgentClient';
 
 
-export interface AuditCheckResult {
+interface AuditCheckResult {
   id: string;
   name: string;
   category: 'DATABASE' | 'SECURITY' | 'FINANCE' | 'SYSTEM' | 'SEO';

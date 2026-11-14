@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   LayoutDashboard,
   Server,
@@ -137,8 +137,21 @@ function generateEphemeralSecret(prefix: string, bytesLength = 6): string {
   return `${prefix}${suffix}`;
 }
 
-export default function CustomerDashboardPage() {
+const VALID_DASHBOARD_TABS: ReadonlySet<DashboardTab> = new Set([
+  'overview',
+  'services',
+  'domains',
+  'billing',
+  'support',
+  'affiliate',
+  'agency_handover',
+  'security',
+  'profile',
+]);
+
+function CustomerDashboardContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { requireSudo } = useSudoGate();
   const {
     currentUser,
@@ -242,7 +255,10 @@ export default function CustomerDashboardPage() {
   const { language } = useLanguage();
 
   // Navigation State
-  const [activeTab, setActiveTab] = useState<DashboardTab>('overview');
+  const tabQuery = searchParams.get('tab') as DashboardTab | null;
+  const initialTab: DashboardTab =
+    tabQuery && VALID_DASHBOARD_TABS.has(tabQuery) ? tabQuery : 'overview';
+  const [activeTab, setActiveTab] = useState<DashboardTab>(initialTab);
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const [isNotifPopoverOpen, setIsNotifPopoverOpen] = useState(false);
   const [impersonatedUser, setImpersonatedUser] = useState<{ id: string; name: string; email: string } | null>(null);
@@ -1677,7 +1693,7 @@ export default function CustomerDashboardPage() {
                   </div>
                   <div className="pt-2 flex flex-wrap items-center justify-center gap-3">
                     <Link
-                      href="/domains"
+                      href="/cheap-domain-registration-bd"
                       className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-sm transition-colors shadow-lg shadow-emerald-600/25"
                     >
                       <Plus className="w-4 h-4" />
@@ -3572,5 +3588,13 @@ export default function CustomerDashboardPage() {
         ramLimitMB={activeService?.ramLimitMB ?? 2048}
       />
     </div>
+  );
+}
+
+export default function CustomerDashboardPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen w-full flex items-center justify-center bg-slate-50 dark:bg-zinc-950 text-sm text-slate-500">Loading DevHost Cloud Console...</div>}>
+      <CustomerDashboardContent />
+    </Suspense>
   );
 }

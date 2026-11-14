@@ -55,9 +55,9 @@ export interface TldPricing {
 }
 
 export const WHMCS_CONFIG = {
-  baseUrl: process.env.NEXT_PUBLIC_WHMCS_URL || 'https://billing.yourdomain.com',
+  baseUrl: process.env.NEXT_PUBLIC_SITE_URL || 'https://devhostcloud.com',
   companyName: 'DevHost Cloud',
-  supportEmail: 'support@yourdomain.com',
+  supportEmail: 'support@devhostcloud.com',
   whatsappNumber: '+8801700000000',
   telegramUser: 'devhostcloud',
   currencies: {
@@ -333,19 +333,22 @@ export function getWhmcsCartUrl(
   domain?: string
 ): string {
   const billingCycle = cycle === 'annually' ? 'annually' : 'monthly';
-  let url = `/pricing?pid=${pid}&billing=${billingCycle}&currency=${currency}`;
-
+  const params = new URLSearchParams({
+    pid: String(pid),
+    billing: billingCycle,
+    currency,
+  });
   if (domain) {
-    url += `&domain=${encodeURIComponent(domain)}`;
+    params.set('domain', domain);
   }
-  return url;
+  return `/?${params.toString()}#pricing`;
 }
 
 /**
  * Generate Native Internal Domain Registration Route
  */
 export function getWhmcsDomainRegisterUrl(domain: string, currency: 'BDT' | 'USD' = 'BDT'): string {
-  return `/domains?q=${encodeURIComponent(domain)}&mode=register&currency=${currency}`;
+  return `/cheap-domain-registration-bd?q=${encodeURIComponent(domain)}&mode=register&currency=${currency}`;
 }
 
 /**

@@ -442,7 +442,7 @@ export interface CurrentUser {
 interface PortalContextType {
   currentUser: CurrentUser | null;
   authLoading: boolean;
-  logout: (scopeOrEvent?: 'local' | 'global' | React.MouseEvent | any) => Promise<void>;
+  logout: (scopeOrEvent?: 'local' | 'global' | React.MouseEvent | unknown) => Promise<void>;
   signOutGlobal: () => Promise<void>;
   refreshUserData: () => Promise<void>;
   activeRole: UserRole;
@@ -1035,7 +1035,33 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         .eq('user_id', userId);
 
       if (srvRows && srvRows.length > 0) {
-        const mappedServices: CloudService[] = srvRows.map((s: any) => ({
+        const mappedServices: CloudService[] = srvRows.map((s: {
+          id: string;
+          domain: string;
+          package_name?: string | null;
+          status?: string | null;
+          datacenter?: string | null;
+          server_ip?: string | null;
+          cpanel_username?: string | null;
+          disk_used_gb?: number | string | null;
+          disk_limit_gb?: number | string | null;
+          inodes_used?: number | string | null;
+          inodes_limit?: number | string | null;
+          ram_used_mb?: number | string | null;
+          ram_limit_mb?: number | string | null;
+          cpu_cores?: number | string | null;
+          io_limit_mb?: number | string | null;
+          node_version?: string | null;
+          git_repo_url?: string | null;
+          git_branch?: string | null;
+          webhook_url?: string | null;
+          auto_renew?: boolean | null;
+          next_due_date?: string | null;
+          monthly_price_bdt?: number | string | null;
+          env_vars?: CloudService['envVars'] | null;
+          releases?: CloudService['releases'] | null;
+          ssh_public_key?: string | null;
+        }) => ({
           id: s.id,
           domain: s.domain,
           planName: s.package_name || 'Cloud Service',
@@ -1078,7 +1104,21 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
 
       if (invRows && invRows.length > 0) {
         setInvoices(
-          invRows.map((i: any) => ({
+          invRows.map((i: {
+            invoice_number?: string | null;
+            id: string;
+            created_at: string;
+            due_date?: string | null;
+            total_bdt?: number | string | null;
+            amount_bdt?: number | string | null;
+            status?: string | null;
+            payment_gateway?: string | null;
+            payment_method?: string | null;
+            trx_id?: string | null;
+            plan_name?: string | null;
+            items?: InvoiceItem[] | null;
+            description?: string | null;
+          }) => ({
             id: i.invoice_number || i.id,
             date: String(i.created_at).split('T')[0],
             dueDate: String(i.due_date || i.created_at).split('T')[0],
@@ -1102,7 +1142,22 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
 
       if (domRows && domRows.length > 0) {
         setDomains(
-          domRows.map((d: any) => {
+          domRows.map((d: {
+            id: string;
+            status?: string | null;
+            domain_name?: string | null;
+            domain?: string | null;
+            expiry_date?: string | null;
+            registrar_lock?: boolean | null;
+            whois_privacy?: boolean | null;
+            auto_renew?: boolean | null;
+            nameservers?: string[] | null;
+            dns_records?: DomainItem['dnsRecords'] | null;
+            registrar_provider?: string | null;
+            registrar_order_id?: string | null;
+            cloudflare_zone_id?: string | null;
+            cloudflare_zone_status?: string | null;
+          }) => {
             const rawStatus = String(d.status || '');
             const normStatus =
               rawStatus.toLowerCase() === 'active'
@@ -1112,7 +1167,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
                 : 'Expiring Soon';
             return {
               id: d.id,
-              domain: d.domain_name || d.domain,
+              domain: d.domain_name || d.domain || '',
               expiryDate: String(d.expiry_date || '').split('T')[0],
               daysRemaining: d.expiry_date
                 ? Math.max(
@@ -1181,7 +1236,16 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
 
       if (wtxRows && wtxRows.length > 0) {
         setWalletTransactions(
-          wtxRows.map((t: any) => ({
+          wtxRows.map((t: {
+            id: string;
+            created_at: string;
+            type?: string | null;
+            amount_bdt?: number | string | null;
+            amount?: number | string | null;
+            description?: string | null;
+            method?: string | null;
+            balance_after_bdt?: number | string | null;
+          }) => ({
             id: t.id,
             date: String(t.created_at).split('T')[0],
             type: t.type === 'credit' ? 'Top-Up' : t.type === 'refund' ? 'Refund' : 'Debit',
@@ -1243,7 +1307,19 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
             availableBalanceBDT: availVal,
             totalWithdrawnBDT: withdrawnVal,
             totalEarnedBDT: Number((pendingVal + availVal + withdrawnVal).toFixed(2)),
-            commissions: rawComms.map((c: any) => {
+            commissions: rawComms.map((c: {
+              matures_at?: string | null;
+              id?: string | number;
+              created_at?: string | null;
+              invoice_number?: string | null;
+              invoice_id?: string | null;
+              referred_user_id?: string | null;
+              order_amount_bdt?: number | string | null;
+              commission_amount_bdt?: number | string | null;
+              commission_rate?: number | string | null;
+              sub_id?: string | null;
+              status?: AffiliateCommissionItem['status'] | null;
+            }) => {
               const maturesAt = c.matures_at ? new Date(c.matures_at).getTime() : Date.now();
               const daysLeft = Math.max(0, Math.ceil((maturesAt - Date.now()) / 86400000));
               return {
@@ -1261,7 +1337,16 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
                 clearanceDate: String(c.matures_at || '').split('T')[0],
               };
             }),
-            payouts: rawPayouts.map((pay: any) => ({
+            payouts: rawPayouts.map((pay: {
+              id?: string | number;
+              created_at?: string | null;
+              amount_bdt?: number | string | null;
+              payout_method?: string | null;
+              account_details?: string | null;
+              status?: string | null;
+              admin_trx_id?: string | null;
+              payout_gateway_ref?: string | null;
+            }) => ({
               id: String(pay.id),
               date: String(pay.created_at || '').split('T')[0],
               amount: Number(pay.amount_bdt || 0),
@@ -1307,7 +1392,17 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       }
 
       // Self-healing profile loader: maybeSingle() never throws when the row is missing.
-      let profile: any = null;
+      interface UserProfileRow {
+        id?: string;
+        email?: string | null;
+        role?: string | null;
+        full_name?: string | null;
+        company?: string | null;
+        phone?: string | null;
+        wallet_balance_bdt?: number | string | null;
+        referral_code?: string | null;
+      }
+      let profile: UserProfileRow | null = null;
       let profileQueryFailed = false;
       try {
         const { data, error } = await supabase
@@ -1374,7 +1469,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       const refCode = profile?.referral_code || session.user.email?.split('@')[0] || 'ref';
       setAffiliate((prev) => ({
         ...prev,
-        refLink: `https://devhost.cloud/?ref=${refCode}`,
+        refLink: buildAffiliateReferralUrl(refCode),
         referralCode: refCode,
       }));
 
@@ -1388,7 +1483,23 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
           if (nodesRes.ok) {
             const nodesData = await nodesRes.json();
             if (Array.isArray(nodesData.nodes)) {
-              const adminMappedNodes: ServerNode[] = nodesData.nodes.map((n: any) => ({
+              const adminMappedNodes: ServerNode[] = nodesData.nodes.map((n: {
+                id?: string;
+                node_code?: string;
+                node_name?: string;
+                whm_hostname?: string;
+                datacenter_location?: string;
+                max_disk_gb?: number | string | null;
+                allocated_disk_gb?: number | string | null;
+                actual_physical_disk_gb?: number | string | null;
+                max_cpanel_slots?: number | string | null;
+                used_cpanel_slots?: number | string | null;
+                ram_total_gb?: number | string | null;
+                ram_used_gb?: number | string | null;
+                lve_load?: number | string | null;
+                is_healthy?: boolean | null;
+                auto_provision_enabled?: boolean | null;
+              }) => ({
                 id: String(n.id || n.node_code),
                 name: String(n.node_name || n.node_code || 'Cloud Node'),
                 hostname: String(n.whm_hostname || `${n.node_code || 'node'}.devhost.cloud`),
@@ -1419,7 +1530,23 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
             if (Array.isArray(adminAffData.payouts)) {
               setAffiliate((prev) => ({
                 ...prev,
-                payouts: adminAffData.payouts.map((pay: any) => ({
+                payouts: adminAffData.payouts.map((pay: {
+                  id?: string | number;
+                  created_at?: string | null;
+                  amount_bdt?: number | string | null;
+                  payout_method?: string | null;
+                  account_details?: string | null;
+                  status?: string | null;
+                  admin_trx_id?: string | null;
+                  payout_gateway_ref?: string | null;
+                  affiliate_user_id?: string | null;
+                  payoutLockUntil?: string | null;
+                  isCoolingLocked?: boolean | null;
+                  isFrozenForFraud?: boolean | null;
+                  fraudReason?: string | null;
+                  openFraudAlertsCount?: number | string | null;
+                  rejected_reason?: string | null;
+                }) => ({
                   id: String(pay.id),
                   date: String(pay.created_at || '').split('T')[0],
                   amount: Number(pay.amount_bdt || 0),
@@ -1461,9 +1588,12 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       localStorage.removeItem('devhost-portal-state-v9');
     } catch {}
 
-    refreshUserData();
-    setIsClientLoaded(true);
+    const initTimer = window.setTimeout(() => {
+      void refreshUserData();
+      setIsClientLoaded(true);
+    }, 0);
 
+    let unsubscribeAuth: (() => void) | undefined;
     if (isSupabaseConfigured()) {
       const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
         if (event === 'SIGNED_OUT' || !session) {
@@ -1491,10 +1621,13 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         }
       });
 
-      return () => {
-        authListener?.subscription.unsubscribe();
-      };
+      unsubscribeAuth = () => authListener?.subscription.unsubscribe();
     }
+
+    return () => {
+      window.clearTimeout(initTimer);
+      unsubscribeAuth?.();
+    };
   }, [refreshUserData]);
 
   // Fetch dynamic catalog from /api/catalog (Supabase Postgres)
@@ -1505,7 +1638,23 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         if (res.ok) {
           const data = await res.json();
           if (data.allPlans && data.allPlans.length > 0) {
-            const mappedPlans: DynamicHostingPlan[] = data.allPlans.map((p: any) => ({
+            const mappedPlans: DynamicHostingPlan[] = data.allPlans.map((p: {
+              slug: string;
+              id: number;
+              name_en: string;
+              name_bn?: string;
+              category: DynamicHostingPlan['type'];
+              selling_price_monthly_bdt: number | string;
+              unit_server_cost_bdt?: number | string | null;
+              min_owner_profit_bdt?: number | string | null;
+              max_affiliate_pool_bdt?: number | string | null;
+              storage_gb: number | string;
+              ram_mb: number | string;
+              cpu_cores: number | string;
+              inode_limit: number | string;
+              features_json?: string[] | null;
+              is_popular?: boolean | null;
+            }) => ({
               id: p.slug,
               slug: p.slug,
               pid: p.id,
@@ -1530,7 +1679,17 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
             setDynamicPlans(mappedPlans);
           }
           if (data.domainTlds && data.domainTlds.length > 0) {
-            const mappedTlds: DynamicTldPricing[] = data.domainTlds.map((t: any) => ({
+            const mappedTlds: DynamicTldPricing[] = data.domainTlds.map((t: {
+              tld: string;
+              category?: string;
+              reg_price_bdt: number | string;
+              renew_price_bdt: number | string;
+              transfer_price_bdt: number | string;
+              registrar_cost_bdt?: number | string | null;
+              owner_net_profit_reg_bdt?: number | string | null;
+              affiliate_eligible?: boolean | null;
+              featured_badge?: string;
+            }) => ({
               tld: t.tld,
               category: t.category,
               registerBDT: Number(t.reg_price_bdt),
@@ -1544,7 +1703,17 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
             setDynamicTlds(mappedTlds);
           }
           if (Array.isArray(data.promoCodes)) {
-            const mappedPromos: PromoCode[] = data.promoCodes.map((pr: any) => {
+            const mappedPromos: PromoCode[] = data.promoCodes.map((pr: {
+              expires_at?: string | null;
+              is_active?: boolean | null;
+              code?: string | null;
+              discount_value?: number | string | null;
+              discountPercent?: number | string | null;
+              current_uses?: number | string | null;
+              usesCount?: number | string | null;
+              max_uses?: number | string | null;
+              maxUses?: number | string | null;
+            }) => {
               const expiresStr = pr.expires_at ? String(pr.expires_at).split('T')[0] : '2027-12-31';
               const isExpired =
                 pr.is_active === false ||
@@ -1561,7 +1730,26 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
             setPromoCodes(mappedPromos);
           }
           if (Array.isArray(data.serverNodes)) {
-            const mappedNodes: ServerNode[] = data.serverNodes.map((n: any) => ({
+            const mappedNodes: ServerNode[] = data.serverNodes.map((n: {
+              id?: string;
+              node_code?: string;
+              node_name?: string;
+              name?: string;
+              whm_hostname?: string;
+              hostname?: string;
+              datacenter_location?: string;
+              location?: string;
+              max_disk_gb?: number | string | null;
+              allocated_disk_gb?: number | string | null;
+              actual_physical_disk_gb?: number | string | null;
+              max_cpanel_slots?: number | string | null;
+              used_cpanel_slots?: number | string | null;
+              ram_total_gb?: number | string | null;
+              ram_used_gb?: number | string | null;
+              lve_load?: number | string | null;
+              is_healthy?: boolean | null;
+              auto_provision_enabled?: boolean | null;
+            }) => ({
               id: String(n.id || n.node_code),
               name: String(n.node_name || n.name || n.node_code || 'Cloud Node'),
               hostname: String(n.whm_hostname || n.hostname || `${n.node_code || 'node'}.devhost.cloud`),
@@ -1591,7 +1779,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     syncDynamicCatalog();
   }, []);
 
-  const logout = async (scopeOrEvent?: 'local' | 'global' | React.MouseEvent | any) => {
+  const logout = async (scopeOrEvent?: 'local' | 'global' | React.MouseEvent | unknown) => {
     const scope: 'local' | 'global' = scopeOrEvent === 'global' ? 'global' : 'local';
     try {
       if (isSupabaseConfigured()) {
@@ -2519,8 +2707,8 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         invoiceNumber: data.invoiceNumber,
         instructions: data.instructions,
       };
-    } catch (err: any) {
-      return { ok: false, error: err?.message || 'Wallet top-up network failure.' };
+    } catch (err: unknown) {
+      return { ok: false, error: err instanceof Error ? err.message : 'Wallet top-up network failure.' };
     }
   };
 
@@ -2583,8 +2771,8 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       ]);
 
       return true;
-    } catch (err: any) {
-      alert(err?.message || 'Atomic wallet checkout failed.');
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Atomic wallet checkout failed.');
       return false;
     }
   };
@@ -2717,8 +2905,8 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         payouts: [newPayout, ...prev.payouts],
       }));
       return { ok: true };
-    } catch (err: any) {
-      return { ok: false, error: err?.message || 'Payout request network failure.' };
+    } catch (err: unknown) {
+      return { ok: false, error: err instanceof Error ? err.message : 'Payout request network failure.' };
     }
   };
 
@@ -2756,8 +2944,8 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         };
       });
       return { ok: true };
-    } catch (err: any) {
-      return { ok: false, error: err?.message || 'Payout approval network error.' };
+    } catch (err: unknown) {
+      return { ok: false, error: err instanceof Error ? err.message : 'Payout approval network error.' };
     }
   };
 
@@ -2813,8 +3001,8 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         ok: true,
         refundedToAvailable: Boolean(data.refundedToAvailable ?? !forfeitForFraud),
       };
-    } catch (err: any) {
-      return { ok: false, error: err?.message || 'Payout rejection network error.' };
+    } catch (err: unknown) {
+      return { ok: false, error: err instanceof Error ? err.message : 'Payout rejection network error.' };
     }
   };
 
@@ -2856,8 +3044,8 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         };
       });
       return { ok: true };
-    } catch (err: any) {
-      return { ok: false, error: err?.message || 'Commission clawback network error.' };
+    } catch (err: unknown) {
+      return { ok: false, error: err instanceof Error ? err.message : 'Commission clawback network error.' };
     }
   };
 

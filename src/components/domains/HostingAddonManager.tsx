@@ -18,6 +18,7 @@ import {
   Cpu,
   FileCode,
 } from 'lucide-react';
+import { useBilling } from '@/context/BillingContext';
 
 export interface AddonDomainItem {
   id: string;
@@ -49,6 +50,7 @@ export default function HostingAddonManager({
   serviceDomain,
   cpanelUsername,
 }: HostingAddonManagerProps) {
+  const { openStackBuilder } = useBilling();
   const [domains, setDomains] = useState<AddonDomainItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [quota, setQuota] = useState({
@@ -89,14 +91,21 @@ export default function HostingAddonManager({
   };
 
   useEffect(() => {
-    fetchDomains();
+    const timer = window.setTimeout(() => {
+      void fetchDomains();
+    }, 0);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serviceId]);
 
   // Update default document root on hostname change
   useEffect(() => {
     const host = domainType === 'subdomain' ? `${subPrefix}.${serviceDomain}` : addonHostname;
     if (host && !host.includes('..')) {
-      setDocumentRoot(`/home/${cpanelUsername || 'user'}/public_html/${host.trim()}`);
+      const timer = window.setTimeout(() => {
+        setDocumentRoot(`/home/${cpanelUsername || 'user'}/public_html/${host.trim()}`);
+      }, 0);
+      return () => window.clearTimeout(timer);
     }
   }, [domainType, subPrefix, addonHostname, serviceDomain, cpanelUsername]);
 
@@ -143,8 +152,8 @@ export default function HostingAddonManager({
       setSubPrefix('');
       setAddonHostname('');
       await fetchDomains();
-    } catch (err: any) {
-      setFormError(err.message);
+    } catch (err: unknown) {
+      setFormError(err instanceof Error ? err.message : 'Failed to map domain to container.');
     } finally {
       setIsSubmitting(false);
     }
@@ -246,7 +255,19 @@ export default function HostingAddonManager({
             <span>You have reached the maximum addon domains for your plan. Need to host more websites?</span>
             <button
               type="button"
-              onClick={() => alert('Redirecting to upgrade checkout...')}
+              onClick={() => {
+                const isAlreadyPro = /pro/i.test(quota.planName || '');
+                openStackBuilder({
+                  pid: isAlreadyPro ? 3 : 2,
+                  planName: isAlreadyPro ? 'Business Max' : 'Developer Pro',
+                  basePriceMonthlyBDT: isAlreadyPro ? 950 : 450,
+                  basePriceMonthlyUSD: isAlreadyPro ? 7.92 : 3.75,
+                  domainName: serviceDomain,
+                  specs: isAlreadyPro
+                    ? { ram: '4 GB DDR5', cpu: '4 vCPU', storage: '40 GB NVMe' }
+                    : { ram: '2 GB DDR5', cpu: '2 vCPU', storage: '15 GB NVMe' },
+                });
+              }}
               className="px-3 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold cursor-pointer"
             >
               Upgrade Plan
@@ -277,7 +298,11 @@ export default function HostingAddonManager({
             <label className="text-[11px] text-slate-500">Domain Mapping Type:</label>
             <select
               value={domainType}
-              onChange={(e) => setDomainType(e.target.value as any)}
+              onChange={(e) =>
+                setDomainType(
+                  e.target.value as 'addon_domain' | 'subdomain' | 'parked_alias' | 'staging_clone'
+                )
+              }
               className="mt-1 w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white"
             >
               <option value="addon_domain">Addon Domain (Separate Website)</option>

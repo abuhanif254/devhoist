@@ -81,7 +81,10 @@ export default function AdminFinancialLedgerView() {
   };
 
   useEffect(() => {
-    fetchLedger();
+    const timer = window.setTimeout(() => {
+      void fetchLedger();
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
   const handleOpenRefund = (invoiceId: string, amount: number) => {
@@ -113,8 +116,8 @@ export default function AdminFinancialLedgerView() {
         setIsRefundModalOpen(false);
         fetchLedger();
         alert(data.message || 'Refund executed and affiliate commission clawed back.');
-      } catch (err: any) {
-        alert(err.message);
+      } catch (err: unknown) {
+        alert(err instanceof Error ? err.message : 'Refund failed.');
       }
     }, `Execute Refund for Invoice ${selectedInvoiceId}`);
   };

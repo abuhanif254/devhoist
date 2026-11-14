@@ -57,7 +57,10 @@ export default function AdminWafRulesManager() {
   };
 
   useEffect(() => {
-    fetchWafRules();
+    const timer = window.setTimeout(() => {
+      void fetchWafRules();
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
   const handleAddRuleSubmit = (e: React.FormEvent) => {
@@ -86,8 +89,8 @@ export default function AdminWafRulesManager() {
         setReason('');
         fetchWafRules();
         alert(data.message || 'WAF blacklist rule applied!');
-      } catch (err: any) {
-        alert(err.message);
+      } catch (err: unknown) {
+        alert(err instanceof Error ? err.message : 'Failed to add WAF rule.');
       }
     }, `Add Edge WAF Blacklist Rule for ${targetValue}`);
   };
@@ -101,8 +104,8 @@ export default function AdminWafRulesManager() {
 
         fetchWafRules();
         alert(`Entity ${rule.target_value} has been unbanned.`);
-      } catch (err: any) {
-        alert(err.message);
+      } catch (err: unknown) {
+        alert(err instanceof Error ? err.message : 'Failed to delete WAF rule.');
       }
     }, `Unban ${rule.target_value} from Edge WAF`);
   };
@@ -253,7 +256,7 @@ export default function AdminWafRulesManager() {
                 <label className="text-[11px] text-slate-500 font-bold">Rule Target Type:</label>
                 <select
                   value={ruleType}
-                  onChange={(e) => setRuleType(e.target.value as any)}
+                  onChange={(e) => setRuleType(e.target.value as 'ip_address' | 'email_domain' | 'payment_wallet_number' | 'user_account')}
                   className="w-full mt-1 px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-white/10"
                 >
                   <option value="ip_address">IPv4 / IPv6 Address (Block Hacker)</option>
@@ -287,7 +290,7 @@ export default function AdminWafRulesManager() {
                 <label className="text-[11px] text-slate-500 font-bold">Enforced Action:</label>
                 <select
                   value={ruleAction}
-                  onChange={(e) => setRuleAction(e.target.value as any)}
+                  onChange={(e) => setRuleAction(e.target.value as 'block_403' | 'challenge_2fa' | 'freeze_withdrawals')}
                   className="w-full mt-1 px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-white/10"
                 >
                   <option value="block_403">block_403 (Immediate 403 Access Denied)</option>

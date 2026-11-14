@@ -62,7 +62,8 @@ function LegalComplianceContent() {
 
     useEffect(() => {
         if (docParam && DOC_TABS.some((t) => t.slug === docParam)) {
-            setActiveSlug(docParam);
+            const timer = window.setTimeout(() => setActiveSlug(docParam), 0);
+            return () => window.clearTimeout(timer);
         }
     }, [docParam]);
 

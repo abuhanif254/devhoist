@@ -44,10 +44,12 @@ export default function LogDoctorModal({
   const [loading, setLoading] = useState(false);
   const [fixingAction, setFixingAction] = useState<string | null>(null);
   const [fixSuccessMessages, setFixSuccessMessages] = useState<Record<string, string>>({});
+  const [fixErrorMessages, setFixErrorMessages] = useState<Record<string, string>>({});
 
   const runDiagnosticScan = useCallback(async () => {
     setLoading(true);
     setFixSuccessMessages({});
+    setFixErrorMessages({});
 
     try {
       const query = new URLSearchParams({
@@ -106,8 +108,13 @@ export default function LogDoctorModal({
         }),
       });
 
-      const data = await res.json();
-      if (data.success && data.autoFixResult) {
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success && data.autoFixResult) {
+        setFixErrorMessages((prev) => {
+          const next = { ...prev };
+          delete next[fixActionCode];
+          return next;
+        });
         setFixSuccessMessages((prev) => ({
           ...prev,
           [fixActionCode]: data.autoFixResult.message,
@@ -124,11 +131,17 @@ export default function LogDoctorModal({
         }
 
         if (onAutoFixComplete) onAutoFixComplete();
+      } else {
+        setFixErrorMessages((prev) => ({
+          ...prev,
+          [fixActionCode]: data.error || `Auto-fix failed (HTTP ${res.status}). Manual inspection required.`,
+        }));
       }
-    } catch {
-      setFixSuccessMessages((prev) => ({
+    } catch (err) {
+      setFixErrorMessages((prev) => ({
         ...prev,
-        [fixActionCode]: 'Auto-fix routine applied successfully.',
+        [fixActionCode]:
+          err instanceof Error ? `Auto-fix request failed: ${err.message}` : 'Unable to reach Log Doctor auto-fix service.',
       }));
     } finally {
       setFixingAction(null);
@@ -293,6 +306,12 @@ export default function LogDoctorModal({
                                 <p className="text-xs font-semibold text-emerald-700 dark:text-emerald-300 mt-2 flex items-center gap-1.5">
                                   <Sparkles className="w-3.5 h-3.5" />
                                   <span>{fixSuccessMessages[issue.fixActionCode]}</span>
+                                </p>
+                              )}
+                              {fixErrorMessages[issue.fixActionCode] && (
+                                <p className="text-xs font-semibold text-rose-700 dark:text-rose-300 mt-2 flex items-center gap-1.5">
+                                  <AlertCircle className="w-3.5 h-3.5" />
+                                  <span>{fixErrorMessages[issue.fixActionCode]}</span>
                                 </p>
                               )}
                             </div>

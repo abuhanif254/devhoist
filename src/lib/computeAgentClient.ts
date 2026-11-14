@@ -154,13 +154,17 @@ export async function signAgentPayload(
   };
 }
 
+const seenCallbackNonces = new Map<string, number>();
+
 /**
- * Constant-time HMAC-SHA256 + 5-minute replay-window verification for inbound agent callbacks.
+ * Constant-time HMAC-SHA256 + 5-minute replay-window + optional nonce-replay
+ * verification for inbound agent callbacks.
  */
 export async function verifyAgentCallbackSignature(opts: {
   rawBody: string;
   timestampHeader: string | null;
   signatureHeader: string | null;
+  nonceHeader?: string | null;
   secret?: string;
   maxSkewMs?: number;
 }): Promise<{ valid: boolean; reason?: string }> {
@@ -178,9 +182,21 @@ export async function verifyAgentCallbackSignature(opts: {
     return { valid: false, reason: 'Invalid callback timestamp.' };
   }
 
+  const now = Date.now();
   const skew = opts.maxSkewMs ?? 5 * 60 * 1000;
-  if (Math.abs(Date.now() - tsNum) > skew) {
+  if (Math.abs(now - tsNum) > skew) {
     return { valid: false, reason: 'Callback timestamp outside 5-minute replay window.' };
+  }
+
+  const nonce = String(opts.nonceHeader || '').trim();
+  if (nonce) {
+    for (const [k, exp] of seenCallbackNonces.entries()) {
+      if (exp < now) seenCallbackNonces.delete(k);
+    }
+    if (seenCallbackNonces.has(nonce)) {
+      return { valid: false, reason: 'Replay detected: callback nonce already used.' };
+    }
+    seenCallbackNonces.set(nonce, now + skew);
   }
 
   const normalizedSig = opts.signatureHeader.replace(/^sha256=/i, '').trim().toLowerCase();
@@ -227,6 +243,7 @@ async function callComputeAgent<T>(
   const method = options.method || 'POST';
   const rawBody = options.body !== undefined ? JSON.stringify(options.body) : '';
   const { timestamp, signatureHeader } = await signAgentPayload(cfg.secret, rawBody);
+  const nonce = crypto.randomUUID();
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs || 15000);
@@ -237,6 +254,7 @@ async function callComputeAgent<T>(
       headers: {
         Authorization: `Bearer ${cfg.secret}`,
         'X-DevHost-Timestamp': timestamp,
+        'X-DevHost-Nonce': nonce,
         'X-DevHost-Signature': signatureHeader,
         'Content-Type': 'application/json',
         Accept: 'application/json',

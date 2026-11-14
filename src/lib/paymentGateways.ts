@@ -5,6 +5,7 @@
 // ==============================================================================
 
 import { timingSafeEqualStr, verifyHmacSha256Hex } from '@/lib/authGuard';
+import { USD_EXCHANGE_RATE } from '@/config/constants';
 
 const COMPROMISED_WEBHOOK_SECRETS = new Set([
   'devhost_webhook_secret_key',
@@ -468,7 +469,9 @@ export async function createStripeCheckoutSession(
 
   const currency = input.currency === 'USD' ? 'usd' : 'bdt';
   const unitAmountMajor =
-    currency === 'usd' ? Math.max(1, input.amountBDT / 120) : Math.max(1, input.amountBDT);
+    currency === 'usd'
+      ? Math.max(1, input.amountBDT / USD_EXCHANGE_RATE)
+      : Math.max(1, input.amountBDT);
   const unitAmountMinor = Math.round(unitAmountMajor * 100);
 
   const form = new URLSearchParams();

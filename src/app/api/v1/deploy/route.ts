@@ -82,7 +82,7 @@ async function resolveVerifiedPatUser(
       if (!hashMatches && !rawMatches) continue;
 
       const scopes = Array.isArray(entry.scopes) ? entry.scopes : [];
-      if (scopes.length > 0 && !scopes.includes('*') && !scopes.includes(requiredScope)) {
+      if (!scopes.includes('*') && !scopes.includes(requiredScope)) {
         return {
           ok: false,
           status: 403,
@@ -173,11 +173,20 @@ export async function POST(request: NextRequest) {
     }
 
     const db = getServiceSupabase();
-    let resolvedServiceId = String(serviceId || '');
+    let resolvedServiceId = String(serviceId || '').trim();
+    let ownedServiceDomain = '';
+
+    if (!resolvedServiceId && !targetDomain) {
+      return NextResponse.json(
+        { error: 'Bad Request: serviceId or domain is required.' },
+        { status: 400 }
+      );
+    }
+
     if (resolvedServiceId) {
       const { data: srv } = await db
         .from('hosting_services')
-        .select('id, user_id')
+        .select('id, user_id, domain')
         .eq('id', resolvedServiceId)
         .maybeSingle();
       if (!srv || srv.user_id !== patAuth.userId) {
@@ -186,16 +195,18 @@ export async function POST(request: NextRequest) {
           { status: 403 }
         );
       }
+      ownedServiceDomain = String(srv.domain || '').trim().toLowerCase();
     } else if (targetDomain) {
       const cleanHost = String(targetDomain).trim().toLowerCase();
       const { data: srv } = await db
         .from('hosting_services')
-        .select('id, user_id')
+        .select('id, user_id, domain')
         .eq('domain', cleanHost)
         .eq('user_id', patAuth.userId)
         .maybeSingle();
       if (srv?.id) {
         resolvedServiceId = String(srv.id);
+        ownedServiceDomain = String(srv.domain || cleanHost).trim().toLowerCase();
       }
       const { data: dom } = await db
         .from('domains')
@@ -213,7 +224,13 @@ export async function POST(request: NextRequest) {
 
     let message = '';
     const deploymentId = `dep_${Date.now().toString(36)}`;
-    const resolvedDomain = String(targetDomain || 'app.devhost.cloud').trim().toLowerCase();
+    const resolvedDomain = String(targetDomain || ownedServiceDomain || '').trim().toLowerCase();
+    if (!resolvedDomain) {
+      return NextResponse.json(
+        { error: 'Bad Request: Unable to resolve target domain for service.' },
+        { status: 400 }
+      );
+    }
     let cloudflareZoneId: string | null = null;
     let cloudflareRecordId: string | null = null;
     let buildJobId: string | null = null;
@@ -389,7 +406,7 @@ export async function POST(request: NextRequest) {
         const envVars = resolvedServiceId
           ? await loadDecryptedEnvMap(db, resolvedServiceId, 'production')
           : {};
-        const jobId = `bld_${commitSha}_${Date.now()}`;
+        const jobId = crypto.randomUUID();
         const nodeCfg = getComputeNodeConfig(target.agentEndpoint);
 
         if (queueConfigured || sandbox) {

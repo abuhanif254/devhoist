@@ -3,6 +3,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { useBilling } from '@/context/BillingContext';
+import { convertBdtToUsd } from '@/config/constants';
 import {
     Sparkles,
     MessageSquare,
@@ -53,8 +54,14 @@ const QUICK_PROMPTS = [
     'How to fix 503 Service Unavailable?',
 ];
 
+let conciergeMsgSeq = 0;
+function nextConciergeMsgId(prefix: string): string {
+    conciergeMsgSeq += 1;
+    return `${prefix}_${conciergeMsgSeq}`;
+}
+
 export default function AICloudConcierge() {
-    const { openStackBuilder } = useBilling();
+    const { openStackBuilder, currency } = useBilling();
     const [isOpen, setIsOpen] = useState(false);
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
@@ -79,7 +86,7 @@ export default function AICloudConcierge() {
         if (!clean || isLoading) return;
 
         const userMsg: ConciergeMessage = {
-            id: `u_${Date.now()}`,
+            id: nextConciergeMsgId('u'),
             role: 'user',
             text: clean,
         };
@@ -95,7 +102,7 @@ export default function AICloudConcierge() {
             });
             const data = await res.json();
             const botMsg: ConciergeMessage = {
-                id: `b_${Date.now()}`,
+                id: nextConciergeMsgId('b'),
                 role: 'assistant',
                 text: data.reply || 'Here is the recommended configuration for your workload.',
                 deployAction: data.deployAction,
@@ -107,7 +114,7 @@ export default function AICloudConcierge() {
             setMessages((prev) => [
                 ...prev,
                 {
-                    id: `err_${Date.now()}`,
+                    id: nextConciergeMsgId('err'),
                     role: 'assistant',
                     text: 'Connection momentarily busy. You can deploy directly from our 16-Stack Marketplace or contact 24/7 engineering support.',
                 },
@@ -228,7 +235,7 @@ export default function AICloudConcierge() {
                                                         selectedStackSlug: act.stackSlug,
                                                         defaultStack: act.stackSlug,
                                                         basePriceBDT: act.monthlyBdt,
-                                                        basePriceUSD: Number((act.monthlyBdt / 120).toFixed(2)),
+                                                        basePriceUSD: convertBdtToUsd(act.monthlyBdt),
                                                     });
                                                 }}
                                                 className="w-full py-2 px-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-[11px] flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
@@ -268,12 +275,13 @@ export default function AICloudConcierge() {
                                                         domainName: dc.domain,
                                                         basePriceBDT: 450,
                                                         basePriceUSD: 3.75,
+                                                        defaultBillingCycle: 'annually',
                                                     });
                                                 }}
                                                 className="w-full py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] flex items-center justify-center gap-1.5 cursor-pointer"
                                             >
                                                 <CheckCircle2 className="w-3.5 h-3.5" />
-                                                <span>Claim Free with Annual Plan →</span>
+                                                <span>{m.domainCard.available ? `Claim Free (${currency === 'USD' ? '$0' : '৳0'}) with Annual Plan →` : 'Open Checkout Drawer →'}</span>
                                             </button>
                                         </div>
                                     )}

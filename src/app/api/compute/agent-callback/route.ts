@@ -37,11 +37,13 @@ export async function POST(request: NextRequest) {
     const rawBody = await request.text();
     const timestampHeader = request.headers.get('x-devhost-timestamp') || '';
     const signatureHeader = request.headers.get('x-devhost-signature') || '';
+    const nonceHeader = request.headers.get('x-devhost-nonce') || '';
 
     const verification = await verifyAgentCallbackSignature({
       rawBody,
       timestampHeader,
       signatureHeader,
+      nonceHeader: nonceHeader || undefined,
     });
 
     if (!verification.valid) {

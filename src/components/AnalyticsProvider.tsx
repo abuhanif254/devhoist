@@ -3,6 +3,13 @@
 import React, { createContext, useContext, useEffect } from 'react';
 import Script from 'next/script';
 
+declare global {
+  interface Window {
+    gtag?: (...args: unknown[]) => void;
+    fbq?: (...args: unknown[]) => void;
+  }
+}
+
 interface AnalyticsContextType {
   trackViewContent: (contentName: string, priceBDT?: number) => void;
   trackDomainSearch: (query: string) => void;
@@ -28,8 +35,8 @@ export default function AnalyticsProvider({ children }: { children: React.ReactN
     if (typeof window === 'undefined') return;
 
     // Google Analytics 4
-    if ((window as any).gtag) {
-      (window as any).gtag('event', 'view_item', {
+    if (window.gtag) {
+      window.gtag('event', 'view_item', {
         items: [{ item_name: contentName, price: priceBDT }],
         currency: 'BDT',
         value: priceBDT,
@@ -37,8 +44,8 @@ export default function AnalyticsProvider({ children }: { children: React.ReactN
     }
 
     // Meta Pixel
-    if ((window as any).fbq) {
-      (window as any).fbq('track', 'ViewContent', {
+    if (window.fbq) {
+      window.fbq('track', 'ViewContent', {
         content_name: contentName,
         value: priceBDT,
         currency: 'BDT',
@@ -49,14 +56,14 @@ export default function AnalyticsProvider({ children }: { children: React.ReactN
   const trackDomainSearch = (query: string) => {
     if (typeof window === 'undefined') return;
 
-    if ((window as any).gtag) {
-      (window as any).gtag('event', 'search', {
+    if (window.gtag) {
+      window.gtag('event', 'search', {
         search_term: query,
       });
     }
 
-    if ((window as any).fbq) {
-      (window as any).fbq('track', 'Search', {
+    if (window.fbq) {
+      window.fbq('track', 'Search', {
         search_string: query,
       });
     }
@@ -65,16 +72,16 @@ export default function AnalyticsProvider({ children }: { children: React.ReactN
   const trackInitiateCheckout = (planName: string, amountBDT: number) => {
     if (typeof window === 'undefined') return;
 
-    if ((window as any).gtag) {
-      (window as any).gtag('event', 'begin_checkout', {
+    if (window.gtag) {
+      window.gtag('event', 'begin_checkout', {
         currency: 'BDT',
         value: amountBDT,
         items: [{ item_name: planName, price: amountBDT }],
       });
     }
 
-    if ((window as any).fbq) {
-      (window as any).fbq('track', 'InitiateCheckout', {
+    if (window.fbq) {
+      window.fbq('track', 'InitiateCheckout', {
         content_name: planName,
         value: amountBDT,
         currency: 'BDT',
@@ -85,8 +92,8 @@ export default function AnalyticsProvider({ children }: { children: React.ReactN
   const trackPurchase = (orderId: string, amountBDT: number, itemsCount = 1) => {
     if (typeof window === 'undefined') return;
 
-    if ((window as any).gtag) {
-      (window as any).gtag('event', 'purchase', {
+    if (window.gtag) {
+      window.gtag('event', 'purchase', {
         transaction_id: orderId,
         value: amountBDT,
         currency: 'BDT',
@@ -94,8 +101,8 @@ export default function AnalyticsProvider({ children }: { children: React.ReactN
       });
     }
 
-    if ((window as any).fbq) {
-      (window as any).fbq('track', 'Purchase', {
+    if (window.fbq) {
+      window.fbq('track', 'Purchase', {
         value: amountBDT,
         currency: 'BDT',
         content_type: 'product',

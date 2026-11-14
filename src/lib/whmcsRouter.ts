@@ -1,7 +1,7 @@
 import { CurrencyCode } from '@/config/constants';
 
 // Strict whitelist for product IDs to prevent parameter injection
-const ALLOWED_PIDS = new Set([1, 2, 3]);
+const ALLOWED_PIDS = new Set([1, 2, 3, 101, 102, 103, 104]);
 
 /**
  * Build native internal checkout URL for hosting plans
@@ -14,7 +14,7 @@ export function buildHostingOrderUrl(
 ): string {
   const safePid = ALLOWED_PIDS.has(pid) ? pid : 2;
   const billingCycle = isAnnual ? 'annually' : 'monthly';
-  let url = `/pricing?pid=${safePid}&billing=${billingCycle}&currency=${currency}`;
+  let url = `/?pid=${safePid}&billing=${billingCycle}&currency=${currency}`;
 
   if (promoCode && typeof promoCode === 'string') {
     const safePromo = promoCode.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 32);
@@ -23,7 +23,7 @@ export function buildHostingOrderUrl(
     }
   }
 
-  return url;
+  return `${url}#pricing`;
 }
 
 /**
@@ -39,7 +39,7 @@ export function buildDomainOrderUrl(
     .replace(/[^a-z0-9.-]/g, '')
     .slice(0, 120);
 
-  return `/domains?q=${encodeURIComponent(safeDomain)}&mode=register&currency=${currency}`;
+  return `/cheap-domain-registration-bd?q=${encodeURIComponent(safeDomain)}&mode=register&currency=${currency}`;
 }
 
 /**

@@ -3,6 +3,8 @@
  * Strict pricing matrices and resource limits for DevHost Cloud KVM VPS.
  */
 
+import { convertBdtToUsd } from '@/config/constants';
+
 export interface VpsTier {
   id: string;
   pid: number;
@@ -205,9 +207,9 @@ export function calculateCustomVpsPrice({
   const annualTotalBDT = effectiveMonthlyBDT * 12;
   const annualSavingsBDT = baseMonthlyBDT * 12 - annualTotalBDT;
 
-  const baseMonthlyUSD = Number((baseMonthlyBDT / 120).toFixed(2));
-  const effectiveMonthlyUSD = Number((effectiveMonthlyBDT / 120).toFixed(2));
-  const annualTotalUSD = Number((annualTotalBDT / 120).toFixed(2));
+  const baseMonthlyUSD = convertBdtToUsd(baseMonthlyBDT);
+  const effectiveMonthlyUSD = convertBdtToUsd(effectiveMonthlyBDT);
+  const annualTotalUSD = convertBdtToUsd(annualTotalBDT);
 
   return {
     baseMonthlyBDT,

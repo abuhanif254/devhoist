@@ -19,6 +19,7 @@ import {
     Server,
 } from 'lucide-react';
 import { useBilling } from '@/context/BillingContext';
+import { convertBdtToUsd, formatCurrency } from '@/config/constants';
 import {
     getStackBlueprintBySlug,
     PLAN_SLUG_TO_PID,
@@ -172,7 +173,7 @@ interface AnalysisOutput {
 }
 
 export default function DependencyAnalyzer() {
-    const { openStackBuilder } = useBilling();
+    const { openStackBuilder, currency } = useBilling();
     const [activePresetId, setActivePresetId] = useState<string>('nextjs15');
     const [rawInput, setRawInput] = useState<string>(MANIFEST_PRESETS[0].code);
     const [activeCodeTab, setActiveCodeTab] = useState<'workflow' | 'bridge'>('workflow');
@@ -482,7 +483,7 @@ export default function DependencyAnalyzer() {
                                     <Cpu className="w-3.5 h-3.5" /> Minimum Safe Hardware
                                 </div>
                                 <div className="text-sm font-extrabold text-slate-900 dark:text-white mt-1">
-                                    {analysis.recommendedPlan.planName} (৳{analysis.recommendedPlan.monthlyBdt}/mo)
+                                    {analysis.recommendedPlan.planName} ({formatCurrency(analysis.recommendedPlan.monthlyBdt, currency)}/mo)
                                 </div>
                                 <div className="text-[11px] font-mono text-slate-600 dark:text-slate-300 mt-0.5">
                                     {analysis.ramRequiredMb / 1024} GB RAM • {analysis.stack.min_cpu_cores} vCPU • {analysis.stack.min_storage_gb} GB NVMe
@@ -583,7 +584,7 @@ export default function DependencyAnalyzer() {
                                         selectedStackSlug: analysis.stack.slug,
                                         defaultStack: analysis.stack.slug,
                                         basePriceBDT: analysis.recommendedPlan.monthlyBdt,
-                                        basePriceUSD: Number((analysis.recommendedPlan.monthlyBdt / 120).toFixed(2)),
+                                        basePriceUSD: convertBdtToUsd(analysis.recommendedPlan.monthlyBdt),
                                         specs: {
                                             ram: `${analysis.recommendedPlan.ramMb / 1024} GB Dedicated`,
                                             cpu: `${analysis.recommendedPlan.cpuCores} Core vCPU`,

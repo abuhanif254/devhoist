@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { ShieldCheck, Activity, RotateCcw, CheckCircle2, Zap, Clock, Lock, Sparkles, Loader2 } from 'lucide-react';
+import { ShieldCheck, Activity, CheckCircle2, AlertTriangle, Zap, Clock, Lock, Loader2 } from 'lucide-react';
 import { generate30DayUptimeBars, DayUptimeBar } from '@/lib/selfHealingEngine';
 
 interface SelfHealingUptimeCardProps {
@@ -23,6 +23,7 @@ export default function SelfHealingUptimeCard({
 }: SelfHealingUptimeCardProps) {
   const [healingLoading, setHealingLoading] = useState(false);
   const [healingFeedback, setHealingFeedback] = useState<string | null>(null);
+  const [healingError, setHealingError] = useState<string | null>(null);
   const [hoveredBar, setHoveredBar] = useState<DayUptimeBar | null>(null);
 
   // Generate 30-day visual uptime status strip
@@ -31,6 +32,7 @@ export default function SelfHealingUptimeCard({
   const handleSelfHeal = async () => {
     setHealingLoading(true);
     setHealingFeedback(null);
+    setHealingError(null);
 
     try {
       const res = await fetch('/api/hosting/self-heal', {
@@ -44,16 +46,18 @@ export default function SelfHealingUptimeCard({
         }),
       });
 
-      const data = await res.json();
-      if (data.success && data.healingResult) {
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success && data.healingResult) {
         setHealingFeedback(
-          data.message || `⚡ Self-Healing Engine recycled Passenger workers & flushed LSCache in ${(data.healingResult.durationMs / 1000).toFixed(1)}s — 100% Operational!`
+          data.message || `Self-Healing Engine recycled Passenger workers & flushed LSCache in ${(data.healingResult.durationMs / 1000).toFixed(1)}s — operational.`
         );
       } else {
-        setHealingFeedback(data.error || 'Self-healing completed. Domain verified healthy.');
+        setHealingError(data.error || `Self-healing command failed (HTTP ${res.status}). Check server logs or try again.`);
       }
-    } catch {
-      setHealingFeedback('⚡ Self-Healing Engine executed: Passenger recycled & LSCache flushed in 1.1s!');
+    } catch (err) {
+      setHealingError(
+        err instanceof Error ? `Self-healing engine unreachable: ${err.message}` : 'Unable to reach Self-Healing Engine.'
+      );
     } finally {
       setHealingLoading(false);
     }
@@ -173,6 +177,12 @@ export default function SelfHealingUptimeCard({
         <div className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-800 text-xs font-medium text-emerald-800 dark:text-emerald-200 flex items-center gap-2 animate-in fade-in">
           <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
           <span>{healingFeedback}</span>
+        </div>
+      )}
+      {healingError && (
+        <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-300 dark:border-rose-800 text-xs font-medium text-rose-800 dark:text-rose-200 flex items-center gap-2 animate-in fade-in">
+          <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
+          <span>{healingError}</span>
         </div>
       )}
     </div>

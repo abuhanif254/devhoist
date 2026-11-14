@@ -527,7 +527,7 @@ export async function POST(req: NextRequest) {
         return serviceUnavailableResponse('Container Build Queue or Compute Node');
       }
 
-      buildJobId = `bld_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
+      buildJobId = randomUUID();
       const nodeCfg = getComputeNodeConfig(target.agentEndpoint || undefined);
       const artifactDownloadUrl =
         buildSignedArtifactDownloadUrl(req.nextUrl.origin, {

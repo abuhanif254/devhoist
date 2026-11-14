@@ -27,7 +27,7 @@ export default function ResetPasswordPage() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   const [isReady, setIsReady] = useState(false);
-  const [hasValidSession, setHasValidSession] = useState(true);
+  const [hasValidSession, setHasValidSession] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -49,43 +49,67 @@ export default function ResetPasswordPage() {
   ].filter(Boolean).length;
 
   useEffect(() => {
-    // Check if recovery session or token is active in URL
-    const checkSession = async () => {
-      try {
-        if (!isSupabaseConfigured()) {
-          setIsReady(true);
-          return;
-        }
+    let active = true;
+    if (!isSupabaseConfigured()) {
+      const timer = window.setTimeout(() => {
+        if (!active) return;
+        setHasValidSession(false);
+        setIsReady(true);
+      }, 0);
+      return () => {
+        active = false;
+        window.clearTimeout(timer);
+      };
+    }
 
-        const { data } = await supabase.auth.getSession();
+    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!active) return;
+      if (event === 'PASSWORD_RECOVERY' || session) {
+        setHasValidSession(true);
+        setIsReady(true);
+      }
+    });
+
+    supabase.auth
+      .getSession()
+      .then(({ data }) => {
+        if (!active) return;
         if (data?.session) {
           setHasValidSession(true);
         } else {
-          // Listen for PASSWORD_RECOVERY event from Supabase PKCE/hash parser
-          const { data: authListener } = supabase.auth.onAuthStateChange(
-            async (event, session) => {
-              if (event === 'PASSWORD_RECOVERY' || session) {
-                setHasValidSession(true);
-              }
-            }
-          );
-          return () => {
-            authListener?.subscription?.unsubscribe();
-          };
+          const hash = typeof window !== 'undefined' ? window.location.hash : '';
+          const search = typeof window !== 'undefined' ? window.location.search : '';
+          const hasRecoveryToken =
+            hash.includes('type=recovery') ||
+            hash.includes('access_token=') ||
+            search.includes('code=');
+          if (!hasRecoveryToken) {
+            setHasValidSession(false);
+          }
         }
-      } catch (err) {
+      })
+      .catch((err) => {
         console.warn('[ResetPassword Check Notice]:', err);
-      } finally {
-        setIsReady(true);
-      }
-    };
+        if (active) setHasValidSession(false);
+      })
+      .finally(() => {
+        if (active) setIsReady(true);
+      });
 
-    checkSession();
+    return () => {
+      active = false;
+      authListener?.subscription?.unsubscribe();
+    };
   }, []);
 
   const handleResetSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
+
+    if (!isSupabaseConfigured()) {
+      setErrorMsg('Password recovery service is not configured in this environment.');
+      return;
+    }
 
     if (password.length < 8) {
       setErrorMsg('Password must be at least 8 characters long.');
@@ -104,53 +128,25 @@ export default function ResetPasswordPage() {
 
     setIsSubmitting(true);
     try {
-      if (isSupabaseConfigured()) {
-        const { error } = await supabase.auth.updateUser({
-          password: password,
-        });
+      const { error } = await supabase.auth.updateUser({
+        password: password,
+      });
 
-        if (error) {
-          throw new Error(error.message || 'Failed to update password.');
-        }
-
-        // Global Session Revocation on Password Change (Critical Security Rule)
-        try {
-          const { data: userRes } = await supabase.auth.getUser();
-          if (userRes?.user?.id) {
-            await supabase
-              .from('user_security_credentials')
-              .update({
-                last_password_change: new Date().toISOString(),
-                updated_at: new Date().toISOString(),
-              })
-              .eq('user_id', userRes.user.id);
-
-            await supabase
-              .from('security_audit_logs')
-              .insert({
-                event_type: 'password_reset_completed',
-                actor_user_id: userRes.user.id,
-                severity: 'HIGH',
-                details: {
-                  timestamp: new Date().toISOString(),
-                  revoked_other_sessions: true,
-                },
-              });
-          }
-
-          // Revoke other active sessions on other devices
-          await supabase.auth.signOut({ scope: 'others' });
-        } catch (revokeErr) {
-          console.warn('[Global Session Revocation Notice]:', revokeErr);
-        }
+      if (error) {
+        throw new Error(error.message || 'Failed to update password.');
       }
+
+      // Revoke other active sessions on other devices
+      await supabase.auth.signOut({ scope: 'others' }).catch(() => {});
 
       setIsSuccess(true);
       setTimeout(() => {
         router.push('/dashboard');
       }, 2500);
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to update password. Your recovery link may have expired.');
+    } catch (err: unknown) {
+      setErrorMsg(
+        err instanceof Error ? err.message : 'Failed to update password. Your recovery link may have expired.'
+      );
     } finally {
       setIsSubmitting(false);
     }

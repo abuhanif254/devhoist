@@ -29,7 +29,18 @@ interface CustomerProfile {
   wallet_balance_bdt: number;
   created_at: string;
   servicesCount?: number;
-  services?: any[];
+  services?: CustomerServiceItem[];
+}
+
+interface CustomerServiceItem {
+  id: string;
+  domain: string;
+  package_name?: string;
+  disk_limit_gb?: number;
+  ram_limit_mb?: number;
+  inode_limit?: number;
+  server_node?: string;
+  status?: string;
 }
 
 interface ServerNodeItem {
@@ -47,7 +58,7 @@ export default function AdminCustomerCrmView() {
   const [searchTerm, setSearchTerm] = useState('');
 
   // Quota Override Modal State
-  const [selectedService, setSelectedService] = useState<any | null>(null);
+  const [selectedService, setSelectedService] = useState<CustomerServiceItem | null>(null);
   const [diskLimit, setDiskLimit] = useState(10);
   const [ramLimit, setRamLimit] = useState(2048);
   const [inodeLimit, setInodeLimit] = useState(250000);
@@ -77,10 +88,13 @@ export default function AdminCustomerCrmView() {
   };
 
   useEffect(() => {
-    fetchData();
+    const timer = window.setTimeout(() => {
+      void fetchData();
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
-  const handleOpenQuota = (service: any) => {
+  const handleOpenQuota = (service: CustomerServiceItem) => {
     setSelectedService(service);
     setDiskLimit(Number(service.disk_limit_gb) || 10);
     setRamLimit(Number(service.ram_limit_mb) || 2048);
@@ -112,8 +126,8 @@ export default function AdminCustomerCrmView() {
         setIsQuotaModalOpen(false);
         fetchData();
         alert(data.message || 'Quotas updated!');
-      } catch (err: any) {
-        alert(err.message);
+      } catch (err: unknown) {
+        alert(err instanceof Error ? err.message : 'Failed to update quotas.');
       }
     }, `Override Quota for ${selectedService.domain}`);
   };
@@ -138,8 +152,8 @@ export default function AdminCustomerCrmView() {
         setIsQuotaModalOpen(false);
         fetchData();
         alert(`Service migrated to node ${targetNode}!`);
-      } catch (err: any) {
-        alert(err.message);
+      } catch (err: unknown) {
+        alert(err instanceof Error ? err.message : 'Failed to migrate service.');
       }
     }, `Migrate ${selectedService.domain} to ${targetNode}`);
   };
@@ -173,8 +187,8 @@ export default function AdminCustomerCrmView() {
         setIsWalletModalOpen(false);
         fetchData();
         alert(data.message || 'Wallet adjusted successfully!');
-      } catch (err: any) {
-        alert(err.message);
+      } catch (err: unknown) {
+        alert(err instanceof Error ? err.message : 'Failed to adjust wallet.');
       }
     }, `Adjust Wallet Balance for ${selectedCustomer.full_name}`);
   };
@@ -198,8 +212,8 @@ export default function AdminCustomerCrmView() {
 
         fetchData();
         alert(`Role updated to ${newRole}!`);
-      } catch (err: any) {
-        alert(err.message);
+      } catch (err: unknown) {
+        alert(err instanceof Error ? err.message : 'Failed to update role.');
       }
     }, `Change User Role to ${newRole}`);
   };

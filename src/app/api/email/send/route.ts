@@ -12,7 +12,7 @@ import {
   renderSecurityThreatEmail,
   EmailTemplateId,
 } from '@/lib/emailEngine';
-import { requireAdmin } from '@/lib/authGuard';
+import { requireAdmin, escapeHtml } from '@/lib/authGuard';
 
 
 export async function GET(req: NextRequest) {
@@ -33,11 +33,59 @@ export async function POST(req: NextRequest) {
     if (!adminAuth.ok) return adminAuth.response;
 
     const body = await req.json();
-    const { to, template, data } = body as {
+    interface EmailSendPayload {
+      verificationCode?: string;
+      name?: string;
+      loginUrl?: string;
+      domain?: string;
+      serverIp?: string;
+      packageName?: string;
+      datacenter?: string;
+      nameservers?: string[];
+      cpanelUsername?: string;
+      ssoLoginUrl?: string;
+      sshPort?: number;
+      sshHost?: string;
+      webhookGuideUrl?: string;
+      invoiceNumber?: string;
+      amountBDT?: number;
+      paymentMethod?: string;
+      trxId?: string;
+      paidDate?: string;
+      items?: Array<{ desc: string; amount: number }>;
+      viewInvoiceUrl?: string;
+      serviceName?: string;
+      expiryDate?: string;
+      daysRemaining?: number;
+      renewalAmountBDT?: number;
+      walletBalanceBDT?: number;
+      renewUrl?: string;
+      overdueDays?: number;
+      outstandingAmountBDT?: number;
+      terminationGraceDays?: number;
+      payUnlockUrl?: string;
+      type?: 'commission_earned' | 'payout_sent';
+      details?: string;
+      holdDaysRemaining?: number;
+      dashboardUrl?: string;
+      status?: 'in_progress' | 'completed' | 'dns_pending';
+      sourceHost?: string;
+      temporaryUrl?: string;
+      ipAddress?: string;
+      alertType?: string;
+      location?: string;
+      deviceBrowser?: string;
+      timestamp?: string;
+      freezeAccountUrl?: string;
+      subject?: string;
+      message?: string;
+    }
+    const { to, template, data: rawData } = body as {
       to: string;
       template: EmailTemplateId;
-      data: any;
+      data?: EmailSendPayload;
     };
+    const data: EmailSendPayload = rawData && typeof rawData === 'object' ? rawData : {};
 
     if (!to || !template) {
       return NextResponse.json(
@@ -166,8 +214,8 @@ export async function POST(req: NextRequest) {
         break;
 
       default:
-        subject = data.subject || 'DevHost Cloud Alert';
-        html = `<div style="padding:20px; font-family:sans-serif;">${data.message || 'Notification'}</div>`;
+        subject = String(data?.subject || 'DevHost Cloud Alert').slice(0, 200);
+        html = `<div style="padding:20px; font-family:sans-serif;">${escapeHtml(data?.message || 'Notification')}</div>`;
         break;
     }
 
@@ -184,9 +232,9 @@ export async function POST(req: NextRequest) {
       result,
       subject,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     return NextResponse.json(
-      { error: error?.message || 'Failed to dispatch email' },
+      { error: error instanceof Error ? error.message : 'Failed to dispatch email' },
       { status: 500 }
     );
   }

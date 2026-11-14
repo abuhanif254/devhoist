@@ -3,6 +3,7 @@ import { whmClient } from '@/lib/whmClient';
 import { checkRateLimit } from '@/lib/edgeRateLimit';
 import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
 import { requireUser } from '@/lib/authGuard';
+import { resolveServiceComputeTarget, resolveWhmClientForTarget } from '@/lib/computeTargetResolver';
 
 export async function POST(request: Request) {
   // Edge sliding-window rate limit (20 SSO attempts per min)
@@ -28,15 +29,18 @@ export async function POST(request: Request) {
       );
     }
 
-    if (auth.role !== 'admin' && isSupabaseConfigured()) {
+    let serviceRow: { id?: string; user_id?: string; cpanel_username?: string } | null = null;
+    if (isSupabaseConfigured()) {
       const db = getServiceSupabase();
       const { data: srv } = await db
         .from('hosting_services')
-        .select('id, user_id')
+        .select('id, user_id, cpanel_username')
         .eq('cpanel_username', username.trim())
         .maybeSingle();
 
-      if (!srv || srv.user_id !== auth.user.id) {
+      serviceRow = srv as { id?: string; user_id?: string; cpanel_username?: string } | null;
+
+      if (auth.role !== 'admin' && (!serviceRow || serviceRow.user_id !== auth.user.id)) {
         return NextResponse.json(
           { error: 'Forbidden', message: 'You do not own the requested cPanel hosting account.' },
           { status: 403 }
@@ -45,7 +49,19 @@ export async function POST(request: Request) {
     }
 
     const ssoService = service === 'webmaild' ? 'webmaild' : 'cpaneld';
-    const ssoResult = await whmClient.createSsoSession(username, ssoService);
+    let ssoResult;
+    if (serviceRow?.id && isSupabaseConfigured()) {
+      const db = getServiceSupabase();
+      const target = await resolveServiceComputeTarget(
+        db,
+        String(serviceRow.id),
+        String(serviceRow.user_id || auth.user.id)
+      );
+      const nodeWhmClient = resolveWhmClientForTarget(target);
+      ssoResult = await nodeWhmClient.createSsoSession(target.cpanelUser || username.trim(), ssoService);
+    } else {
+      ssoResult = await whmClient.createSsoSession(username.trim(), ssoService);
+    }
 
     if (!ssoResult.success || !ssoResult.url) {
       return NextResponse.json(
@@ -64,11 +80,11 @@ export async function POST(request: Request) {
       service: ssoResult.service,
       expiresInSeconds: ssoResult.expiresInSeconds || 900,
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     return NextResponse.json(
       {
         error: 'SSO Generation Failed',
-        message: err?.message || 'Could not generate SSO session token.',
+        message: err instanceof Error ? err.message : 'Could not generate SSO session token.',
       },
       { status: 500 }
     );

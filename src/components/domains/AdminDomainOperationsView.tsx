@@ -79,17 +79,25 @@ export default function AdminDomainOperationsView() {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<'transfers' | 'registry_sync' | 'whois_radar'>('transfers');
   const [statusToast, setStatusToast] = useState<string | null>(null);
+  const [errorToast, setErrorToast] = useState<string | null>(null);
 
   const showToast = (msg: string) => {
+    setErrorToast(null);
     setStatusToast(msg);
     setTimeout(() => setStatusToast(null), 3000);
+  };
+
+  const showError = (msg: string) => {
+    setStatusToast(null);
+    setErrorToast(msg);
+    setTimeout(() => setErrorToast(null), 5000);
   };
 
   const handleAdvanceStep = (transferId: string, currentStep: number) => {
     requireSudo(async () => {
       const nextStep = Math.min(5, currentStep + 1);
       try {
-        await fetch('/api/domains/manage', {
+        const res = await fetch('/api/domains/manage', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -98,6 +106,11 @@ export default function AdminDomainOperationsView() {
             transferStep: nextStep,
           }),
         });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.success) {
+          showError(data.error || `Failed to advance transfer step (HTTP ${res.status}).`);
+          return;
+        }
 
         setTransfers((prev) =>
           prev.map((t) =>
@@ -112,8 +125,10 @@ export default function AdminDomainOperationsView() {
           )
         );
         showToast(`Transfer manually advanced to Step ${nextStep}/5`);
-      } catch {
-        showToast('Step updated.');
+      } catch (err) {
+        showError(
+          err instanceof Error ? `Network error: ${err.message}` : 'Unable to reach /api/domains/manage.'
+        );
       }
     }, `Authorize Manual Transfer Step Override for ${transferId}`);
   };
@@ -128,6 +143,12 @@ export default function AdminDomainOperationsView() {
         <div className="p-3 rounded-xl bg-blue-600 text-white text-xs font-semibold flex items-center gap-2 shadow-lg animate-in fade-in duration-200">
           <CheckCircle2 className="w-4 h-4" />
           <span>{statusToast}</span>
+        </div>
+      )}
+      {errorToast && (
+        <div className="p-3 rounded-xl bg-rose-600 text-white text-xs font-semibold flex items-center gap-2 shadow-lg animate-in fade-in duration-200">
+          <AlertTriangle className="w-4 h-4" />
+          <span>{errorToast}</span>
         </div>
       )}
 

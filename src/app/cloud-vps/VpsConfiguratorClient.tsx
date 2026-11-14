@@ -22,6 +22,7 @@ import {
   calculateCustomVpsPrice,
 } from '@/config/vpsData';
 import { WHMCS_CONFIG } from '@/config/whmcs';
+import { convertBdtToUsd, formatCurrency } from '@/config/constants';
 
 export default function VpsConfiguratorClient() {
   const { currency, openStackBuilder } = useBilling();
@@ -99,7 +100,7 @@ export default function VpsConfiguratorClient() {
               (dp) => dp.type === 'vps' && (dp.slug === tier.id || dp.id === tier.id)
             );
             const tierMonthlyBDT = dynamicTier ? dynamicTier.priceMonthlyBDT : tier.monthlyBDT;
-            const tierMonthlyUSD = dynamicTier ? Number((dynamicTier.priceMonthlyBDT / 120).toFixed(2)) : tier.monthlyUSD;
+            const tierMonthlyUSD = dynamicTier ? convertBdtToUsd(dynamicTier.priceMonthlyBDT) : tier.monthlyUSD;
             const isAnnual = preconfiguredCycle === 'annually';
             const baseMonthly = isBDT ? tierMonthlyBDT : tierMonthlyUSD;
             const effectiveMonthly = isAnnual
@@ -232,7 +233,7 @@ export default function VpsConfiguratorClient() {
                   <span>Dedicated vCPU Cores</span>
                 </label>
                 <span className="font-mono text-sm font-bold text-slate-900 dark:text-zinc-100 bg-slate-100 dark:bg-zinc-900 px-2.5 py-0.5 rounded border border-slate-200 dark:border-white/10">
-                  {cpuCores} Cores ({isBDT ? `৳${cpuCores * 350}` : `$${((cpuCores * 350) / 120).toFixed(2)}`}/mo)
+                  {cpuCores} Cores ({formatCurrency(cpuCores * 350, currency)}/mo)
                 </span>
               </div>
               <input
@@ -259,7 +260,7 @@ export default function VpsConfiguratorClient() {
                   <span>DDR5 ECC RAM</span>
                 </label>
                 <span className="font-mono text-sm font-bold text-slate-900 dark:text-zinc-100 bg-slate-100 dark:bg-zinc-900 px-2.5 py-0.5 rounded border border-slate-200 dark:border-white/10">
-                  {ramGB} GB RAM ({isBDT ? `৳${ramGB * 150}` : `$${((ramGB * 150) / 120).toFixed(2)}`}/mo)
+                  {ramGB} GB RAM ({formatCurrency(ramGB * 150, currency)}/mo)
                 </span>
               </div>
               <input
@@ -287,7 +288,7 @@ export default function VpsConfiguratorClient() {
                   <span>Pure PCIe Gen4 NVMe Storage</span>
                 </label>
                 <span className="font-mono text-sm font-bold text-slate-900 dark:text-zinc-100 bg-slate-100 dark:bg-zinc-900 px-2.5 py-0.5 rounded border border-slate-200 dark:border-white/10">
-                  {storageGB} GB Pure NVMe ({isBDT ? `৳${(storageGB / 10) * 50}` : `$${(((storageGB / 10) * 50) / 120).toFixed(2)}`}/mo)
+                  {storageGB} GB Pure NVMe ({formatCurrency((storageGB / 10) * 50, currency)}/mo)
                 </span>
               </div>
               <input

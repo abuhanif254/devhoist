@@ -19,6 +19,7 @@ import {
 const GITHUB_API_BASE = 'https://api.github.com';
 const GITHUB_OAUTH_AUTHORIZE_URL = 'https://github.com/login/oauth/authorize';
 const GITHUB_OAUTH_TOKEN_URL = 'https://github.com/login/oauth/access_token';
+export const GITHUB_OAUTH_NONCE_COOKIE = 'devhost_github_oauth_nonce';
 const REPO_FULL_NAME_REGEX =
   /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]{0,38})\/[a-zA-Z0-9._-]{1,100}$/;
 
@@ -775,13 +776,23 @@ export async function getUserGitHubAccount(userId: string): Promise<StoredGitHub
 
     if (!error && data) {
       const row = data as Record<string, unknown>;
-      const decrypted = await decryptEnvValue(String(row.access_token_encrypted || ''));
+      let decrypted = '';
+      try {
+        decrypted = await decryptEnvValue(String(row.access_token_encrypted || ''));
+      } catch {
+        return null;
+      }
       if (!decrypted || decrypted === '••••••••••••') {
         return null;
       }
-      const decryptedRefresh = row.refresh_token_encrypted
-        ? await decryptEnvValue(String(row.refresh_token_encrypted))
-        : null;
+      let decryptedRefresh: string | null = null;
+      if (row.refresh_token_encrypted) {
+        try {
+          decryptedRefresh = await decryptEnvValue(String(row.refresh_token_encrypted));
+        } catch {
+          decryptedRefresh = null;
+        }
+      }
       return {
         id: String(row.id),
         userId: String(row.user_id),
@@ -829,9 +840,13 @@ export async function getServiceGitConnection(
 export async function resolveServiceWebhookSecret(serviceId: string): Promise<string | null> {
   const conn = await getServiceGitConnection(serviceId);
   if (conn?.webhook_secret_encrypted) {
-    const decrypted = await decryptEnvValue(conn.webhook_secret_encrypted);
-    if (decrypted && decrypted !== '••••••••••••') {
-      return decrypted;
+    try {
+      const decrypted = await decryptEnvValue(conn.webhook_secret_encrypted);
+      if (decrypted && decrypted !== '••••••••••••') {
+        return decrypted;
+      }
+    } catch {
+      // Ignore unreadable ciphertext and fall through
     }
   }
 

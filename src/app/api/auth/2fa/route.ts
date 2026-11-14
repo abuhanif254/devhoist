@@ -57,9 +57,9 @@ export async function GET(req: NextRequest) {
       hasBackupCodes: (creds.backup_recovery_hashes?.length || 0) > 0,
       hasSudoPin: Boolean(creds.sudo_security_pin_hash),
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     return NextResponse.json(
-      { enabled: false, error: err?.message || 'Unable to check 2FA status' },
+      { enabled: false, error: err instanceof Error ? err.message : 'Unable to check 2FA status' },
       { status: 500 }
     );
   }
@@ -116,6 +116,38 @@ export async function POST(req: NextRequest) {
           },
           { status: 422 }
         );
+      }
+
+      const { data: existingCreds } = await db
+        .from('user_security_credentials')
+        .select('totp_enabled, totp_secret_base32, sudo_security_pin_hash')
+        .eq('user_id', auth.user.id)
+        .maybeSingle();
+
+      const changingExistingPin = Boolean(sudoPin && existingCreds?.sudo_security_pin_hash);
+      if (existingCreds?.totp_enabled || changingExistingPin) {
+        let reauthOk = await verifySudoToken(req, auth.user.id);
+        if (!reauthOk && body.currentTotpToken && existingCreds?.totp_secret_base32) {
+          reauthOk = await verifyTotpCode(
+            String(existingCreds.totp_secret_base32),
+            String(body.currentTotpToken)
+          );
+        }
+        if (!reauthOk && body.currentSudoPin && existingCreds?.sudo_security_pin_hash) {
+          reauthOk = await verifySecurityPin(
+            String(body.currentSudoPin),
+            String(existingCreds.sudo_security_pin_hash)
+          );
+        }
+        if (!reauthOk) {
+          return NextResponse.json(
+            {
+              error:
+                'Sudo verification or current 2FA challenge is required before modifying existing 2FA or Sudo PIN credentials.',
+            },
+            { status: 403 }
+          );
+        }
       }
 
       const updatePayload: Record<string, unknown> = {
@@ -443,19 +475,19 @@ export async function POST(req: NextRequest) {
           elapsedMs,
           message: `Postback ping delivered in ${elapsedMs}ms with status HTTP ${pingRes.status}`,
         });
-      } catch (err: any) {
+      } catch (err: unknown) {
         return NextResponse.json({
           success: false,
           testedUrl: parsedUrl,
-          error: err?.message || 'Failed to reach postback webhook endpoint',
+          error: err instanceof Error ? err.message : 'Failed to reach postback webhook endpoint',
         });
       }
     }
 
     return NextResponse.json({ error: 'Unsupported 2FA action' }, { status: 400 });
-  } catch (error: any) {
+  } catch (error: unknown) {
     return NextResponse.json(
-      { error: error?.message || 'Internal 2FA engine error' },
+      { error: error instanceof Error ? error.message : 'Internal 2FA engine error' },
       { status: 500 }
     );
   }

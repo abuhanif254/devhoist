@@ -8,7 +8,7 @@ import { requireAdmin, verifySudoToken } from '@/lib/authGuard';
 async function logDocsAudit(
   actionType: string,
   targetResource: string,
-  metadata: Record<string, any>,
+  metadata: Record<string, unknown>,
   ip: string = '127.0.0.1'
 ) {
   if (!isSupabaseConfigured()) return;
@@ -206,8 +206,11 @@ export async function GET(req: NextRequest) {
       faqs: (faqsRes.data && faqsRes.data.length > 0) ? faqsRes.data : [],
       seoRoutes: (seoRoutesRes.data && seoRoutesRes.data.length > 0) ? seoRoutesRes.data : DEFAULT_SEO_ROUTES,
     });
-  } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+  } catch (err: unknown) {
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : 'Failed to fetch docs' },
+      { status: 500 }
+    );
   }
 }
 
@@ -235,7 +238,7 @@ export async function POST(req: NextRequest) {
           // Fallback direct update
           const { data } = await db.from('cms_docs_articles').select(field).eq('id', article_id).maybeSingle();
           if (data) {
-            const currentVal = Number((data as any)[field]) || 0;
+            const currentVal = Number((data as Record<string, unknown>)[field]) || 0;
             await db
               .from('cms_docs_articles')
               .update({ [field]: currentVal + 1 })
@@ -377,8 +380,11 @@ export async function POST(req: NextRequest) {
     }
 
     return NextResponse.json({ success: false, error: 'Invalid action provided' }, { status: 400 });
-  } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+  } catch (err: unknown) {
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : 'Failed to process request' },
+      { status: 500 }
+    );
   }
 }
 
@@ -423,7 +429,10 @@ export async function DELETE(req: NextRequest) {
       success: true,
       message: `${type} deleted successfully.`,
     });
-  } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+  } catch (err: unknown) {
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : 'Delete failed' },
+      { status: 500 }
+    );
   }
 }

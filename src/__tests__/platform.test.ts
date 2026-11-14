@@ -6,7 +6,7 @@ import {
   calculateSafeRefundBreakdown,
   calculatePlanUpgradeProRata,
 } from '@/lib/profitEngine';
-import { TEAM_ROLE_PRESETS } from '@/app/api/team/route';
+import { TEAM_ROLE_PRESETS } from '@/lib/teamRoles';
 import {
   generateBase32Secret,
   generateTotpToken,

@@ -3,7 +3,7 @@ import { whmClient, WhmPackageParams } from '@/lib/whmClient';
 import { checkRateLimit } from '@/lib/edgeRateLimit';
 import { isSupabaseConfigured, getServiceSupabase, isDevSandboxMode } from '@/lib/supabase';
 import { executeZeroTouchProvisioning } from '@/lib/zeroTouchProvisioner';
-import { requireAdmin, serviceUnavailableResponse } from '@/lib/authGuard';
+import { requireAdmin, verifySudoToken, serviceUnavailableResponse } from '@/lib/authGuard';
 
 
 export async function POST(request: Request) {
@@ -44,6 +44,20 @@ export async function POST(request: Request) {
 
     if (!whmClient.getStatus().configured && !isDevSandboxMode()) {
       return serviceUnavailableResponse('WHM Reseller Server');
+    }
+
+    if (['suspend', 'unsuspend', 'sync_packages', 'test_provisioning'].includes(action)) {
+      const sudoValid = await verifySudoToken(request, adminAuth.user.id);
+      if (!sudoValid) {
+        return NextResponse.json(
+          {
+            success: false,
+            requireSudo: true,
+            error: 'Admin Sudo elevation is required for WHM control-plane mutations.',
+          },
+          { status: 403 }
+        );
+      }
     }
 
     if (action === 'list') {
@@ -111,8 +125,8 @@ export async function POST(request: Request) {
           const db = getServiceSupabase();
           const { data: plans } = await db.from('catalog_hosting_plans').select('*');
           if (plans && plans.length > 0) {
-            packagesToSync = plans.map((p: any) => ({
-              name: p.whm_package_name || `devhost_${p.slug}`,
+            packagesToSync = plans.map((p: Record<string, unknown>) => ({
+              name: (p.whm_package_name as string) || `devhost_${String(p.slug || 'plan')}`,
               storage_gb: Number(p.storage_gb) || 5,
               max_addon_domains: Number(p.max_addon_domains) || 5,
               cpu_cores: Number(p.cpu_cores) || 2,
@@ -167,9 +181,12 @@ export async function POST(request: Request) {
       { error: 'Invalid Action', message: `Action "${action}" is not recognized` },
       { status: 400 }
     );
-  } catch (err: any) {
+  } catch (err: unknown) {
     return NextResponse.json(
-      { error: 'WHM Management Error', message: err?.message || 'Server error' },
+      {
+        error: 'WHM Management Error',
+        message: err instanceof Error ? err.message : 'Server error',
+      },
       { status: 500 }
     );
   }

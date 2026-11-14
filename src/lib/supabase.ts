@@ -76,6 +76,11 @@ export function syncAuthCookie(session: Session | null, role?: string): void {
 
 // Server-side Admin Supabase Client (Bypasses RLS for automated webhooks & WHM provisioning)
 export const getServiceSupabase = (): SupabaseClient => {
+  if (!supabaseServiceKey && !isDevSandboxMode() && process.env.NODE_ENV !== 'test') {
+    throw new Error(
+      'Configuration Error: SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_SECRET_KEY) is required for server-side privileged operations.'
+    );
+  }
   const serviceKey = supabaseServiceKey || supabaseAnonKey;
   return createClient(supabaseUrl, serviceKey, {
     auth: {

@@ -85,11 +85,6 @@ export default function NetworkLookingGlassStudio() {
         }
     };
 
-    useEffect(() => {
-        runBrowserLatencyProbe();
-        handleExecuteLookingGlass('sg1-equinix', 'mtr', '1.1.1.1');
-    }, []);
-
     const handleExecuteLookingGlass = (
         node: LookingGlassNode = selectedNode,
         cmd: DiagnosticCommand = selectedCommand,
@@ -155,6 +150,15 @@ export default function NetworkLookingGlassStudio() {
             setIsRunningLg(false);
         }, 250);
     };
+
+    useEffect(() => {
+        const timer = window.setTimeout(() => {
+            void runBrowserLatencyProbe();
+            handleExecuteLookingGlass('sg1-equinix', 'mtr', '1.1.1.1');
+        }, 0);
+        return () => window.clearTimeout(timer);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     // Calculate SLA Credit from downtimeMinutes
     const totalMinutesInMonth = 43200; // 30 days

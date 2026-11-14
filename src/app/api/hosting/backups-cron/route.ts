@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, getServiceSupabase, isDevSandboxMode } from '@/lib/supabase';
 import { validateShellCommand, describeCronExpression } from '@/lib/projectEngine';
-import { requireServiceAccess, verifySudoToken, serviceUnavailableResponse } from '@/lib/authGuard';
+import { requireUser, requireServiceAccess, verifySudoToken, serviceUnavailableResponse } from '@/lib/authGuard';
 import {
   isComputeAgentConfigured,
   manageCronJobOnAgent,
@@ -272,11 +272,19 @@ export async function POST(request: NextRequest) {
         ? (
             await db
               .from('hosting_backups')
-              .select('scope, r2_object_key')
+              .select('scope, r2_object_key, service_id')
               .eq('id', snapshotId)
+              .eq('service_id', access.serviceId)
               .maybeSingle()
           ).data
         : null;
+
+      if (db && !bkRow) {
+        return NextResponse.json(
+          { success: false, error: 'Snapshot not found for this hosting service.' },
+          { status: 404 }
+        );
+      }
 
       const restoreRes = await triggerBackupSnapshotOnAgent(
         {
@@ -492,6 +500,9 @@ export async function POST(request: NextRequest) {
  */
 export async function DELETE(request: NextRequest) {
   try {
+    const auth = await requireUser(request);
+    if (!auth.ok) return auth.response;
+
     const ip = request.headers.get('x-forwarded-for') || '127.0.0.1';
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
@@ -503,10 +514,16 @@ export async function DELETE(request: NextRequest) {
     }
 
     const db = isSupabaseConfigured() ? getServiceSupabase() : null;
-    if (!serviceId && db) {
+    if (db) {
       const table = itemType === 'backup' ? 'hosting_backups' : 'hosting_cron_jobs';
       const { data: ownerRow } = await db.from(table).select('service_id').eq('id', id).maybeSingle();
-      serviceId = ownerRow?.service_id || null;
+      if (!ownerRow) {
+        return NextResponse.json({ success: false, error: 'Record not found.' }, { status: 404 });
+      }
+      if (serviceId && ownerRow.service_id && ownerRow.service_id !== serviceId) {
+        return NextResponse.json({ success: false, error: 'Forbidden record access.' }, { status: 403 });
+      }
+      serviceId = ownerRow.service_id || serviceId;
     }
 
     const access = await requireServiceAccess(request, serviceId, 'services:write');

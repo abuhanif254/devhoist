@@ -25,6 +25,7 @@ export interface StackBuilderConfig {
   domainYears?: number;
   eppCode?: string;
   defaultRegion?: 'sg' | 'us';
+  defaultBillingCycle?: BillingCycle;
   defaultStack?: 'nextjs_git' | 'wordpress_lscache' | 'laravel_php' | 'clean_cpanel' | string;
   selectedStackSlug?: string;
   minPlanPid?: number;
@@ -80,20 +81,23 @@ export function BillingProvider({ children }: { children: React.ReactNode }) {
     localStorage.removeItem('devhost-theme-v3');
 
     const savedTheme = localStorage.getItem('devhost-theme-v4') as Theme | null;
-    if (savedTheme === 'dark') {
-      setTheme('dark');
+    const resolvedTheme: Theme = savedTheme === 'dark' ? 'dark' : 'light';
+    if (resolvedTheme === 'dark') {
       document.documentElement.classList.remove('light');
       document.documentElement.classList.add('dark');
     } else {
-      setTheme('light');
       document.documentElement.classList.remove('dark');
       document.documentElement.classList.add('light');
     }
 
     const savedCurrency = localStorage.getItem('devhost-currency') as Currency | null;
-    if (savedCurrency) {
-      setCurrency(savedCurrency);
-    }
+    const timer = window.setTimeout(() => {
+      setTheme(resolvedTheme);
+      if (savedCurrency) {
+        setCurrency(savedCurrency);
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
   // Keyboard shortcut listener for Ctrl+K or Cmd+K

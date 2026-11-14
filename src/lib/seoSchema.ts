@@ -49,7 +49,7 @@ export function generateAggregateOfferSchema(
         priceCurrency: 'BDT',
         priceValidUntil: '2026-12-31',
         availability: 'https://schema.org/InStock',
-        url: 'https://devhostcloud.com/pricing',
+        url: 'https://devhostcloud.com/#pricing',
       })),
     },
   };

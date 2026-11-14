@@ -54,6 +54,7 @@ export default function DnsZoneManager({
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   const [actionToast, setActionToast] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // Add / Edit Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -84,13 +85,24 @@ export default function DnsZoneManager({
       try {
         setLoading(true);
         const res = await fetch(`/api/domains/dns?domainId=${encodeURIComponent(domainId)}`);
-        const data = await res.json();
-        if (isMounted && data.success && Array.isArray(data.records) && data.records.length > 0) {
-          setRecords(data.records);
-          onRecordsChange?.(data.records);
+        const data = await res.json().catch(() => ({}));
+        if (isMounted && !res.ok) {
+          setActionError(data.error || `Failed to load DNS zone records (HTTP ${res.status}).`);
+          return;
+        }
+        if (isMounted && data.success && Array.isArray(data.records)) {
+          setActionError(null);
+          if (data.records.length > 0) {
+            setRecords(data.records);
+            onRecordsChange?.(data.records);
+          }
         }
       } catch (err) {
-        console.warn('Failed to load live DNS records, using fallback:', err);
+        if (isMounted) {
+          setActionError(
+            err instanceof Error ? `Unable to load live DNS records: ${err.message}` : 'Unable to load live DNS records.'
+          );
+        }
       } finally {
         if (isMounted) setLoading(false);
       }
@@ -196,7 +208,7 @@ export default function DnsZoneManager({
 
         const newRecord: DnsRecord = {
           id: data.recordId || `dns_${Date.now()}`,
-          ...(recordData as any),
+          ...(recordData as Omit<DnsRecord, 'id'>),
         };
         setRecords((prev) => [...prev, newRecord]);
         showToast(`Record ${recordType} for ${recordName} added to zone.`);
@@ -204,8 +216,8 @@ export default function DnsZoneManager({
 
       setIsModalOpen(false);
       onRecordsChange?.(records);
-    } catch (err: any) {
-      setValidationError(err.message || 'Operation failed.');
+    } catch (err: unknown) {
+      setValidationError(err instanceof Error ? err.message : 'Operation failed.');
     }
   };
 
@@ -290,8 +302,8 @@ export default function DnsZoneManager({
       }));
       setRecords((prev) => [...prev, ...newItems]);
       showToast('Domain successfully pointed to DevHost server node!');
-    } catch (err: any) {
-      showToast(err.message || 'Updated DNS records.');
+    } catch (err: unknown) {
+      showToast(err instanceof Error ? err.message : 'Updated DNS records.');
     }
   };
 
@@ -322,8 +334,8 @@ export default function DnsZoneManager({
       }));
       setRecords((prev) => [...prev, ...newItems]);
       showToast(`${presetType.toUpperCase()} security records appended to zone.`);
-    } catch (err: any) {
-      showToast(err.message || 'Preset applied.');
+    } catch (err: unknown) {
+      showToast(err instanceof Error ? err.message : 'Preset applied.');
     }
   };
 
@@ -362,9 +374,10 @@ export default function DnsZoneManager({
       setImportCount(parsed.length);
       setIsBindImportOpen(false);
       setBindImportText('');
+      setActionError(null);
       showToast(`Successfully imported ${parsed.length} records into zone!`);
-    } catch (err: any) {
-      alert(err.message || 'Failed to parse BIND zone.');
+    } catch (err: unknown) {
+      setActionError(err instanceof Error ? err.message : 'Failed to parse BIND zone.');
     }
   };
 
@@ -381,7 +394,7 @@ export default function DnsZoneManager({
       });
       const data = (await res.json().catch(() => ({}))) as { success?: boolean; message?: string; error?: string };
       if (!res.ok || !data.success) {
-        showToast(data.error || 'Cloudflare reconciliation failed.');
+        setActionError(data.error || 'Cloudflare reconciliation failed.');
         return;
       }
       const getRes = await fetch(`/api/domains/dns?domainId=${encodeURIComponent(domainId)}`);
@@ -390,14 +403,30 @@ export default function DnsZoneManager({
         setRecords(getJson.records);
         onRecordsChange?.(getJson.records);
       }
+      setActionError(null);
       showToast(data.message || 'Cloudflare DNS zone synchronized.');
-    } catch {
-      showToast('Network error syncing Cloudflare zone.');
+    } catch (err) {
+      setActionError(
+        err instanceof Error ? `Network error syncing Cloudflare zone: ${err.message}` : 'Network error syncing Cloudflare zone.'
+      );
     }
   };
 
   return (
     <div className="space-y-5">
+      {/* Error Notification */}
+      {actionError && (
+        <div className="p-3 rounded-xl bg-rose-600 text-white text-xs font-semibold flex items-center justify-between shadow-lg animate-in fade-in duration-200">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-white shrink-0" />
+            <span>{actionError}</span>
+          </div>
+          <button type="button" onClick={() => setActionError(null)} className="p-1 cursor-pointer">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Toast Notification */}
       {actionToast && (
         <div className="p-3 rounded-xl bg-blue-600 text-white text-xs font-semibold flex items-center justify-between shadow-lg animate-in fade-in duration-200">
@@ -703,7 +732,7 @@ export default function DnsZoneManager({
                   <label className="text-[11px] text-slate-500">Record Type:</label>
                   <select
                     value={recordType}
-                    onChange={(e) => setRecordType(e.target.value as any)}
+                    onChange={(e) => setRecordType(e.target.value as DnsRecord['type'])}
                     className="mt-1 w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white"
                   >
                     <option value="A">A (IPv4 Address)</option>

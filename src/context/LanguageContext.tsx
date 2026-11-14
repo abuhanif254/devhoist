@@ -93,7 +93,8 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const saved = localStorage.getItem('devhost-lang') as Language | null;
     if (saved && (saved === 'EN' || saved === 'BN')) {
-      setLanguage(saved);
+      const timer = window.setTimeout(() => setLanguage(saved), 0);
+      return () => window.clearTimeout(timer);
     }
   }, []);
 

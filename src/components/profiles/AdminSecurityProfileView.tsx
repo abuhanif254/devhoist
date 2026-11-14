@@ -28,23 +28,70 @@ export default function AdminSecurityProfileView() {
   const { auditLogs, fraudAlerts, logout } = usePortal();
   const { isSudoActive, sudoExpiresAt, requireSudo, revokeSudo } = useSudoGate();
 
-  // Whitelist IPs State
-  const [whitelistedIps, setWhitelistedIps] = useState<string[]>([
-    '103.145.22.40 (Dhaka HQ NOC)',
-    '180.234.12.89 (Founder Dedicated Fiber)',
-  ]);
+  // Whitelist IPs & Lockdown State (synced with cms_global_config.security_lockdown)
+  const [whitelistedIps, setWhitelistedIps] = useState<string[]>([]);
   const [newIpInput, setNewIpInput] = useState('');
   const [strictIpLockdown, setStrictIpLockdown] = useState(false);
   const [emergencyFreeze, setEmergencyFreeze] = useState(false);
+  const [fullLockdownConfig, setFullLockdownConfig] = useState<Record<string, unknown>>({});
   const [saveToast, setSaveToast] = useState(false);
+  const [errorToast, setErrorToast] = useState<string | null>(null);
 
   // Time remaining on active sudo
   const [remainingTimeStr, setRemainingTimeStr] = useState('');
 
   useEffect(() => {
+    let active = true;
+    fetch('/api/admin/cms-config?key=security_lockdown')
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (!active || !res.ok || !data.success || !data.config) return;
+        setFullLockdownConfig(data.config);
+        setStrictIpLockdown(Boolean(data.config.strict_ip_country_whitelist));
+        setEmergencyFreeze(Boolean(data.config.freeze_all_withdrawals));
+        if (Array.isArray(data.config.admin_whitelisted_ips)) {
+          setWhitelistedIps(data.config.admin_whitelisted_ips);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const persistSecurityLockdown = async (patch: Record<string, unknown>, onApplied: () => void) => {
+    setErrorToast(null);
+    const nextConfig = { ...fullLockdownConfig, ...patch };
+    try {
+      const res = await fetch('/api/admin/cms-config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          key: 'security_lockdown',
+          value: nextConfig,
+          sudoVerified: true,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        setErrorToast(data.error || `Failed to persist security setting (HTTP ${res.status}).`);
+        return;
+      }
+      setFullLockdownConfig(nextConfig);
+      onApplied();
+      setSaveToast(true);
+      setTimeout(() => setSaveToast(false), 3000);
+    } catch (err) {
+      setErrorToast(
+        err instanceof Error ? `Network error saving security configuration: ${err.message}` : 'Unable to save security configuration.'
+      );
+    }
+  };
+
+  useEffect(() => {
     if (!isSudoActive || !sudoExpiresAt) {
-      setRemainingTimeStr('');
-      return;
+      const timer = window.setTimeout(() => setRemainingTimeStr(''), 0);
+      return () => window.clearTimeout(timer);
     }
 
     const interval = setInterval(() => {
@@ -62,28 +109,32 @@ export default function AdminSecurityProfileView() {
 
   const handleAddIp = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newIpInput.trim()) return;
-    requireSudo(() => {
-      setWhitelistedIps([...whitelistedIps, newIpInput.trim()]);
-      setNewIpInput('');
-      setSaveToast(true);
-      setTimeout(() => setSaveToast(false), 3000);
+    const candidate = newIpInput.trim();
+    if (!candidate) return;
+    requireSudo(async () => {
+      const nextIps = [...whitelistedIps, candidate];
+      await persistSecurityLockdown({ admin_whitelisted_ips: nextIps }, () => {
+        setWhitelistedIps(nextIps);
+        setNewIpInput('');
+      });
     }, 'Add New Trusted Admin IP Address');
   };
 
   const handleToggleStrictLockdown = () => {
-    requireSudo(() => {
-      setStrictIpLockdown(!strictIpLockdown);
-      setSaveToast(true);
-      setTimeout(() => setSaveToast(false), 3000);
+    const nextVal = !strictIpLockdown;
+    requireSudo(async () => {
+      await persistSecurityLockdown({ strict_ip_country_whitelist: nextVal }, () => {
+        setStrictIpLockdown(nextVal);
+      });
     }, `${strictIpLockdown ? 'Disable' : 'Enable'} Strict Admin IP Lockdown`);
   };
 
   const handleToggleFreeze = () => {
-    requireSudo(() => {
-      setEmergencyFreeze(!emergencyFreeze);
-      setSaveToast(true);
-      setTimeout(() => setSaveToast(false), 3000);
+    const nextVal = !emergencyFreeze;
+    requireSudo(async () => {
+      await persistSecurityLockdown({ freeze_all_withdrawals: nextVal }, () => {
+        setEmergencyFreeze(nextVal);
+      });
     }, `${emergencyFreeze ? 'Deactivate' : 'ACTIVATE'} Emergency Platform Freeze`);
   };
 
@@ -145,6 +196,12 @@ export default function AdminSecurityProfileView() {
         <div className="p-3.5 rounded-xl bg-emerald-500 text-white font-mono text-xs flex items-center gap-2 animate-in fade-in shadow-md shadow-emerald-500/20">
           <CheckCircle2 className="w-4 h-4" />
           <span>Admin security configuration updated successfully!</span>
+        </div>
+      )}
+      {errorToast && (
+        <div className="p-3.5 rounded-xl bg-rose-600 text-white font-mono text-xs flex items-center gap-2 animate-in fade-in shadow-md shadow-rose-600/20">
+          <AlertTriangle className="w-4 h-4" />
+          <span>{errorToast}</span>
         </div>
       )}
 
@@ -246,8 +303,11 @@ export default function AdminSecurityProfileView() {
                 <button
                   type="button"
                   onClick={() =>
-                    requireSudo(() => {
-                      setWhitelistedIps(whitelistedIps.filter((_, i) => i !== idx));
+                    requireSudo(async () => {
+                      const nextIps = whitelistedIps.filter((_, i) => i !== idx);
+                      await persistSecurityLockdown({ admin_whitelisted_ips: nextIps }, () => {
+                        setWhitelistedIps(nextIps);
+                      });
                     }, `Remove Whitelisted IP: ${ip}`)
                   }
                   className="text-slate-400 hover:text-rose-600 cursor-pointer text-xs"
@@ -345,49 +405,35 @@ export default function AdminSecurityProfileView() {
         </div>
 
         <div className="divide-y divide-slate-100 dark:divide-white/5 font-mono text-xs">
-          {[
-            {
-              time: '12 mins ago',
-              ip: '103.145.22.40',
-              event: 'Sudo Step-Up Verified',
-              details: 'Admin verified via TOTP Authenticator for package price adjustment',
-              status: 'success',
-            },
-            {
-              time: '45 mins ago',
-              ip: '185.220.101.4 (Tor Exit)',
-              event: 'Failed Admin PIN Attempt',
-              details: 'Submitted incorrect PIN 3 times. Locked out by Edge WAF for 15 minutes',
-              status: 'blocked',
-            },
-            {
-              time: '3 hours ago',
-              ip: '103.112.44.18',
-              event: 'Session Sudo Revoked',
-              details: 'Manual session timeout triggered by Founder',
-              status: 'info',
-            },
-          ].map((log, idx) => (
-            <div key={idx} className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <div className="space-y-0.5">
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`w-2 h-2 rounded-full ${
-                      log.status === 'success'
-                        ? 'bg-emerald-500'
-                        : log.status === 'blocked'
-                        ? 'bg-rose-500'
-                        : 'bg-blue-500'
-                    }`}
-                  />
-                  <strong className="text-slate-900 dark:text-white font-sans text-xs">{log.event}</strong>
-                  <span className="text-[10px] text-slate-400">({log.ip})</span>
-                </div>
-                <span className="text-[11px] text-slate-500 dark:text-zinc-400 block font-sans">{log.details}</span>
-              </div>
-              <span className="text-[10px] text-slate-400 whitespace-nowrap">{log.time}</span>
+          {auditLogs.length === 0 && fraudAlerts.length === 0 ? (
+            <div className="py-6 text-center text-slate-500 dark:text-zinc-400">
+              No security audit or anomaly events recorded yet for this environment.
             </div>
-          ))}
+          ) : (
+            auditLogs.slice(0, 10).map((log) => (
+              <div key={log.id} className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`w-2 h-2 rounded-full ${
+                        log.riskLevel === 'critical' || log.riskLevel === 'high'
+                          ? 'bg-rose-500'
+                          : log.riskLevel === 'medium'
+                          ? 'bg-amber-500'
+                          : 'bg-emerald-500'
+                      }`}
+                    />
+                    <strong className="text-slate-900 dark:text-white font-sans text-xs">{log.action}</strong>
+                    <span className="text-[10px] text-slate-400">({log.ip || 'edge'})</span>
+                  </div>
+                  <span className="text-[11px] text-slate-500 dark:text-zinc-400 block font-sans">
+                    Actor: {log.actor} · Target: {log.target}
+                  </span>
+                </div>
+                <span className="text-[10px] text-slate-400 whitespace-nowrap">{log.timestamp}</span>
+              </div>
+            ))
+          )}
         </div>
       </div>
     </div>

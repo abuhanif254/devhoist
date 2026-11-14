@@ -5,6 +5,7 @@ import {
   fetchGitHubViewer,
   getCanonicalSiteUrl,
   getGitHubOAuthConfig,
+  GITHUB_OAUTH_NONCE_COOKIE,
   GitHubApiError,
   saveUserGitHubAccount,
   sanitizeReturnToPath,
@@ -12,7 +13,6 @@ import {
 } from '@/lib/githubIntegration';
 import { logSecurityAudit } from '@/lib/security';
 import { isDevSandboxMode, isSupabaseConfigured } from '@/lib/supabase';
-import { GITHUB_OAUTH_NONCE_COOKIE } from '../connect/route';
 
 export const dynamic = 'force-dynamic';
 
@@ -83,7 +83,7 @@ export async function GET(req: Request) {
     }
 
     const cookieNonce = extractCookie(req, GITHUB_OAUTH_NONCE_COOKIE);
-    if (cookieNonce && !timingSafeEqualStr(cookieNonce, claims.nonce)) {
+    if (!cookieNonce || !timingSafeEqualStr(cookieNonce, claims.nonce)) {
       await logSecurityAudit({
         actorId: auth.user.id,
         actorRole: auth.role,

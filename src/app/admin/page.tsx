@@ -202,7 +202,17 @@ export default function AdminCommandCenterPage() {
   const [testEmailAddress, setTestEmailAddress] = useState('founder@devhostcloud.com');
   const [testEmailTemplate, setTestEmailTemplate] = useState<EmailTemplateId>('hosting_provisioned_credentials');
   const [lifecycleCronRunning, setLifecycleCronRunning] = useState(false);
-  const [lifecycleCronResults, setLifecycleCronResults] = useState<any | null>(null);
+  const [lifecycleCronResults, setLifecycleCronResults] = useState<{
+    timestamp?: string;
+    results?: {
+      renewalInvoicesCreated?: number;
+      autoRenewedViaWallet?: number;
+      urgentRemindersSent?: number;
+      accountsSuspended?: number;
+      affiliateCommissionsMaturedBDT?: number;
+    };
+    logs?: string[];
+  } | null>(null);
   const [cronSubTab, setCronSubTab] = useState<'lifecycle' | 'email_outbox' | 'telegram' | 'export'>('lifecycle');
 
   // Trigger 6-Task Autonomous Lifecycle Cron (authenticated Admin session cookie)
@@ -220,8 +230,8 @@ export default function AdminCommandCenterPage() {
       setLifecycleCronResults(data);
       setEmailOutboxLogs(getEmailOutboxLogs());
       setTelegramLogs(getTelegramOutbox());
-    } catch (err: any) {
-      window.alert('Cron execution error: ' + err?.message);
+    } catch (err: unknown) {
+      window.alert('Cron execution error: ' + (err instanceof Error ? err.message : 'Unknown error'));
     } finally {
       setLifecycleCronRunning(false);
     }
@@ -238,8 +248,8 @@ export default function AdminCommandCenterPage() {
           ? 'Telegram alert simulated and logged to outbox! (Set TELEGRAM_BOT_TOKEN and TELEGRAM_ADMIN_CHAT_ID in .env for live mobile delivery).'
           : 'Telegram alert delivered live to founder chat!'
       );
-    } catch (err: any) {
-      window.alert('Telegram test error: ' + err?.message);
+    } catch (err: unknown) {
+      window.alert('Telegram test error: ' + (err instanceof Error ? err.message : 'Unknown error'));
     } finally {
       setIsTestingTelegram(false);
     }
@@ -250,7 +260,7 @@ export default function AdminCommandCenterPage() {
     try {
       let html = '';
       let subject = 'DevHost Cloud Test Notification';
-      let previewText = 'Test transactional message';
+      const previewText = 'Test transactional message';
 
       if (testEmailTemplate === 'hosting_provisioned_credentials') {
         subject = '⚡ cPanel Credentials & Server Provisioning — client-site.com';
@@ -345,8 +355,8 @@ export default function AdminCommandCenterPage() {
 
       setEmailOutboxLogs(getEmailOutboxLogs());
       window.alert(`Test email (${testEmailTemplate}) dispatched to ${testEmailAddress}! View the full HTML preview in the Outbox table.`);
-    } catch (err: any) {
-      window.alert('Email send error: ' + err?.message);
+    } catch (err: unknown) {
+      window.alert('Email send error: ' + (err instanceof Error ? err.message : 'Unknown error'));
     }
   };
 
@@ -363,15 +373,15 @@ export default function AdminCommandCenterPage() {
     URL.revokeObjectURL(url);
   };
 
-  const handleExportJsonData = (dataset: any[], filename: string) => {
+  const handleExportJsonData = <T extends object>(dataset: T[], filename: string) => {
     downloadFile(JSON.stringify(dataset, null, 2), `${filename}.json`, 'application/json');
   };
 
-  const handleExportCsvData = (dataset: any[], filename: string) => {
+  const handleExportCsvData = <T extends object>(dataset: T[], filename: string) => {
     if (!dataset.length) return;
-    const headers = Object.keys(dataset[0]);
+    const headers = Object.keys(dataset[0]) as Array<keyof T>;
     const csvRows = [
-      headers.join(','),
+      headers.map(String).join(','),
       ...dataset.map((row) =>
         headers.map((h) => JSON.stringify(row[h] ?? '')).join(',')
       ),
@@ -419,19 +429,25 @@ export default function AdminCommandCenterPage() {
 
   useEffect(() => {
     if (dynamicPlans && dynamicPlans.length > 0) {
-      setEditablePlans(dynamicPlans);
-      const target = dynamicPlans.find((p) => p.id === simPlanId || p.slug === simPlanId) || dynamicPlans[1];
-      if (target) {
-        setSimSellingPrice(target.priceMonthlyBDT);
-        setSimServerCost(target.unitServerCostBDT || 0);
-        setSimMinProfit(target.minOwnerProfitBDT || 0);
-      }
+      const timer = window.setTimeout(() => {
+        setEditablePlans(dynamicPlans);
+        const target = dynamicPlans.find((p) => p.id === simPlanId || p.slug === simPlanId) || dynamicPlans[1];
+        if (target) {
+          setSimSellingPrice(target.priceMonthlyBDT);
+          setSimServerCost(target.unitServerCostBDT || 0);
+          setSimMinProfit(target.minOwnerProfitBDT || 0);
+        }
+      }, 0);
+      return () => window.clearTimeout(timer);
     }
   }, [dynamicPlans]);
 
   useEffect(() => {
     if (dynamicTlds && dynamicTlds.length > 0) {
-      setEditableTlds(dynamicTlds);
+      const timer = window.setTimeout(() => {
+        setEditableTlds(dynamicTlds);
+      }, 0);
+      return () => window.clearTimeout(timer);
     }
   }, [dynamicTlds]);
 
@@ -2013,7 +2029,7 @@ export default function AdminCommandCenterPage() {
                       />
                       <select
                         value={testEmailTemplate}
-                        onChange={(e) => setTestEmailTemplate(e.target.value as any)}
+                        onChange={(e) => setTestEmailTemplate(e.target.value as EmailTemplateId)}
                         className="px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono"
                       >
                         <option value="hosting_provisioned_credentials">1. cPanel Credentials &amp; Server Details</option>
@@ -2317,14 +2333,14 @@ export default function AdminCommandCenterPage() {
                               Client: {item.customerName} • Source: {item.sourceHost} ({item.backupSizeMB} MB)
                             </div>
                             <p className="text-[11px] text-slate-600 dark:text-zinc-400 italic">
-                              "{item.notes}"
+                              &ldquo;{item.notes}&rdquo;
                             </p>
 
                             <div className="flex justify-between items-center pt-2 border-t border-slate-200 dark:border-white/5">
                               {step > 1 && (
                                 <button
                                   type="button"
-                                  onClick={() => updateMigrationStatus(item.id, (step - 1) as any)}
+                                  onClick={() => updateMigrationStatus(item.id, (step - 1) as 1 | 2 | 3 | 4)}
                                   className="text-[10px] text-slate-400 hover:text-slate-600 cursor-pointer"
                                 >
                                   ← Back
@@ -2333,7 +2349,7 @@ export default function AdminCommandCenterPage() {
                               {step < 4 && (
                                 <button
                                   type="button"
-                                  onClick={() => updateMigrationStatus(item.id, (step + 1) as any)}
+                                  onClick={() => updateMigrationStatus(item.id, (step + 1) as 1 | 2 | 3 | 4)}
                                   className="text-[10px] text-blue-600 font-bold hover:underline cursor-pointer ml-auto"
                                 >
                                   Advance →
@@ -2990,7 +3006,7 @@ export default function AdminCommandCenterPage() {
                     />
                     <select
                       value={securityRiskFilter}
-                      onChange={(e) => setSecurityRiskFilter(e.target.value as any)}
+                      onChange={(e) => setSecurityRiskFilter(e.target.value as 'all' | 'critical' | 'high' | 'medium' | 'low')}
                       className="px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-xs font-mono"
                     >
                       <option value="all">All Risks</option>

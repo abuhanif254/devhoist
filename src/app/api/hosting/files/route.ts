@@ -5,9 +5,7 @@ import { requireServiceAccess, serviceUnavailableResponse } from '@/lib/authGuar
 import { isComputeAgentConfigured, syncContainerFilesOnAgent } from '@/lib/computeAgentClient';
 import { resolveServiceComputeTarget } from '@/lib/computeTargetResolver';
 
-export { normalizeAndValidateFilePath };
-
-export interface VirtualFileEntry {
+interface VirtualFileEntry {
   id: string;
   service_id: string;
   user_id?: string;

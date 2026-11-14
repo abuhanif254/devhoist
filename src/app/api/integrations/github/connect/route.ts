@@ -4,14 +4,13 @@ import { requireServiceAccess, requireUser } from '@/lib/authGuard';
 import {
   buildGitHubAuthorizeUrl,
   getGitHubOAuthConfig,
+  GITHUB_OAUTH_NONCE_COOKIE,
   sanitizeReturnToPath,
   signGitHubOAuthState,
 } from '@/lib/githubIntegration';
 import { isDevSandboxMode, isSupabaseConfigured } from '@/lib/supabase';
 
 export const dynamic = 'force-dynamic';
-
-export const GITHUB_OAUTH_NONCE_COOKIE = 'devhost_github_oauth_nonce';
 
 export async function GET(req: Request) {
   try {

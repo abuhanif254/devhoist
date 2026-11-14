@@ -7,14 +7,14 @@ import {
   parseDotEnvFile,
   validateShellCommand,
 } from '@/lib/projectEngine';
-import { requireServiceAccess, verifySudoToken, serviceUnavailableResponse } from '@/lib/authGuard';
+import { requireUser, requireServiceAccess, verifySudoToken, serviceUnavailableResponse } from '@/lib/authGuard';
 
 
 async function logAudit(
   actorId: string | null,
   actionType: string,
   targetResource: string,
-  metadata: Record<string, any>,
+  metadata: Record<string, unknown>,
   ip: string = '127.0.0.1',
   riskLevel: 'low' | 'medium' | 'high' | 'critical' = 'medium'
 ) {
@@ -68,23 +68,35 @@ export async function GET(request: NextRequest) {
         .eq('service_id', serviceId)
         .order('env_key', { ascending: true });
 
+      const safeSettings = settings
+        ? {
+            ...settings,
+            has_webhook_secret: Boolean((settings as Record<string, unknown>).webhook_secret_token),
+            webhook_secret_preview: (settings as Record<string, unknown>).webhook_secret_token
+              ? getMaskedPreview(String((settings as Record<string, unknown>).webhook_secret_token))
+              : null,
+            webhook_secret_token: undefined,
+          }
+        : {
+            framework_preset: 'nextjs_standalone',
+            runtime_version: 'Node.js 22 LTS',
+            root_directory: './',
+            install_command: 'npm ci',
+            build_command: 'npm run build',
+            output_directory: '.next/standalone',
+            startup_file: 'server.js',
+            git_repo_url: '',
+            production_branch: 'main',
+            auto_deploy_on_push: true,
+            has_webhook_secret: false,
+            webhook_secret_preview: null,
+            litespeed_cache_enabled: true,
+            redis_object_cache_enabled: true,
+          };
+
       return NextResponse.json({
         success: true,
-        settings: settings || {
-          framework_preset: 'nextjs_standalone',
-          runtime_version: 'Node.js 22 LTS',
-          root_directory: './',
-          install_command: 'npm ci',
-          build_command: 'npm run build',
-          output_directory: '.next/standalone',
-          startup_file: 'server.js',
-          git_repo_url: '',
-          production_branch: 'main',
-          auto_deploy_on_push: true,
-          webhook_secret_token: 'whsec_demo_placeholder_token_8899',
-          litespeed_cache_enabled: true,
-          redis_object_cache_enabled: true,
-        },
+        settings: safeSettings,
         envVariables: envVars || [],
       });
     }
@@ -117,8 +129,11 @@ export async function GET(request: NextRequest) {
         { id: 'env_3', env_key: 'STRIPE_SECRET_KEY', masked_preview: 'sk_live_••••••••88ef', target_environment: 'production', is_secret: true },
       ],
     });
-  } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+  } catch (err: unknown) {
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : 'Failed to load project' },
+      { status: 500 }
+    );
   }
 }
 
@@ -222,8 +237,11 @@ export async function PUT(request: NextRequest) {
       success: true,
       message: 'Project runtime & build configurations successfully saved.',
     });
-  } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+  } catch (err: unknown) {
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : 'Failed to load project' },
+      { status: 500 }
+    );
   }
 }
 
@@ -237,6 +255,9 @@ export async function PUT(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
+    const auth = await requireUser(request);
+    if (!auth.ok) return auth.response;
+
     const ip = request.headers.get('x-forwarded-for') || '127.0.0.1';
     const body = await request.json();
     const {
@@ -253,13 +274,19 @@ export async function POST(request: NextRequest) {
     const db = isSupabaseConfigured() ? getServiceSupabase() : null;
 
     let resolvedServiceId = serviceId;
-    if (!resolvedServiceId && action === 'reveal_secret' && envId && db) {
+    if (action === 'reveal_secret' && envId && db) {
       const { data: envOwner } = await db
         .from('project_env_variables')
         .select('service_id')
         .eq('id', envId)
         .maybeSingle();
-      resolvedServiceId = envOwner?.service_id;
+      if (!envOwner) {
+        return NextResponse.json({ success: false, error: 'Environment variable not found.' }, { status: 404 });
+      }
+      if (resolvedServiceId && envOwner.service_id && envOwner.service_id !== resolvedServiceId) {
+        return NextResponse.json({ success: false, error: 'Forbidden environment variable access.' }, { status: 403 });
+      }
+      resolvedServiceId = envOwner.service_id || resolvedServiceId;
     }
 
     const requiredScope = action === 'regenerate_webhook_token' ? 'services:write' : 'env:write';
@@ -434,8 +461,11 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json({ success: false, error: 'Invalid action provided.' }, { status: 400 });
-  } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+  } catch (err: unknown) {
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : 'Hosting project operation failed.' },
+      { status: 500 }
+    );
   }
 }
 
@@ -445,6 +475,9 @@ export async function POST(request: NextRequest) {
  */
 export async function DELETE(request: NextRequest) {
   try {
+    const auth = await requireUser(request);
+    if (!auth.ok) return auth.response;
+
     const ip = request.headers.get('x-forwarded-for') || '127.0.0.1';
     const { searchParams } = new URL(request.url);
     const envId = searchParams.get('envId');
@@ -455,13 +488,19 @@ export async function DELETE(request: NextRequest) {
     }
 
     const db = isSupabaseConfigured() ? getServiceSupabase() : null;
-    if (!serviceId && db) {
+    if (db) {
       const { data: envRow } = await db
         .from('project_env_variables')
         .select('service_id')
         .eq('id', envId)
         .maybeSingle();
-      serviceId = envRow?.service_id || null;
+      if (!envRow) {
+        return NextResponse.json({ success: false, error: 'Environment variable not found.' }, { status: 404 });
+      }
+      if (serviceId && envRow.service_id && envRow.service_id !== serviceId) {
+        return NextResponse.json({ success: false, error: 'Forbidden environment variable access.' }, { status: 403 });
+      }
+      serviceId = envRow.service_id || serviceId;
     }
 
     const access = await requireServiceAccess(request, serviceId, 'env:write');
@@ -487,7 +526,10 @@ export async function DELETE(request: NextRequest) {
       success: true,
       message: 'Environment variable deleted.',
     });
-  } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+  } catch (err: unknown) {
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : 'Failed to load project' },
+      { status: 500 }
+    );
   }
 }

@@ -532,6 +532,36 @@ export async function POST(request: Request) {
         );
       }
 
+      const lockedBankAcct = vault.bankAccountDetails?.accountNumber
+        ? [vault.bankAccountDetails.bankName, vault.bankAccountDetails.accountNumber]
+            .filter(Boolean)
+            .join(' · ')
+        : '';
+      const lockedDestination =
+        vault.shortPayoutMethod === 'bank' ? lockedBankAcct : vault.payoutWalletNumber;
+
+      if (lockedDestination) {
+        const methodMatches = payoutMethod === vault.shortPayoutMethod;
+        const accountMatches =
+          accountDetails === lockedDestination ||
+          (vault.shortPayoutMethod === 'bank' &&
+            accountDetails === vault.bankAccountDetails?.accountNumber);
+        if (!methodMatches || !accountMatches) {
+          return NextResponse.json(
+            {
+              error: 'Payout Destination Mismatch',
+              code: 'PAYOUT_DESTINATION_LOCKED',
+              message:
+                'Withdrawal method and destination must match your verified payout vault profile. Save changes in Payout Settings (subject to 24h security cooling lock) before withdrawing.',
+            },
+            { status: 403 }
+          );
+        }
+      }
+
+      const effectiveMethod = lockedDestination ? vault.shortPayoutMethod : payoutMethod;
+      const effectiveAccountDetails = lockedDestination || accountDetails;
+
       const currentAvail = Number(affProfile.available_balance_bdt) || 0;
       if (currentAvail < numAmount) {
         return NextResponse.json(
@@ -540,57 +570,107 @@ export async function POST(request: Request) {
         );
       }
 
-      // Atomic conditional balance deduction BEFORE creating payout row (prevents concurrent withdrawal race)
-      const { data: deductedProfile, error: deductErr } = await supabase
-        .from('affiliate_profiles')
-        .update({
-          available_balance_bdt: Math.round((currentAvail - numAmount) * 100) / 100,
-          payout_method: payoutMethod,
-          payout_account_number: accountDetails,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('user_id', affiliateUserId)
-        .gte('available_balance_bdt', numAmount)
-        .select('available_balance_bdt')
-        .maybeSingle();
+      let payoutIdResolved: string | null = null;
+      let nextAvailableBalance = Math.round((currentAvail - numAmount) * 100) / 100;
 
-      if (deductErr || !deductedProfile) {
-        return NextResponse.json(
-          { error: 'Concurrent Payout Conflict', message: 'Insufficient available balance for withdrawal.' },
-          { status: 409 }
-        );
+      // Prefer atomic Postgres RPC to lock row, deduct balance, and insert payout in one transaction
+      try {
+        const { data: rpcRes, error: rpcErr } = await supabase.rpc('request_affiliate_payout_atomic', {
+          p_user_id: affiliateUserId,
+          p_amount_bdt: numAmount,
+          p_payout_method: effectiveMethod,
+          p_account_details: effectiveAccountDetails,
+        });
+        const rpcRow = (Array.isArray(rpcRes) ? rpcRes[0] : rpcRes) as
+          | {
+              ok?: boolean;
+              payout_id?: string;
+              available_balance_bdt?: number;
+              error_code?: string;
+              error_message?: string;
+            }
+          | null
+          | undefined;
+
+        if (!rpcErr && rpcRow && typeof rpcRow.ok === 'boolean') {
+          if (!rpcRow.ok) {
+            return NextResponse.json(
+              {
+                error: rpcRow.error_code || 'Payout Rejected',
+                message: rpcRow.error_message || 'Insufficient available balance for withdrawal.',
+              },
+              { status: rpcRow.error_code === 'ACCOUNT_FROZEN' ? 403 : 409 }
+            );
+          }
+          payoutIdResolved = rpcRow.payout_id ? String(rpcRow.payout_id) : null;
+          nextAvailableBalance = Number(rpcRow.available_balance_bdt ?? nextAvailableBalance);
+        }
+      } catch {
+        // Fallback below if RPC is unavailable in tests or pre-migration DB
       }
 
-      const { data: payoutData, error: pError } = await supabase
-        .from('affiliate_payouts')
-        .insert({
-          affiliate_user_id: affiliateUserId,
-          amount_bdt: numAmount,
-          payout_method: payoutMethod,
-          account_details: accountDetails,
-          status: 'pending_review',
-        })
-        .select('id')
-        .single();
+      if (!payoutIdResolved) {
+        // Atomic conditional balance deduction BEFORE creating payout row (prevents concurrent withdrawal race)
+        const { data: deductedProfile, error: deductErr } = await supabase
+          .from('affiliate_profiles')
+          .update({
+            available_balance_bdt: nextAvailableBalance,
+            payout_method: effectiveMethod,
+            payout_account_number: effectiveAccountDetails,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('user_id', affiliateUserId)
+          .gte('available_balance_bdt', numAmount)
+          .select('available_balance_bdt')
+          .maybeSingle();
 
-      if (pError) {
-        throw pError;
+        if (deductErr || !deductedProfile) {
+          return NextResponse.json(
+            { error: 'Concurrent Payout Conflict', message: 'Insufficient available balance for withdrawal.' },
+            { status: 409 }
+          );
+        }
+
+        const { data: payoutData, error: pError } = await supabase
+          .from('affiliate_payouts')
+          .insert({
+            affiliate_user_id: affiliateUserId,
+            amount_bdt: numAmount,
+            payout_method: effectiveMethod,
+            account_details: effectiveAccountDetails,
+            status: 'pending_review',
+          })
+          .select('id')
+          .single();
+
+        if (pError || !payoutData) {
+          await supabase
+            .from('affiliate_profiles')
+            .update({
+              available_balance_bdt: currentAvail,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('user_id', affiliateUserId);
+          throw pError || new Error('Failed to persist affiliate payout request');
+        }
+        payoutIdResolved = String(payoutData.id);
+        nextAvailableBalance = Number(deductedProfile.available_balance_bdt);
       }
 
       await logSecurityAudit({
         actorId: affiliateUserId,
         actorRole: 'client',
         actionType: 'AFFILIATE_PAYOUT_REQUESTED',
-        targetResource: `payout:${payoutData.id}`,
+        targetResource: `payout:${payoutIdResolved}`,
         ipAddress: clientIp,
         riskLevel: 'low',
-        metadata: { amount: numAmount, method: payoutMethod },
+        metadata: { amount: numAmount, method: effectiveMethod },
       }).catch(() => {});
 
       return NextResponse.json({
         success: true,
-        payoutId: payoutData.id,
-        availableBalanceBDT: Number(deductedProfile.available_balance_bdt),
+        payoutId: payoutIdResolved,
+        availableBalanceBDT: nextAvailableBalance,
         message: `Payout request of ৳${numAmount.toLocaleString()} submitted for Admin approval.`,
       });
     }

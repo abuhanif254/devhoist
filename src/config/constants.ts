@@ -33,6 +33,13 @@ export function convertBdtToUsd(bdtPrice: number): number {
   return Number((bdtPrice / USD_EXCHANGE_RATE).toFixed(2));
 }
 
+export function formatCurrency(bdtPrice: number, currency: CurrencyCode = 'BDT'): string {
+  if (currency === 'USD') {
+    return `$${convertBdtToUsd(bdtPrice).toFixed(2)}`;
+  }
+  return `৳${Math.round(bdtPrice).toLocaleString()}`;
+}
+
 /**
  * Exact Billing Math Formulas
  * monthlyEffectivePrice = isAnnual ? Math.round(baseMonthlyPrice * 0.8) : baseMonthlyPrice

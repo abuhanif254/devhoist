@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, getServiceSupabase, isDevSandboxMode } from '@/lib/supabase';
-import { requireAdmin, verifySudoToken, serviceUnavailableResponse } from '@/lib/authGuard';
+import {
+  requireAdmin,
+  verifySudoToken,
+  isSafeExternalHttpUrl,
+  serviceUnavailableResponse,
+} from '@/lib/authGuard';
 import { isComputeAgentConfigured, pingComputeAgent } from '@/lib/computeAgentClient';
 import { encryptEnvValue } from '@/lib/projectEngine';
 
@@ -229,6 +234,13 @@ export async function POST(req: NextRequest) {
         return serviceUnavailableResponse('Compute Agent Endpoint');
       }
 
+      if (resolvedEndpoint && !isSafeExternalHttpUrl(resolvedEndpoint)) {
+        return NextResponse.json(
+          { success: false, error: 'Blocked unsafe or private/internal compute agent endpoint URL.' },
+          { status: 400 }
+        );
+      }
+
       const pingRes = await pingComputeAgent(resolvedEndpoint);
       if (isSupabaseConfigured() && nodeId && pingRes.ok && pingRes.data) {
         const db = getServiceSupabase();
@@ -258,6 +270,16 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'toggle_provision') {
+      if (!sudoValid) {
+        return NextResponse.json(
+          {
+            success: false,
+            requireSudo: true,
+            error: 'Admin Sudo elevation required to modify node health or auto-provisioning.',
+          },
+          { status: 403 }
+        );
+      }
       const { nodeId, autoProvisionEnabled, isHealthy } = body;
       if (isSupabaseConfigured() && nodeId) {
         const db = getServiceSupabase();
@@ -266,6 +288,13 @@ export async function POST(req: NextRequest) {
           is_healthy: isHealthy,
         }).eq('id', nodeId);
       }
+      await logNodeAudit(
+        'NODE_PROVISION_TOGGLED',
+        `node:${nodeId || 'unknown'}`,
+        { autoProvisionEnabled, isHealthy },
+        'high',
+        ip
+      );
       return NextResponse.json({ success: true, message: 'Node status updated.' });
     }
 
@@ -381,15 +410,82 @@ export async function PUT(req: NextRequest) {
         return NextResponse.json({ success: false, error: 'userId and amountBdt are required.' }, { status: 400 });
       }
 
+      const deltaBdt = Number(amountBdt);
+      if (!Number.isFinite(deltaBdt) || deltaBdt === 0) {
+        return NextResponse.json(
+          { success: false, error: 'amountBdt must be a non-zero finite number.' },
+          { status: 400 }
+        );
+      }
+
+      let updatedBalance: number | null = null;
+
       if (isSupabaseConfigured()) {
         const db = getServiceSupabase();
-        const { data: user } = await db.from('profiles').select('wallet_balance_bdt').eq('id', userId).single();
+        let handledByRpc = false;
 
-        if (user) {
+        if (typeof db.rpc === 'function') {
+          try {
+            const { data: rpcRes, error: rpcErr } = await db.rpc('admin_adjust_wallet_atomic', {
+              p_user_id: userId,
+              p_delta_bdt: deltaBdt,
+              p_reason: reason || 'Administrative adjustment',
+              p_actor_id: adminAuth.user.id,
+            });
+            const rpcRow = (Array.isArray(rpcRes) ? rpcRes[0] : rpcRes) as
+              | { ok?: boolean; new_balance_bdt?: number; error_message?: string }
+              | null
+              | undefined;
+            if (!rpcErr && rpcRow && typeof rpcRow.ok === 'boolean') {
+              handledByRpc = true;
+              if (!rpcRow.ok) {
+                return NextResponse.json(
+                  { success: false, error: rpcRow.error_message || 'Wallet adjustment rejected.' },
+                  { status: 400 }
+                );
+              }
+              updatedBalance = Number(rpcRow.new_balance_bdt ?? 0);
+            }
+          } catch {
+            // Fall through to guarded optimistic update if RPC missing in pre-migration or mock DB
+          }
+        }
+
+        if (!handledByRpc) {
+          const { data: user } = await db
+            .from('profiles')
+            .select('wallet_balance_bdt')
+            .eq('id', userId)
+            .single();
+
+          if (!user) {
+            return NextResponse.json({ success: false, error: 'Target user not found.' }, { status: 404 });
+          }
+
           const currentBal = Number(user.wallet_balance_bdt) || 0;
-          const newBal = currentBal + Number(amountBdt);
+          const newBal = Math.round((currentBal + deltaBdt) * 100) / 100;
+          if (newBal < 0) {
+            return NextResponse.json(
+              { success: false, error: 'Wallet balance cannot drop below 0 BDT.' },
+              { status: 400 }
+            );
+          }
 
-          await db.from('profiles').update({ wallet_balance_bdt: newBal }).eq('id', userId);
+          const { data: updatedRows, error: updateErr } = await db
+            .from('profiles')
+            .update({ wallet_balance_bdt: newBal })
+            .eq('id', userId)
+            .eq('wallet_balance_bdt', user.wallet_balance_bdt)
+            .select('wallet_balance_bdt');
+
+          if (updateErr || !updatedRows || updatedRows.length === 0) {
+            return NextResponse.json(
+              { success: false, error: 'Concurrent wallet modification detected; retry.' },
+              { status: 409 }
+            );
+          }
+
+          updatedBalance = newBal;
 
           // Record in financial ledger
           const entryCode = `LDG-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
@@ -398,10 +494,10 @@ export async function PUT(req: NextRequest) {
             entry_type: 'wallet_topup',
             user_id: userId,
             gateway: 'system',
-            gross_amount_bdt: Number(amountBdt),
+            gross_amount_bdt: deltaBdt,
             base_cogs_cost_bdt: 0,
             affiliate_commission_bdt: 0,
-            notes: `Admin Wallet Balance Adjustment: ${Number(amountBdt) >= 0 ? '+' : ''}${amountBdt} BDT. Reason: ${reason || 'Administrative adjustment'}`,
+            notes: `Admin Wallet Balance Adjustment: ${deltaBdt >= 0 ? '+' : ''}${deltaBdt} BDT. Reason: ${reason || 'Administrative adjustment'}`,
           });
         }
       }
@@ -409,21 +505,36 @@ export async function PUT(req: NextRequest) {
       await logNodeAudit(
         'WALLET_BALANCE_ADJUSTED',
         `user:${userId}`,
-        { amountBdt, reason },
+        { amountBdt: deltaBdt, reason, newBalance: updatedBalance },
         'high',
         ip
       );
 
       return NextResponse.json({
         success: true,
-        message: `Customer wallet updated by ${amountBdt >= 0 ? '+' : ''}${amountBdt} BDT.`,
+        newBalance: updatedBalance,
+        message: `Customer wallet updated by ${deltaBdt >= 0 ? '+' : ''}${deltaBdt} BDT.`,
       });
     }
 
     // 4. Role Toggle (Client <-> Admin)
     if (action === 'toggle_role') {
       const { userId, newRole } = body;
-      if (isSupabaseConfigured() && userId) {
+      if (!userId || (newRole !== 'client' && newRole !== 'admin')) {
+        return NextResponse.json(
+          { success: false, error: 'Valid userId and newRole (client or admin) are required.' },
+          { status: 400 }
+        );
+      }
+
+      if (userId === adminAuth.user.id && newRole !== 'admin') {
+        return NextResponse.json(
+          { success: false, error: 'Administrators cannot demote their own active account.' },
+          { status: 400 }
+        );
+      }
+
+      if (isSupabaseConfigured()) {
         const db = getServiceSupabase();
         await db.from('profiles').update({ role: newRole }).eq('id', userId);
       }

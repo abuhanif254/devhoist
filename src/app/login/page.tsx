@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
@@ -24,7 +24,7 @@ import { supabase, syncAuthCookie } from '@/lib/supabase';
 import { getClientLockoutState, recordClientFailedAttempt, resetClientFailedAttempts, sanitizeRedirect } from '@/lib/authSecurity';
 import Auth3DScene from '@/components/visuals/Auth3DScene';
 
-export default function LoginPage() {
+function LoginPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const rawRedirect = searchParams.get('redirect') || searchParams.get('from') || searchParams.get('next');
@@ -68,22 +68,25 @@ export default function LoginPage() {
 
   // 2. Detect 2FA Challenge from OAuth Callback or direct redirect
   useEffect(() => {
-    if (searchParams.get('challenge_2fa') === '1') {
-      const uId = searchParams.get('userId');
-      const uEmail = searchParams.get('email');
-      if (uId) setAuthUserId(uId);
-      if (uEmail) setEmail(uEmail);
-      setRequire2FA(true);
-      setShow2FAScreen(true);
-      setLoginError(null);
-    } else if (searchParams.get('registered') === '1') {
-      setLoginError(null);
-    } else if (searchParams.get('logged_out') === 'true') {
-      setLoginError(null);
-    } else if (searchParams.get('error')) {
-      const err = searchParams.get('error');
-      if (err) setLoginError(decodeURIComponent(err));
-    }
+    const timer = window.setTimeout(() => {
+      if (searchParams.get('challenge_2fa') === '1') {
+        const uId = searchParams.get('userId');
+        const uEmail = searchParams.get('email');
+        if (uId) setAuthUserId(uId);
+        if (uEmail) setEmail(uEmail);
+        setRequire2FA(true);
+        setShow2FAScreen(true);
+        setLoginError(null);
+      } else if (searchParams.get('registered') === '1') {
+        setLoginError(null);
+      } else if (searchParams.get('logged_out') === 'true') {
+        setLoginError(null);
+      } else if (searchParams.get('error')) {
+        const err = searchParams.get('error');
+        if (err) setLoginError(decodeURIComponent(err));
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [searchParams]);
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
@@ -166,14 +169,14 @@ export default function LoginPage() {
       } else {
         router.replace('/dashboard');
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       const lockout = recordClientFailedAttempt();
       if (lockout.isLocked) {
         setIsLocked(true);
         setLockoutSeconds(lockout.remainingSeconds);
         setLoginError('Security Alert: Too many failed login attempts. Workstation temporarily locked for 15 minutes to prevent brute-force attacks.');
       } else {
-        setLoginError(err.message || 'Failed to sign in. Please check your credentials.');
+        setLoginError(err instanceof Error ? err.message : 'Failed to sign in. Please check your credentials.');
       }
     } finally {
       setIsSubmitting(false);
@@ -182,7 +185,7 @@ export default function LoginPage() {
 
   const handleOAuthLogin = async (provider: 'github' | 'google') => {
     try {
-      const { data, error } = await supabase.auth.signInWithOAuth({
+      const { error } = await supabase.auth.signInWithOAuth({
         provider,
         options: {
           redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(redirectParam || '/dashboard')}`,
@@ -193,7 +196,7 @@ export default function LoginPage() {
           `${provider === 'google' ? 'Google' : 'GitHub'} OAuth is not enabled in Supabase yet. Please sign in below with your Email & Password.`
         );
       }
-    } catch (err: any) {
+    } catch {
       setLoginError(
         `${provider === 'google' ? 'Google' : 'GitHub'} OAuth is not enabled in Supabase yet. Please sign in below with your Email & Password.`
       );
@@ -505,7 +508,10 @@ export default function LoginPage() {
 
               <div className="text-center text-xs text-slate-500 dark:text-zinc-400 pt-2">
                 Don&apos;t have an account?{' '}
-                <Link href="/register" className="text-blue-600 dark:text-blue-400 font-semibold hover:underline">
+                <Link
+                  href={redirectParam && redirectParam !== '/dashboard' ? `/register?next=${encodeURIComponent(redirectParam)}` : '/register'}
+                  className="text-blue-600 dark:text-blue-400 font-semibold hover:underline"
+                >
                   Create new account
                 </Link>
               </div>
@@ -697,5 +703,13 @@ export default function LoginPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen w-full flex items-center justify-center bg-white dark:bg-zinc-950 text-sm text-slate-500">Loading sign in...</div>}>
+      <LoginPageContent />
+    </Suspense>
   );
 }

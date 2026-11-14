@@ -410,9 +410,9 @@ export default function PanelPreviewClient() {
           {activeTab === 'runtime' && (
             <div className="space-y-6">
               {/* Version Switcher */}
-              <div className="p-4 rounded-xl bg-zinc-900/60 border border-white/[0.08] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div className="p-4 rounded-xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                 <div>
-                  <div className="text-xs text-zinc-400 font-mono uppercase">
+                  <div className="text-xs text-slate-500 dark:text-zinc-400 font-mono uppercase">
                     CloudLinux Runtime Manager
                   </div>
                   <h3 className="text-sm font-semibold text-slate-900 dark:text-zinc-100 mt-0.5">
@@ -421,7 +421,7 @@ export default function PanelPreviewClient() {
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <span className="text-xs font-mono text-zinc-400">Runtime:</span>
+                  <span className="text-xs font-mono text-slate-600 dark:text-zinc-400">Runtime:</span>
                   <select
                     value={nodeVersion}
                     onChange={(e) => setNodeVersion(e.target.value)}
@@ -438,9 +438,9 @@ export default function PanelPreviewClient() {
 
               {/* Toast */}
               {workerToast && (
-                <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs font-mono flex items-center justify-between animate-in fade-in">
+                <div className="p-3 rounded-lg bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 text-emerald-700 dark:text-emerald-300 text-xs font-mono flex items-center justify-between animate-in fade-in">
                   <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                     <span>{workerToast}</span>
                   </div>
                 </div>
@@ -449,13 +449,13 @@ export default function PanelPreviewClient() {
               {/* Environment Variables Vault */}
               <div className="space-y-3">
                 <div className="flex items-center justify-between text-xs font-mono">
-                  <span className="text-zinc-400 uppercase tracking-wider">
+                  <span className="text-slate-600 dark:text-zinc-400 uppercase tracking-wider">
                     Environment Variables Vault (.env.production)
                   </span>
                   <button
                     type="button"
                     onClick={restartPassenger}
-                    className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-400 hover:text-emerald-300 cursor-pointer"
+                    className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 cursor-pointer"
                   >
                     <RefreshCw className="w-3.5 h-3.5" />
                     <span>Restart Passenger Worker</span>
@@ -515,7 +515,7 @@ export default function PanelPreviewClient() {
                   />
                   <button
                     type="submit"
-                    className="h-9 px-4 rounded-lg bg-zinc-100 text-zinc-950 hover:bg-white font-medium flex items-center justify-center gap-1.5 transition-all cursor-pointer whitespace-nowrap"
+                    className="h-9 px-4 rounded-lg bg-blue-600 hover:bg-blue-700 text-white dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white font-medium flex items-center justify-center gap-1.5 transition-all cursor-pointer whitespace-nowrap"
                   >
                     <Plus className="w-3.5 h-3.5" />
                     <span>Add Variable</span>
@@ -530,13 +530,13 @@ export default function PanelPreviewClient() {
           {/* ---------------------------------------------------------------- */}
           {activeTab === 'telemetry' && (
             <div className="space-y-6">
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 rounded-xl bg-zinc-900/60 border border-white/[0.08]">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 rounded-xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08]">
                 <div>
-                  <div className="text-xs text-zinc-400 font-mono uppercase">
+                  <div className="text-xs text-slate-500 dark:text-zinc-400 font-mono uppercase">
                     CloudLinux LVE Container Isolation
                   </div>
-                  <h3 className="text-sm font-semibold text-zinc-100 mt-0.5">
-                    Live Hardware Telemetry & Request Absorber
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-zinc-100 mt-0.5">
+                    Live Hardware Telemetry &amp; Request Absorber
                   </h3>
                 </div>
 
@@ -544,7 +544,7 @@ export default function PanelPreviewClient() {
                   type="button"
                   onClick={triggerSpike}
                   disabled={isSpiking}
-                  className="inline-flex items-center gap-2 h-9 px-4 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25 text-xs font-mono font-medium transition-all cursor-pointer disabled:opacity-50"
+                  className="inline-flex items-center gap-2 h-9 px-4 rounded-lg bg-emerald-50 dark:bg-emerald-500/15 border border-emerald-200 dark:border-emerald-500/30 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-500/25 text-xs font-mono font-medium transition-all cursor-pointer disabled:opacity-50"
                 >
                   <Zap className={`w-3.5 h-3.5 ${isSpiking ? 'animate-bounce' : ''}`} />
                   <span>{isSpiking ? 'Traffic Spike Active (420 req/s)' : 'Simulate 10x Traffic Spike'}</span>
@@ -630,13 +630,13 @@ export default function PanelPreviewClient() {
               </div>
 
               {/* Traffic Chart Telemetry Log */}
-              <div className="p-4 rounded-xl bg-zinc-900/40 border border-white/[0.06] flex items-center justify-between text-xs font-mono">
+              <div className="p-4 rounded-xl bg-white dark:bg-zinc-900/40 border border-slate-200 dark:border-white/[0.06] flex items-center justify-between text-xs font-mono">
                 <div className="flex items-center gap-3">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                  <span className="text-zinc-200">Current Traffic: {reqPerSec} requests/sec</span>
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 dark:bg-emerald-400 animate-pulse" />
+                  <span className="text-slate-800 dark:text-zinc-200">Current Traffic: {reqPerSec} requests/sec</span>
                 </div>
-                <div className="text-zinc-400 text-[11px]">
-                  LiteSpeed LSCache Hit Rate: <span className="text-emerald-400 font-bold">96.4%</span>
+                <div className="text-slate-600 dark:text-zinc-400 text-[11px]">
+                  LiteSpeed LSCache Hit Rate: <span className="text-emerald-600 dark:text-emerald-400 font-bold">96.4%</span>
                 </div>
               </div>
             </div>
@@ -647,20 +647,20 @@ export default function PanelPreviewClient() {
           {/* ---------------------------------------------------------------- */}
           {activeTab === 'wordpress' && (
             <div className="space-y-6">
-              <div className="p-4 rounded-xl bg-zinc-900/60 border border-white/[0.08] flex items-center justify-between">
+              <div className="p-4 rounded-xl bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.08] flex items-center justify-between">
                 <div>
-                  <div className="text-xs text-zinc-400 font-mono uppercase">
+                  <div className="text-xs text-slate-500 dark:text-zinc-400 font-mono uppercase">
                     LiteSpeed Enterprise Engine
                   </div>
-                  <h3 className="text-sm font-semibold text-zinc-100 mt-0.5">
-                    WordPress 6.x Acceleration & Edge SSL Manager
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-zinc-100 mt-0.5">
+                    WordPress 6.x Acceleration &amp; Edge SSL Manager
                   </h3>
                 </div>
 
                 <button
                   type="button"
                   onClick={flushCache}
-                  className="inline-flex items-center gap-1.5 h-9 px-4 rounded-lg bg-zinc-100 text-zinc-950 hover:bg-white text-xs font-mono font-medium transition-all cursor-pointer"
+                  className="inline-flex items-center gap-1.5 h-9 px-4 rounded-lg bg-blue-600 hover:bg-blue-700 text-white dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white text-xs font-mono font-medium transition-all cursor-pointer"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
                   <span>Flush All Edge Cache</span>
@@ -668,8 +668,8 @@ export default function PanelPreviewClient() {
               </div>
 
               {flushToast && (
-                <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs font-mono flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <div className="p-3 rounded-lg bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 text-emerald-700 dark:text-emerald-300 text-xs font-mono flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
                   <span>{flushToast}</span>
                 </div>
               )}
@@ -740,7 +740,7 @@ export default function PanelPreviewClient() {
                       />
                     </button>
                   </div>
-                  <p className="text-[11px] text-zinc-400 font-normal">
+                  <p className="text-[11px] text-slate-600 dark:text-zinc-400 font-normal">
                     Isolated staging sandbox (staging.storefront.com) to preview plugin updates safely.
                   </p>
                 </div>

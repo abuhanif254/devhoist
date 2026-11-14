@@ -40,7 +40,10 @@ async function resolveSession(params: URLSearchParams, hash: string): Promise<{ 
   // 2. Email OTP (signup confirmation / password recovery / magic link)
   if (tokenHash && type) {
     const session = await runOnce(`otp:${tokenHash}`, async () => {
-      const { data, error } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type: type as any });
+      const { data, error } = await supabase.auth.verifyOtp({
+        token_hash: tokenHash,
+        type: type as 'signup' | 'invite' | 'magiclink' | 'recovery' | 'email_change' | 'email',
+      });
       if (error) throw error;
       return data.session;
     });
@@ -123,10 +126,10 @@ function AuthCallbackContent() {
         // Hard navigation guarantees PortalContext re-hydrates from the freshly persisted session
         // (no client-side race between SIGNED_IN and the dashboard auth guard).
         window.location.replace(next);
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error('[Auth Callback Error]:', err);
         if (cancelled) return;
-        const message = err?.message || 'Authentication failed. Please try again.';
+        const message = err instanceof Error ? err.message : 'Authentication failed. Please try again.';
         setStatus('error');
         setErrorMessage(message);
         setTimeout(() => router.replace(`/login?error=${encodeURIComponent(message)}`), 2500);

@@ -43,17 +43,13 @@ export function SudoGateProvider({ children }: { children: React.ReactNode }) {
   const [errorMessage, setErrorMessage] = useState('');
   const [successAnimation, setSuccessAnimation] = useState(false);
 
-  // Check if sudo is currently active
-  const isSudoActive = sudoExpiresAt !== null && Date.now() < sudoExpiresAt;
+  // Check if sudo is currently active (expiration timer clears sudoExpiresAt asynchronously)
+  const isSudoActive = sudoExpiresAt !== null;
 
   // Cleanup expired sudo sessions
   useEffect(() => {
     if (!sudoExpiresAt) return;
-    const remainingMs = sudoExpiresAt - Date.now();
-    if (remainingMs <= 0) {
-      setSudoExpiresAt(null);
-      return;
-    }
+    const remainingMs = Math.max(0, sudoExpiresAt - Date.now());
     const timer = setTimeout(() => {
       setSudoExpiresAt(null);
     }, remainingMs);
@@ -130,8 +126,10 @@ export function SudoGateProvider({ children }: { children: React.ReactNode }) {
       } else {
         setErrorMessage(data.error || data.message || 'Verification failed. Incorrect code or PIN.');
       }
-    } catch (err: any) {
-      setErrorMessage(err?.message || 'Unable to reach authentication server.');
+    } catch (err: unknown) {
+      setErrorMessage(
+        err instanceof Error ? err.message : 'Unable to reach authentication server.'
+      );
     } finally {
       setIsVerifying(false);
     }
@@ -261,7 +259,7 @@ export function SudoGateProvider({ children }: { children: React.ReactNode }) {
                     activeTab === 'totp'
                       ? 'e.g. 849201'
                       : activeTab === 'pin'
-                      ? '•••••• (Default: 123456)'
+                      ? '••••••'
                       : 'e.g. 7A9B-4X2K-981M'
                   }
                   value={codeValue}
@@ -271,7 +269,7 @@ export function SudoGateProvider({ children }: { children: React.ReactNode }) {
 
                 <span className="text-[10px] text-slate-400 dark:text-zinc-500 block text-center">
                   {activeTab === 'totp' && 'From Google Authenticator, Authy, or 1Password'}
-                  {activeTab === 'pin' && 'Your personal 6-digit Master Security PIN (Demo default: 123456)'}
+                  {activeTab === 'pin' && 'Your personal 6-digit Master Security PIN'}
                   {activeTab === 'backup' && 'One-time recovery code generated during 2FA setup'}
                 </span>
               </div>

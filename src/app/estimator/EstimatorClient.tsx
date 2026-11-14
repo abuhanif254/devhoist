@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { useBilling } from '@/context/BillingContext';
 import { usePortal } from '@/context/PortalContext';
+import { convertBdtToUsd } from '@/config/constants';
 
 interface ServiceItem {
   id: string;
@@ -378,10 +379,10 @@ export default function EstimatorClient() {
               const unitPrice = item.isAnnualOnly
                 ? isBDT
                   ? `৳${item.priceAnnualBDT}/yr`
-                  : `$${((item.priceAnnualBDT || 0) / 120).toFixed(2)}/yr`
+                  : `$${convertBdtToUsd(item.priceAnnualBDT || 0).toFixed(2)}/yr`
                 : isBDT
                 ? `৳${item.priceMonthlyBDT}/mo`
-                : `$${(item.priceMonthlyBDT / 120).toFixed(2)}/mo`;
+                : `$${convertBdtToUsd(item.priceMonthlyBDT).toFixed(2)}/mo`;
 
               return (
                 <div
@@ -451,41 +452,41 @@ export default function EstimatorClient() {
                 {symbol}
                 {isBDT
                   ? calculation.effectiveMonthlyHostingBDT.toLocaleString()
-                  : (calculation.effectiveMonthlyHostingBDT / 120).toFixed(2)}
+                  : convertBdtToUsd(calculation.effectiveMonthlyHostingBDT).toFixed(2)}
                 /mo
               </span>
             </div>
 
             {billingTerm === 'annually' && calculation.annualDomainBaseBDT > 0 && (
-              <div className="flex justify-between py-1 border-b border-white/[0.04]">
-                <span className="text-zinc-500">Domains (Annual):</span>
-                <span className="text-zinc-100">
+              <div className="flex justify-between py-1 border-b border-slate-100 dark:border-white/[0.04]">
+                <span className="text-slate-500 dark:text-zinc-500">Domains (Annual):</span>
+                <span className="text-slate-900 dark:text-zinc-100 font-semibold">
                   {symbol}
                   {isBDT
                     ? calculation.annualDomainBaseBDT.toLocaleString()
-                    : (calculation.annualDomainBaseBDT / 120).toFixed(2)}
+                    : convertBdtToUsd(calculation.annualDomainBaseBDT).toFixed(2)}
                 </span>
               </div>
             )}
 
             <div className="pt-2">
-              <div className="text-xs text-zinc-400">Total Billed Today:</div>
-              <div className="text-3xl font-bold font-mono text-zinc-50 mt-1">
+              <div className="text-xs text-slate-600 dark:text-zinc-400">Total Billed Today:</div>
+              <div className="text-3xl font-bold font-mono text-slate-900 dark:text-zinc-50 mt-1">
                 {symbol}
                 {isBDT
                   ? calculation.annualTotalBilledBDT.toLocaleString()
-                  : (calculation.annualTotalBilledBDT / 120).toFixed(2)}
-                <span className="text-xs font-normal text-zinc-400 ml-1">
+                  : convertBdtToUsd(calculation.annualTotalBilledBDT).toFixed(2)}
+                <span className="text-xs font-normal text-slate-500 dark:text-zinc-400 ml-1">
                   {billingTerm === 'annually' ? '/year' : '/month'}
                 </span>
               </div>
               {billingTerm === 'annually' && calculation.totalSavingsBDT > 0 && (
-                <div className="text-[11px] font-mono text-emerald-400 mt-1">
+                <div className="text-[11px] font-mono text-emerald-600 dark:text-emerald-400 mt-1">
                   Includes {symbol}
                   {isBDT
                     ? calculation.totalSavingsBDT.toLocaleString()
-                    : (calculation.totalSavingsBDT / 120).toFixed(2)}{' '}
-                  in annual & agency discounts
+                    : convertBdtToUsd(calculation.totalSavingsBDT).toFixed(2)}{' '}
+                  in annual &amp; agency discounts
                 </div>
               )}
             </div>
@@ -501,7 +502,7 @@ export default function EstimatorClient() {
             <span>Download Official PDF Quote</span>
           </button>
 
-          <div className="text-[11px] font-mono text-zinc-500 text-center">
+          <div className="text-[11px] font-mono text-slate-500 dark:text-zinc-500 text-center">
             Triggers clean browser PDF export without web UI headers.
           </div>
         </div>

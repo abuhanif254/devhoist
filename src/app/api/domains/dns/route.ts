@@ -9,7 +9,7 @@ import {
   getDevHostServerPreset,
 } from '@/lib/dnsEngine';
 import { DnsRecord } from '@/context/PortalContext';
-import { requireDomainAccess, serviceUnavailableResponse } from '@/lib/authGuard';
+import { requireUser, requireDomainAccess, serviceUnavailableResponse } from '@/lib/authGuard';
 import {
   deleteCloudflareDnsRecord,
   ensureCloudflareZone,
@@ -546,19 +546,24 @@ export async function PUT(request: NextRequest) {
     let existingCfRecordId: string | null = null;
     if (db) {
       const { data } = await db.from('domain_dns_records').select('*').eq('domain_id', domainId);
-      if (data) {
-        const rows = data as DnsDbRow[];
-        existingCfRecordId = rows.find((r) => r.id === recordId)?.cloudflare_record_id || null;
-        existingRecords = rows.map((r) => ({
-          id: r.id,
-          type: r.record_type,
-          name: r.name,
-          content: r.content,
-          ttl: r.ttl,
-          priority: r.priority ?? undefined,
-          proxied: Boolean(r.proxied),
-        }));
+      const rows = Array.isArray(data) ? (data as DnsDbRow[]) : [];
+      const targetRow = rows.find((r) => r.id === recordId);
+      if (!targetRow) {
+        return NextResponse.json(
+          { success: false, error: 'DNS record not found for the specified domain.' },
+          { status: 404 }
+        );
       }
+      existingCfRecordId = targetRow.cloudflare_record_id || null;
+      existingRecords = rows.map((r) => ({
+        id: r.id,
+        type: r.record_type,
+        name: r.name,
+        content: r.content,
+        ttl: r.ttl,
+        priority: r.priority ?? undefined,
+        proxied: Boolean(r.proxied),
+      }));
     }
 
     const validation = validateDnsRecord(record, existingRecords, recordId);
@@ -654,6 +659,9 @@ export async function PUT(request: NextRequest) {
  */
 export async function DELETE(request: NextRequest) {
   try {
+    const auth = await requireUser(request);
+    if (!auth.ok) return auth.response;
+
     const ip = request.headers.get('x-forwarded-for') || '127.0.0.1';
     const { searchParams } = new URL(request.url);
     const recordId = searchParams.get('recordId');
@@ -672,11 +680,15 @@ export async function DELETE(request: NextRequest) {
         .select('domain_id, cloudflare_record_id, cloudflare_zone_id')
         .eq('id', recordId)
         .maybeSingle();
-      if (!domainId) {
-        domainId = recOwner?.domain_id || null;
+      if (!recOwner) {
+        return NextResponse.json({ success: false, error: 'DNS record not found.' }, { status: 404 });
       }
-      existingCfRecordId = recOwner?.cloudflare_record_id || null;
-      existingCfZoneId = recOwner?.cloudflare_zone_id || null;
+      if (domainId && recOwner.domain_id && recOwner.domain_id !== domainId) {
+        return NextResponse.json({ success: false, error: 'Forbidden DNS record access.' }, { status: 403 });
+      }
+      domainId = recOwner.domain_id || domainId;
+      existingCfRecordId = recOwner.cloudflare_record_id || null;
+      existingCfZoneId = recOwner.cloudflare_zone_id || null;
     }
 
     const access = await requireDomainAccess(request, { domainId });

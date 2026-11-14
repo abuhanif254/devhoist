@@ -8,7 +8,7 @@ import { getServiceSupabase, isDevSandboxMode, isSupabaseConfigured } from '@/li
 
 export const dynamic = 'force-dynamic';
 
-export interface PreviewEnvironmentRecord {
+interface PreviewEnvironmentRecord {
   id: string;
   service_id: string;
   user_id?: string;

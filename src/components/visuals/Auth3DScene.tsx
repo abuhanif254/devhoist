@@ -106,9 +106,9 @@ export default function Auth3DScene() {
       const pts: Point3D[] = [];
       for (let i = 0; i < RING_POINTS; i++) {
         const theta = (i / RING_POINTS) * Math.PI * 2;
-        let x = Math.cos(theta);
-        let y = Math.sin(theta);
-        let z = 0;
+        const x = Math.cos(theta);
+        const y = Math.sin(theta);
+        const z = 0;
 
         // Apply initial gimbal tilt
         const cosX = Math.cos(tiltX);

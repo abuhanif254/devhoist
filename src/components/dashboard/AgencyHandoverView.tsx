@@ -16,6 +16,7 @@ import {
   Gift,
   Code,
   Users,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface HandoverItem {
@@ -84,17 +85,18 @@ export default function AgencyHandoverView({
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [generatedLink, setGeneratedLink] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   useEffect(() => {
     async function fetchHandovers() {
       try {
-        const res = await fetch(`/api/agency/handover?devUserId=${developerUserId}`);
-        const data = await res.json();
-        if (data.success && data.handovers && data.handovers.length > 0) {
+        const res = await fetch(`/api/agency/handover?devUserId=${encodeURIComponent(developerUserId)}`);
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.success && Array.isArray(data.handovers)) {
           setHandovers(data.handovers);
         }
       } catch {
-        // Fallback to initial mock list
+        // Keep initial empty/fallback state silently on transient load
       }
     }
     fetchHandovers();
@@ -132,34 +134,22 @@ export default function AgencyHandoverView({
         }),
       });
 
-      const data = await res.json();
-      if (data.success && data.handover) {
+      setSubmitError(null);
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success && data.handover) {
         setHandovers((prev) => [data.handover, ...prev]);
-        setGeneratedLink(data.handoverUrl || `https://devhost.cloud/handover/${data.handoverToken}`);
+        setGeneratedLink(data.handoverUrl || `https://devhostcloud.com/handover/${data.handoverToken}`);
         setClientName('');
         setClientEmail('');
         setProjectTitle('');
         setSetupFeeBDT('15000');
+      } else {
+        setSubmitError(data.error || `Failed to create handover invoice (HTTP ${res.status}).`);
       }
-    } catch {
-      const token = `dh_ho_${Date.now().toString(36)}`;
-      const newMockItem: HandoverItem = {
-        id: `ho_${Date.now()}`,
-        handover_token: token,
-        client_name: clientName,
-        client_email: clientEmail,
-        project_title: projectTitle,
-        plan_slug: planSlug,
-        billing_cycle: billingCycle,
-        developer_setup_fee_bdt: Number(setupFeeBDT) || 0,
-        hosting_price_bdt: hostingPrice,
-        total_payable_bdt: totalFee,
-        status: 'pending_client_claim',
-        expires_at: new Date(Date.now() + 14 * 86400000).toISOString(),
-        created_at: new Date().toISOString(),
-      };
-      setHandovers((prev) => [newMockItem, ...prev]);
-      setGeneratedLink(`https://devhost.cloud/handover/${token}`);
+    } catch (err) {
+      setSubmitError(
+        err instanceof Error ? `Failed to create handover link: ${err.message}` : 'Unable to reach /api/agency/handover.'
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -278,7 +268,7 @@ export default function AgencyHandoverView({
                 </label>
                 <select
                   value={billingCycle}
-                  onChange={(e) => setBillingCycle(e.target.value as any)}
+                  onChange={(e) => setBillingCycle(e.target.value as 'annual' | 'monthly')}
                   className="w-full px-2.5 py-2 text-xs rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-zinc-800 text-slate-900 dark:text-white outline-none"
                 >
                   <option value="annual">Annual (Includes Free Domain)</option>
@@ -318,6 +308,13 @@ export default function AgencyHandoverView({
                 <span className="font-mono text-sm">৳{totalFee.toLocaleString()} BDT</span>
               </div>
             </div>
+
+            {submitError && (
+              <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs font-mono flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>{submitError}</span>
+              </div>
+            )}
 
             <button
               type="submit"
@@ -371,7 +368,7 @@ export default function AgencyHandoverView({
 
           <div className="space-y-3">
             {handovers.map((item) => {
-              const handoverUrl = `https://devhost.cloud/handover/${item.handover_token}`;
+              const handoverUrl = `https://devhostcloud.com/handover/${item.handover_token}`;
               const isClaimed = item.status === 'claimed_and_paid';
 
               return (

@@ -25,7 +25,6 @@ export default function FloatingConversionDock() {
 
   useEffect(() => {
     if (!isSupportedPage || isDismissed) {
-      setIsVisible(false);
       return;
     }
 
@@ -42,9 +41,12 @@ export default function FloatingConversionDock() {
     };
 
     window.addEventListener('scroll', handleScroll, { passive: true });
-    handleScroll();
+    const rafId = window.requestAnimationFrame(handleScroll);
 
-    return () => window.removeEventListener('scroll', handleScroll);
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+      window.cancelAnimationFrame(rafId);
+    };
   }, [pathname, isSupportedPage, isDismissed]);
 
   if (!isSupportedPage || isDismissed || !isVisible) {

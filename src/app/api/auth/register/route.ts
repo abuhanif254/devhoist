@@ -15,7 +15,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    let body: any;
+    let body: Record<string, unknown>;
     try {
       body = await req.json();
     } catch {
@@ -154,11 +154,14 @@ export async function POST(req: NextRequest) {
         walletBalanceBDT: 0,
       },
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     return NextResponse.json(
       {
         success: false,
-        error: err?.message || 'Internal registration service encountered an error. Please try again.',
+        error:
+          err instanceof Error
+            ? err.message
+            : 'Internal registration service encountered an error. Please try again.',
       },
       { status: 500 }
     );

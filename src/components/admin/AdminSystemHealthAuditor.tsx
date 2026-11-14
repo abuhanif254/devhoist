@@ -27,7 +27,7 @@ interface AuditCheckResult {
   status: 'PASSED' | 'WARNING' | 'FAILED';
   latencyMs: number;
   message: string;
-  details?: Record<string, any>;
+  details?: Record<string, unknown>;
 }
 
 interface AuditReport {
@@ -57,15 +57,18 @@ export default function AdminSystemHealthAuditor() {
       if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
       const data = await res.json();
       setReport(data);
-    } catch (err: any) {
-      setError(err.message || 'Failed to complete system audit.');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to complete system audit.');
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    runAudit();
+    const timer = window.setTimeout(() => {
+      void runAudit();
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
   const getCategoryIcon = (category: string) => {

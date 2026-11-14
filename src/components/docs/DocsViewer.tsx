@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'next/navigation';
-import Link from 'next/navigation';
+import Link from 'next/link';
 import {
   BookOpen,
   Search,
@@ -25,24 +25,30 @@ import { EXACT_DOCS_ARTICLES, DocArticle } from '@/config/docsData';
 import { useBilling } from '@/context/BillingContext';
 import { usePortal, CloudService } from '@/context/PortalContext';
 import { HOSTING_PACKAGES } from '@/config/hostingData';
+import { convertBdtToUsd, formatCurrency } from '@/config/constants';
 
 export interface CmsArticle {
   id: string | number;
   slug: string;
-  title_en: string;
+  title_en?: string;
   title_bn?: string;
+  title?: string;
   category: string;
-  summary_en: string;
-  summary_bn?: string;
   read_time_minutes?: number;
   difficulty_level?: string;
   recommended_plan_slug?: string;
-  steps_json: Array<{
-    stepNumber: number;
-    heading_en: string;
-    explanation_en: string;
+  summary_en?: string;
+  summary_bn?: string;
+  summary?: string;
+  steps_json?: Array<{
+    stepNumber?: number;
+    heading_en?: string;
+    heading?: string;
+    explanation_en?: string;
+    explanation?: string;
     codeSnippet?: string;
     codeLanguage?: string;
+    filename?: string;
     warningNote?: string;
   }>;
   views_count?: number;
@@ -93,16 +99,16 @@ export default function DocsViewer({ initialSlug }: { initialSlug?: string } = {
           const json = await res.json();
           if (json.success && Array.isArray(json.articles) && json.articles.length > 0) {
             // Map CMS database shape to standard DocsArticle
-            const mapped: DocArticle[] = json.articles.map((item: any) => ({
+            const mapped: DocArticle[] = json.articles.map((item: CmsArticle) => ({
               id: String(item.id),
               slug: item.slug,
-              title: item.title_en || item.title,
+              title: item.title_en || item.title || item.slug,
               category: item.category,
               readTime: item.read_time_minutes ? `${item.read_time_minutes} min read` : '5 min read',
-              summary: item.summary_en || item.summary,
+              summary: item.summary_en || item.summary || '',
               recommendedPlanId: 2,
-              steps: (item.steps_json || []).map((s: any) => ({
-                heading: s.heading_en || s.heading || `Step ${s.stepNumber}`,
+              steps: (item.steps_json || []).map((s, sIdx) => ({
+                heading: s.heading_en || s.heading || `Step ${s.stepNumber ?? sIdx + 1}`,
                 explanation: s.explanation_en || s.explanation || '',
                 codeSnippet: s.codeSnippet
                   ? {
@@ -141,14 +147,16 @@ export default function DocsViewer({ initialSlug }: { initialSlug?: string } = {
   useEffect(() => {
     const slug = searchParams.get('article');
     if (slug) {
-      setSelectedArticleSlug(slug);
+      const timer = window.setTimeout(() => setSelectedArticleSlug(slug), 0);
+      return () => window.clearTimeout(timer);
     }
   }, [searchParams]);
 
   // Sync selected service if services list updates
   useEffect(() => {
     if (services.length > 0 && selectedServiceId === 'sample') {
-      setSelectedServiceId(services[0].id);
+      const timer = window.setTimeout(() => setSelectedServiceId(services[0].id), 0);
+      return () => window.clearTimeout(timer);
     }
   }, [services, selectedServiceId]);
 
@@ -184,7 +192,8 @@ export default function DocsViewer({ initialSlug }: { initialSlug?: string } = {
           article_id: currentArticle.id,
         }),
       }).catch(() => {});
-      setUserVote(null);
+      const timer = window.setTimeout(() => setUserVote(null), 0);
+      return () => window.clearTimeout(timer);
     }
   }, [currentArticle?.id]);
 
@@ -230,7 +239,7 @@ export default function DocsViewer({ initialSlug }: { initialSlug?: string } = {
 
   // Step Progress Calculation
   const totalSteps = currentArticle.steps?.length || 1;
-  const completedCount = (currentArticle.steps || []).reduce((acc: number, _: any, idx: number) => {
+  const completedCount = (currentArticle.steps || []).reduce((acc: number, _step, idx: number) => {
     return acc + (completedSteps[`${currentArticle.slug}-step-${idx}`] ? 1 : 0);
   }, 0);
   const progressPercent = Math.round((completedCount / totalSteps) * 100);
@@ -264,8 +273,7 @@ export default function DocsViewer({ initialSlug }: { initialSlug?: string } = {
     HOSTING_PACKAGES.find((p) => p.pid === 2)!;
 
   const planPriceMonthly = isAnnual ? recPlan.yearlyEffectiveBDT : recPlan.baseMonthlyBDT;
-  const displayPlanPrice =
-    currency === 'USD' ? `$${(planPriceMonthly / 120).toFixed(2)}` : `৳${planPriceMonthly}`;
+  const displayPlanPrice = formatCurrency(planPriceMonthly, currency);
 
   return (
     <div className="w-full transition-colors duration-200">
@@ -383,7 +391,7 @@ export default function DocsViewer({ initialSlug }: { initialSlug?: string } = {
                     pid: recPlan.pid,
                     planName: recPlan.name,
                     basePriceMonthlyBDT: recPlan.baseMonthlyBDT,
-                    basePriceMonthlyUSD: Number((recPlan.baseMonthlyBDT / 120).toFixed(2)),
+                    basePriceMonthlyUSD: convertBdtToUsd(recPlan.baseMonthlyBDT),
                   })
                 }
                 className="w-full inline-flex items-center justify-center gap-1.5 h-8 px-3 rounded-md bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs shadow-xs transition-all cursor-pointer"
@@ -498,7 +506,7 @@ export default function DocsViewer({ initialSlug }: { initialSlug?: string } = {
 
             {/* Article Step-by-Step Sections */}
             <div className="space-y-8">
-              {(currentArticle.steps || []).map((step: any, idx: number) => {
+              {(currentArticle.steps || []).map((step, idx: number) => {
                 const snippetId = `${currentArticle.id}-step-${idx}`;
                 const isCopied = copiedSnippetId === snippetId;
                 const isStepDone = !!completedSteps[`${currentArticle.slug}-step-${idx}`];

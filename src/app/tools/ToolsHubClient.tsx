@@ -20,6 +20,41 @@ import Link from 'next/link';
 
 type Tab = 'dns' | 'whois' | 'headers';
 
+interface DnsAnswerRow {
+  name: string;
+  type: string;
+  ttl: number;
+  data: string;
+}
+
+interface DnsQueryResult {
+  domain: string;
+  recordType: string;
+  server: string;
+  answers: DnsAnswerRow[];
+}
+
+interface WhoisQueryResult {
+  available: boolean;
+  domain: string;
+  registrar?: string;
+  expirationDate?: string | null;
+  registrationDate?: string | null;
+  lastUpdatedDate?: string | null;
+  nameservers?: string[];
+  status?: string[];
+}
+
+interface HeaderAuditResult {
+  targetUrl: string;
+  statusCode: number;
+  responseTimeMs: number;
+  server: string;
+  grade: string;
+  score: number;
+  headersAudited: Record<string, string>;
+}
+
 export default function ToolsHubClient() {
   const searchParams = useSearchParams();
   const initialTab = (searchParams.get('tab') as Tab) || 'dns';
@@ -31,7 +66,8 @@ export default function ToolsHubClient() {
   useEffect(() => {
     const tabParam = searchParams.get('tab') as Tab;
     if (tabParam && ['dns', 'whois', 'headers'].includes(tabParam)) {
-      setActiveTab(tabParam);
+      const timer = window.setTimeout(() => setActiveTab(tabParam), 0);
+      return () => window.clearTimeout(timer);
     }
   }, [searchParams]);
 
@@ -41,7 +77,7 @@ export default function ToolsHubClient() {
   const [dnsDomain, setDnsDomain] = useState('devhostcloud.com');
   const [dnsType, setDnsType] = useState('A');
   const [dnsLoading, setDnsLoading] = useState(false);
-  const [dnsResult, setDnsResult] = useState<any>(null);
+  const [dnsResult, setDnsResult] = useState<DnsQueryResult | null>(null);
   const [dnsError, setDnsError] = useState<string | null>(null);
 
   const handleDnsQuery = async (e?: React.FormEvent) => {
@@ -62,8 +98,8 @@ export default function ToolsHubClient() {
       } else {
         setDnsResult(data);
       }
-    } catch (err: any) {
-      setDnsError(err.message || 'Network connection failed.');
+    } catch (err: unknown) {
+      setDnsError(err instanceof Error ? err.message : 'Network connection failed.');
     } finally {
       setDnsLoading(false);
     }
@@ -74,7 +110,7 @@ export default function ToolsHubClient() {
   // --------------------------------------------------------------------------
   const [whoisDomain, setWhoisDomain] = useState('devhostcloud.com');
   const [whoisLoading, setWhoisLoading] = useState(false);
-  const [whoisResult, setWhoisResult] = useState<any>(null);
+  const [whoisResult, setWhoisResult] = useState<WhoisQueryResult | null>(null);
   const [whoisError, setWhoisError] = useState<string | null>(null);
 
   const handleWhoisQuery = async (e?: React.FormEvent) => {
@@ -95,8 +131,8 @@ export default function ToolsHubClient() {
       } else {
         setWhoisResult(data);
       }
-    } catch (err: any) {
-      setWhoisError(err.message || 'Network connection failed.');
+    } catch (err: unknown) {
+      setWhoisError(err instanceof Error ? err.message : 'Network connection failed.');
     } finally {
       setWhoisLoading(false);
     }
@@ -107,7 +143,7 @@ export default function ToolsHubClient() {
   // --------------------------------------------------------------------------
   const [headerUrl, setHeaderUrl] = useState('https://devhostcloud.com');
   const [headerLoading, setHeaderLoading] = useState(false);
-  const [headerResult, setHeaderResult] = useState<any>(null);
+  const [headerResult, setHeaderResult] = useState<HeaderAuditResult | null>(null);
   const [headerError, setHeaderError] = useState<string | null>(null);
 
   const handleHeaderAudit = async (e?: React.FormEvent) => {
@@ -128,8 +164,8 @@ export default function ToolsHubClient() {
       } else {
         setHeaderResult(data);
       }
-    } catch (err: any) {
-      setHeaderError(err.message || 'Network connection failed.');
+    } catch (err: unknown) {
+      setHeaderError(err instanceof Error ? err.message : 'Network connection failed.');
     } finally {
       setHeaderLoading(false);
     }
@@ -260,7 +296,7 @@ export default function ToolsHubClient() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 dark:divide-white/[0.04]">
-                      {dnsResult.answers.map((ans: any, idx: number) => (
+                      {dnsResult.answers.map((ans, idx: number) => (
                         <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-zinc-900/40">
                           <td className="py-2.5 px-3 text-slate-800 dark:text-zinc-300">{ans.name}</td>
                           <td className="py-2.5 px-3 text-emerald-600 dark:text-emerald-400 font-semibold">{ans.type}</td>
@@ -324,21 +360,21 @@ export default function ToolsHubClient() {
           {whoisResult && (
             <div className="p-5 sm:p-6 rounded-xl bg-white dark:bg-zinc-950/80 border border-slate-200 dark:border-white/[0.08] shadow-sm space-y-5">
               {whoisResult.available ? (
-                <div className="p-4 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div className="p-4 rounded-lg bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 flex flex-col sm:flex-row items-center justify-between gap-4">
                   <div className="flex items-center gap-3">
-                    <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                    <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
                     <div>
-                      <div className="text-xs font-semibold text-zinc-100">
+                      <div className="text-xs font-semibold text-slate-900 dark:text-zinc-100">
                         {whoisResult.domain} is Available!
                       </div>
-                      <div className="text-[11px] text-zinc-400">
+                      <div className="text-[11px] text-slate-600 dark:text-zinc-400">
                         This domain is not currently registered. You can claim it now.
                       </div>
                     </div>
                   </div>
                   <Link
                     href={`/cheap-domain-registration-bd?q=${whoisResult.domain}`}
-                    className="h-9 px-4 rounded-md text-xs font-medium bg-zinc-100 text-zinc-950 hover:bg-white flex items-center gap-1.5 whitespace-nowrap"
+                    className="h-9 px-4 rounded-md text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white flex items-center gap-1.5 whitespace-nowrap"
                   >
                     <span>Register Domain</span>
                     <ArrowRight className="w-3.5 h-3.5" />
@@ -346,20 +382,20 @@ export default function ToolsHubClient() {
                 </div>
               ) : (
                 <div className="space-y-4 font-mono text-xs">
-                  <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
-                    <span className="text-zinc-400">Domain Name:</span>
-                    <span className="text-zinc-100 font-bold text-sm">{whoisResult.domain}</span>
+                  <div className="flex items-center justify-between border-b border-slate-200 dark:border-white/[0.06] pb-3">
+                    <span className="text-slate-600 dark:text-zinc-400">Domain Name:</span>
+                    <span className="text-slate-900 dark:text-zinc-100 font-bold text-sm">{whoisResult.domain}</span>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div className="p-3.5 rounded-lg bg-zinc-900/60 border border-white/[0.06] space-y-1">
-                      <div className="text-zinc-500 text-[11px]">Registrar:</div>
-                      <div className="text-zinc-200 font-semibold">{whoisResult.registrar}</div>
+                    <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.06] space-y-1">
+                      <div className="text-slate-500 dark:text-zinc-500 text-[11px]">Registrar:</div>
+                      <div className="text-slate-900 dark:text-zinc-200 font-semibold">{whoisResult.registrar}</div>
                     </div>
 
-                    <div className="p-3.5 rounded-lg bg-zinc-900/60 border border-white/[0.06] space-y-1">
-                      <div className="text-zinc-500 text-[11px]">Expiration Date:</div>
-                      <div className="text-emerald-400 font-semibold">
+                    <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.06] space-y-1">
+                      <div className="text-slate-500 dark:text-zinc-500 text-[11px]">Expiration Date:</div>
+                      <div className="text-emerald-600 dark:text-emerald-400 font-semibold">
                         {whoisResult.expirationDate
                           ? new Date(whoisResult.expirationDate).toLocaleDateString('en-US', {
                               year: 'numeric',
@@ -370,9 +406,9 @@ export default function ToolsHubClient() {
                       </div>
                     </div>
 
-                    <div className="p-3.5 rounded-lg bg-zinc-900/60 border border-white/[0.06] space-y-1">
-                      <div className="text-zinc-500 text-[11px]">Registered On:</div>
-                      <div className="text-zinc-300">
+                    <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.06] space-y-1">
+                      <div className="text-slate-500 dark:text-zinc-500 text-[11px]">Registered On:</div>
+                      <div className="text-slate-800 dark:text-zinc-300">
                         {whoisResult.registrationDate
                           ? new Date(whoisResult.registrationDate).toLocaleDateString('en-US', {
                               year: 'numeric',
@@ -383,9 +419,9 @@ export default function ToolsHubClient() {
                       </div>
                     </div>
 
-                    <div className="p-3.5 rounded-lg bg-zinc-900/60 border border-white/[0.06] space-y-1">
-                      <div className="text-zinc-500 text-[11px]">Last Updated:</div>
-                      <div className="text-zinc-300">
+                    <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-zinc-900/60 border border-slate-200 dark:border-white/[0.06] space-y-1">
+                      <div className="text-slate-500 dark:text-zinc-500 text-[11px]">Last Updated:</div>
+                      <div className="text-slate-800 dark:text-zinc-300">
                         {whoisResult.lastUpdatedDate
                           ? new Date(whoisResult.lastUpdatedDate).toLocaleDateString('en-US', {
                               year: 'numeric',
@@ -398,14 +434,14 @@ export default function ToolsHubClient() {
                   </div>
 
                   {/* Nameservers */}
-                  {whoisResult.nameservers?.length > 0 && (
+                  {(whoisResult.nameservers?.length ?? 0) > 0 && (
                     <div className="pt-2">
-                      <div className="text-zinc-400 text-[11px] mb-2">Authoritative Nameservers:</div>
+                      <div className="text-slate-600 dark:text-zinc-400 text-[11px] mb-2">Authoritative Nameservers:</div>
                       <div className="flex flex-wrap gap-2">
-                        {whoisResult.nameservers.map((ns: string, idx: number) => (
+                        {(whoisResult.nameservers ?? []).map((ns: string, idx: number) => (
                           <span
                             key={idx}
-                            className="px-2.5 py-1 rounded bg-zinc-900 border border-white/10 text-zinc-300 text-[11px]"
+                            className="px-2.5 py-1 rounded bg-slate-100 dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-slate-800 dark:text-zinc-300 text-[11px]"
                           >
                             {ns}
                           </span>
@@ -415,14 +451,14 @@ export default function ToolsHubClient() {
                   )}
 
                   {/* Status Flags */}
-                  {whoisResult.status?.length > 0 && (
+                  {(whoisResult.status?.length ?? 0) > 0 && (
                     <div className="pt-2">
-                      <div className="text-zinc-400 text-[11px] mb-2">Registry Status Codes:</div>
+                      <div className="text-slate-600 dark:text-zinc-400 text-[11px] mb-2">Registry Status Codes:</div>
                       <div className="flex flex-wrap gap-1.5">
-                        {whoisResult.status.map((st: string, idx: number) => (
+                        {(whoisResult.status ?? []).map((st: string, idx: number) => (
                           <span
                             key={idx}
-                            className="px-2 py-0.5 rounded bg-zinc-900/80 border border-white/[0.06] text-zinc-400 text-[10px]"
+                            className="px-2 py-0.5 rounded bg-slate-100 dark:bg-zinc-900/80 border border-slate-200 dark:border-white/[0.06] text-slate-600 dark:text-zinc-400 text-[10px]"
                           >
                             {st}
                           </span>
@@ -519,7 +555,7 @@ export default function ToolsHubClient() {
                   Enterprise Security Headers Evaluation
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  {Object.entries(headerResult.headersAudited).map(([hdr, val]: [string, any]) => {
+                  {Object.entries(headerResult.headersAudited).map(([hdr, val]) => {
                     const isPresent = val !== 'Missing';
                     return (
                       <div

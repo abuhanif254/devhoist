@@ -291,11 +291,19 @@ export async function POST(request: NextRequest) {
         ? (
             await db
               .from('hosting_databases')
-              .select('db_name, db_username')
+              .select('db_name, db_username, service_id')
               .eq('id', databaseId)
+              .eq('service_id', access.serviceId)
               .maybeSingle()
           ).data
         : null;
+
+      if (db && !dbRow) {
+        return NextResponse.json(
+          { success: false, error: 'Database not found for this hosting service.' },
+          { status: 404 }
+        );
+      }
 
       const wlRes = await updateDatabaseRemoteIpsOnAgent(
         {
@@ -354,11 +362,19 @@ export async function POST(request: NextRequest) {
         ? (
             await db
               .from('hosting_databases')
-              .select('db_name, db_engine')
+              .select('db_name, db_engine, service_id')
               .eq('id', databaseId)
+              .eq('service_id', access.serviceId)
               .maybeSingle()
           ).data
         : null;
+
+      if (db && !dbRow) {
+        return NextResponse.json(
+          { success: false, error: 'Database not found for this hosting service.' },
+          { status: 404 }
+        );
+      }
 
       const dropRes = await dropDatabaseOnAgent(
         {

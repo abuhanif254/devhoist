@@ -2,7 +2,11 @@ import { NextResponse } from 'next/server';
 import { checkRateLimit } from '@/lib/edgeRateLimit';
 import { getServiceSupabase, isSupabaseConfigured, isDevSandboxMode } from '@/lib/supabase';
 import { requireUser, requireDomainAccess, serviceUnavailableResponse } from '@/lib/authGuard';
-import { verifyPaidDomainEntitlement } from '@/lib/billingEntitlements';
+import {
+  consumePaidDomainEntitlement,
+  releasePaidDomainEntitlement,
+  verifyPaidDomainEntitlement,
+} from '@/lib/billingEntitlements';
 import { validateDnsRecord } from '@/lib/dnsEngine';
 import type { DnsRecord } from '@/context/PortalContext';
 import { sendTelegramAlert } from '@/lib/adminNotifier';
@@ -288,7 +292,25 @@ export async function POST(request: Request) {
         }
       }
 
-      const years = Math.max(1, Math.min(10, Number(body.years || 1)));
+      const requestedYears = Math.max(1, Math.min(10, Number(body.years || 1)));
+      const years =
+        entitlement.via === 'admin'
+          ? requestedYears
+          : Math.min(requestedYears, entitlement.authorizedYears || 1);
+
+      const claimed = await consumePaidDomainEntitlement({
+        db: regDb,
+        entitlement,
+        domain: rawDomain,
+        operation: 'register',
+      });
+      if (!claimed.ok) {
+        return NextResponse.json(
+          { error: 'Conflict', code: 'ENTITLEMENT_ALREADY_USED', message: claimed.error },
+          { status: 409 }
+        );
+      }
+
       const requestedNs = Array.isArray(body.nameservers)
         ? body.nameservers.map((n) => String(n).trim().toLowerCase()).filter(Boolean)
         : undefined;
@@ -321,6 +343,7 @@ export async function POST(request: Request) {
       });
 
       if (!regRes.ok) {
+        await releasePaidDomainEntitlement({ db: regDb, entitlement });
         return NextResponse.json(
           { error: regRes.error || 'Domain registration failed', message: regRes.message },
           { status: regRes.statusCode || 502 }
@@ -390,9 +413,28 @@ export async function POST(request: Request) {
         );
       }
 
-      const years = Math.max(1, Math.min(10, Number(body.years || 1)));
+      const requestedYears = Math.max(1, Math.min(10, Number(body.years || 1)));
+      const years =
+        entitlement.via === 'admin'
+          ? requestedYears
+          : Math.min(requestedYears, entitlement.authorizedYears || 1);
+
+      const claimed = await consumePaidDomainEntitlement({
+        db: regDb,
+        entitlement,
+        domain: rawDomain,
+        operation: 'renew',
+      });
+      if (!claimed.ok) {
+        return NextResponse.json(
+          { error: 'Conflict', code: 'ENTITLEMENT_ALREADY_USED', message: claimed.error },
+          { status: 409 }
+        );
+      }
+
       const regRes = await renewDomainWithRegistrar({ domain: rawDomain, years });
       if (!regRes.ok) {
+        await releasePaidDomainEntitlement({ db: regDb, entitlement });
         return NextResponse.json(
           { error: regRes.error || 'Renewal failed', message: regRes.message },
           { status: regRes.statusCode || 502 }
@@ -461,8 +503,22 @@ export async function POST(request: Request) {
         );
       }
 
+      const claimed = await consumePaidDomainEntitlement({
+        db: regDb,
+        entitlement,
+        domain: rawDomain,
+        operation: 'transfer',
+      });
+      if (!claimed.ok) {
+        return NextResponse.json(
+          { error: 'Conflict', code: 'ENTITLEMENT_ALREADY_USED', message: claimed.error },
+          { status: 409 }
+        );
+      }
+
       const regRes = await transferDomainWithRegistrar({ domain: rawDomain, eppCode });
       if (!regRes.ok) {
+        await releasePaidDomainEntitlement({ db: regDb, entitlement });
         return NextResponse.json(
           { error: regRes.error || 'Transfer failed', message: regRes.message },
           { status: regRes.statusCode || 502 }

@@ -743,7 +743,8 @@ vi.mock('@/lib/computeAgentClient', async () => {
   };
 });
 
-import { GET as edgeSiteGet, isEdgeExecutionOriginIsolated } from '@/app/api/edge-site/route';
+import { GET as edgeSiteGet } from '@/app/api/edge-site/route';
+import { isEdgeExecutionOriginIsolated } from '@/lib/edgeIsolation';
 import { deployStaticEdgeRelease, clearSandboxStorageForTest } from '@/lib/cloudflareStorageQueue';
 import { POST as createSessionPost } from '@/app/api/payments/create-session/route';
 import { GET as bkashCallbackGet } from '@/app/api/payments/bkash/callback/route';

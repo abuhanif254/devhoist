@@ -5,6 +5,7 @@
  */
 
 import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
+import { escapeHtml } from '@/lib/authGuard';
 
 export interface TelegramLogEntry {
   id: string;
@@ -53,12 +54,12 @@ export async function sendTelegramAlert(
   let token = process.env.TELEGRAM_BOT_TOKEN;
   let chatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
 
-  // Check cms_global_config for saved credentials if env keys are not present
+  // Check private_integration_credentials for saved server-only credentials if env keys are not present
   if ((!token || !chatId) && isSupabaseConfigured()) {
     try {
       const db = getServiceSupabase();
       const { data } = await db
-        .from('cms_global_config')
+        .from('private_integration_credentials')
         .select('config_value')
         .eq('config_key', 'live_integrations')
         .maybeSingle();
@@ -68,7 +69,7 @@ export async function sendTelegramAlert(
         chatId = chatId || data.config_value.telegram_chat_id;
       }
     } catch (err) {
-      console.warn('[TelegramAlert] CMS credentials lookup:', err);
+      console.warn('[TelegramAlert] Private credentials lookup:', err);
     }
   }
 
@@ -111,8 +112,8 @@ export async function sendTelegramAlert(
         });
         return { success: true, simulated: true, id: simId, error: errMsg };
       }
-    } catch (err: any) {
-      console.warn(`[TelegramBot] Network error:`, err?.message);
+    } catch (err: unknown) {
+      console.warn(`[TelegramBot] Network error:`, err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -143,12 +144,12 @@ export async function notifyNewPaidOrder(data: {
   const text = `
 💰 <b>[DevHost] New Paid Order Settled!</b>
 ━━━━━━━━━━━━━━━━━━━━━
-<b>Customer:</b> ${data.customerName} (<code>${data.customerEmail}</code>)
-<b>Service:</b> ${data.packageName} (<code>${data.domain}</code>)
-<b>Amount Paid:</b> ৳${data.amountBDT.toLocaleString()} BDT
-<b>Payment Method:</b> ${data.gateway.toUpperCase()}
-<b>TrxID:</b> <code>${data.trxId}</code>
-<b>Invoice:</b> #${data.invoiceId}
+<b>Customer:</b> ${escapeHtml(data.customerName)} (<code>${escapeHtml(data.customerEmail)}</code>)
+<b>Service:</b> ${escapeHtml(data.packageName)} (<code>${escapeHtml(data.domain)}</code>)
+<b>Amount Paid:</b> ৳${Number(data.amountBDT || 0).toLocaleString()} BDT
+<b>Payment Method:</b> ${escapeHtml(String(data.gateway || '').toUpperCase())}
+<b>TrxID:</b> <code>${escapeHtml(data.trxId)}</code>
+<b>Invoice:</b> #${escapeHtml(data.invoiceId)}
 <b>Server Node:</b> Singapore SG1 NVMe
 <i>WHM auto-provisioning initiated with zero manual intervention.</i>
 `.trim();
@@ -167,10 +168,10 @@ export async function notifyManualPaymentVerification(data: {
   const text = `
 🚨 <b>[DevHost] Manual Payment Verification Required</b>
 ━━━━━━━━━━━━━━━━━━━━━
-<b>Customer:</b> ${data.customerName}
-<b>Invoice:</b> #${data.invoiceId} (৳${data.amountBDT} BDT)
-<b>Gateway:</b> ${data.gateway}
-<b>Provided TrxID:</b> <code>${data.trxId}</code>
+<b>Customer:</b> ${escapeHtml(data.customerName)}
+<b>Invoice:</b> #${escapeHtml(data.invoiceId)} (৳${Number(data.amountBDT || 0)} BDT)
+<b>Gateway:</b> ${escapeHtml(data.gateway)}
+<b>Provided TrxID:</b> <code>${escapeHtml(data.trxId)}</code>
 <a href="https://devhostcloud.com/admin?module=billing_ledger">Open Admin Ledger to Verify &rarr;</a>
 `.trim();
 
@@ -187,9 +188,9 @@ export async function notifyMigrationRequest(data: {
   const text = `
 🚀 <b>[DevHost] New Website Migration Request!</b>
 ━━━━━━━━━━━━━━━━━━━━━
-<b>Customer:</b> ${data.customerName}
-<b>Target Domain:</b> <code>${data.domain}</code>
-<b>Current Host:</b> ${data.sourceHost} (${data.controlPanel})
+<b>Customer:</b> ${escapeHtml(data.customerName)}
+<b>Target Domain:</b> <code>${escapeHtml(data.domain)}</code>
+<b>Current Host:</b> ${escapeHtml(data.sourceHost)} (${escapeHtml(data.controlPanel)})
 <b>SLA Window:</b> 4 Hours (Zero-Downtime Guarantee)
 <a href="https://devhostcloud.com/admin?module=migrations">Open Migration Kanban &rarr;</a>
 `.trim();
@@ -208,11 +209,11 @@ export async function notifyTicketOpened(data: {
   const text = `
 🎫 <b>[DevHost] Priority Support Ticket Opened</b>
 ━━━━━━━━━━━━━━━━━━━━━
-<b>Priority:</b> ⚠️ <b>${data.priority.toUpperCase()}</b>
-<b>Ticket ID:</b> #${data.ticketId}
-<b>Customer:</b> ${data.customerName}
-<b>Department:</b> ${data.department}
-<b>Subject:</b> ${data.subject}
+<b>Priority:</b> ⚠️ <b>${escapeHtml(String(data.priority || '').toUpperCase())}</b>
+<b>Ticket ID:</b> #${escapeHtml(data.ticketId)}
+<b>Customer:</b> ${escapeHtml(data.customerName)}
+<b>Department:</b> ${escapeHtml(data.department)}
+<b>Subject:</b> ${escapeHtml(data.subject)}
 <a href="https://devhostcloud.com/admin?module=support_desk">Reply via Admin Desk &rarr;</a>
 `.trim();
 
@@ -228,12 +229,12 @@ export async function notifyFraudAlert(data: {
   details: string;
 }) {
   const text = `
-🛡️ <b>[DevHost Security] ${data.severity.toUpperCase()} THREAT DETECTED</b>
+🛡️ <b>[DevHost Security] ${escapeHtml(String(data.severity || '').toUpperCase())} THREAT DETECTED</b>
 ━━━━━━━━━━━━━━━━━━━━━
-<b>Threat:</b> ${data.alertType}
-<b>Target:</b> <code>${data.target}</code>
-<b>Source IP:</b> <code>${data.ipAddress}</code>
-<b>Forensics:</b> ${data.details}
+<b>Threat:</b> ${escapeHtml(data.alertType)}
+<b>Target:</b> <code>${escapeHtml(data.target)}</code>
+<b>Source IP:</b> <code>${escapeHtml(data.ipAddress)}</code>
+<b>Forensics:</b> ${escapeHtml(data.details)}
 <b>Action:</b> WAF rules evaluating auto-ban.
 <a href="https://devhostcloud.com/admin?module=security_audit">Inspect in SOC Radar &rarr;</a>
 `.trim();

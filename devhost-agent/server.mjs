@@ -671,6 +671,52 @@ export function buildDockerRunArgs({
   return args;
 }
 
+export function getPgAdminArgs(dbNameOverride) {
+  if (process.env.POSTGRES_ADMIN_URL) {
+    if (dbNameOverride) {
+      try {
+        const parsed = new URL(process.env.POSTGRES_ADMIN_URL);
+        parsed.pathname = `/${encodeURIComponent(dbNameOverride)}`;
+        return [parsed.toString()];
+      } catch {
+        return [process.env.POSTGRES_ADMIN_URL, '-d', dbNameOverride];
+      }
+    }
+    return [process.env.POSTGRES_ADMIN_URL];
+  }
+  const base = ['-U', process.env.PG_ADMIN_USER || 'postgres'];
+  if (dbNameOverride) base.push('-d', dbNameOverride);
+  return base;
+}
+
+export function parseCsvLine(line) {
+  const fields = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"' && line[i + 1] === '"') {
+        current += '"';
+        i += 1;
+      } else if (ch === '"') {
+        inQuotes = false;
+      } else {
+        current += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ',') {
+      fields.push(current);
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  fields.push(current);
+  return fields;
+}
+
 export function buildPostgresProvisionPayload({ dbName, dbUser, password, adminPass = '' }) {
   const cleanDb = validateSqlIdentifier(dbName, 'dbName');
   const cleanUser = validateSqlIdentifier(dbUser, 'dbUser');
@@ -686,9 +732,7 @@ export function buildPostgresProvisionPayload({ dbName, dbUser, password, adminP
     "SELECT format('CREATE DATABASE %I OWNER %I', :'dbname', :'dbuser')\\gexec",
   ].join('\n');
 
-  const pgAdminArgs = process.env.POSTGRES_ADMIN_URL
-    ? [process.env.POSTGRES_ADMIN_URL]
-    : ['-U', process.env.PG_ADMIN_USER || 'postgres'];
+  const pgAdminArgs = getPgAdminArgs();
 
   return {
     binary: 'psql',
@@ -895,6 +939,7 @@ async function readBody(req) {
 function sendSignedCallback(agentSecret, callbackUrl, payload, fetchImpl = fetch) {
   if (!callbackUrl || !agentSecret) return Promise.resolve();
   const ts = String(Date.now());
+  const nonce = crypto.randomUUID();
   const rawBody = JSON.stringify(payload);
   const sig = crypto.createHmac('sha256', agentSecret).update(`${ts}.${rawBody}`).digest('hex');
   return fetchImpl(callbackUrl, {
@@ -902,6 +947,7 @@ function sendSignedCallback(agentSecret, callbackUrl, payload, fetchImpl = fetch
     headers: {
       'Content-Type': 'application/json',
       'X-DevHost-Timestamp': ts,
+      'X-DevHost-Nonce': nonce,
       'X-DevHost-Signature': `sha256=${sig}`,
     },
     body: rawBody,
@@ -1049,11 +1095,28 @@ export function createAgentHandler(options = {}) {
 
         // Clone or extract source if provided (supports hardened .zip or .tar.gz artifacts)
         if (body.artifactDownloadUrl) {
-          const dlRes = await fetchImpl(body.artifactDownloadUrl);
+          let parsedArtifactUrl;
+          try {
+            parsedArtifactUrl = new URL(String(body.artifactDownloadUrl).trim());
+          } catch {
+            return sendJson(res, 422, { ok: false, error: 'Invalid artifactDownloadUrl format' });
+          }
+          if (parsedArtifactUrl.protocol !== 'https:' && parsedArtifactUrl.protocol !== 'http:') {
+            return sendJson(res, 422, { ok: false, error: 'Unsupported artifactDownloadUrl protocol' });
+          }
+          const MAX_COMPRESSED_ARTIFACT_BYTES = 128 * 1024 * 1024;
+          const dlRes = await fetchImpl(parsedArtifactUrl.toString());
           if (!dlRes.ok) {
             return sendJson(res, 502, { ok: false, error: 'Artifact download failed' });
           }
+          const contentLenHeader = Number(dlRes.headers?.get?.('content-length') || 0);
+          if (Number.isFinite(contentLenHeader) && contentLenHeader > MAX_COMPRESSED_ARTIFACT_BYTES) {
+            return sendJson(res, 413, { ok: false, error: 'Artifact exceeds 128 MB compressed download limit' });
+          }
           const buf = Buffer.from(await dlRes.arrayBuffer());
+          if (buf.length > MAX_COMPRESSED_ARTIFACT_BYTES) {
+            return sendJson(res, 413, { ok: false, error: 'Artifact exceeds 128 MB compressed download limit' });
+          }
           const isZipArchive =
             (buf.length >= 4 &&
               buf[0] === 0x50 &&
@@ -1513,12 +1576,16 @@ export function createAgentHandler(options = {}) {
 
       // 4. Tenant Database Provisioning (parameterized PG / UNHEX MySQL)
       if (req.method === 'POST' && url.pathname === '/v1/databases/provision') {
-        const engine = String(body.engine || '').toLowerCase();
-        if (engine.includes('postgres')) {
+        const engineRaw = String(body.dbEngine || body.engine || 'postgresql').toLowerCase();
+        const dbUserInput = body.dbUsername || body.dbUser;
+        const dbPasswordInput = body.dbPassword || body.password;
+        const isPostgres = engineRaw.includes('postgres');
+
+        if (isPostgres) {
           const pgPayload = buildPostgresProvisionPayload({
             dbName: body.dbName,
-            dbUser: body.dbUser,
-            password: body.password,
+            dbUser: dbUserInput,
+            password: dbPasswordInput,
             adminPass: process.env.PG_ADMIN_PASS || '',
           });
           const r = await runExecFile(pgPayload.binary, pgPayload.args, {
@@ -1528,31 +1595,54 @@ export function createAgentHandler(options = {}) {
           if (!r.ok && r.errCode !== 'ENOENT') {
             return sendJson(res, 500, { ok: false, error: r.stderr || r.error });
           }
-          return sendJson(res, 200, { ok: true, provisioned: true, engine: 'postgresql' });
+        } else {
+          const myPayload = buildMysqlProvisionPayload({
+            dbName: body.dbName,
+            dbUser: dbUserInput,
+            password: dbPasswordInput,
+            host: body.remoteIp || '%',
+            adminPass: process.env.MYSQL_ADMIN_PASS || '',
+          });
+          const r = await runExecFile(myPayload.binary, myPayload.args, {
+            env: myPayload.env,
+            stdin: myPayload.stdin,
+          });
+          if (!r.ok && r.errCode !== 'ENOENT') {
+            return sendJson(res, 500, { ok: false, error: r.stderr || r.error });
+          }
         }
 
-        const myPayload = buildMysqlProvisionPayload({
-          dbName: body.dbName,
-          dbUser: body.dbUser,
-          password: body.password,
-          host: body.remoteIp || '%',
-          adminPass: process.env.MYSQL_ADMIN_PASS || '',
-        });
-        const r = await runExecFile(myPayload.binary, myPayload.args, {
-          env: myPayload.env,
-          stdin: myPayload.stdin,
-        });
-        if (!r.ok && r.errCode !== 'ENOENT') {
-          return sendJson(res, 500, { ok: false, error: r.stderr || r.error });
+        const cleanDbName = validateSqlIdentifier(body.dbName, 'dbName');
+        const cleanDbUser = validateSqlIdentifier(dbUserInput, 'dbUsername');
+        const foundSvc = body.serviceId
+          ? await findServiceMetaByServiceId(workRoot, String(body.serviceId))
+          : null;
+        if (foundSvc) {
+          const existingDbs = Array.isArray(foundSvc.meta?.provisionedDbs) ? foundSvc.meta.provisionedDbs : [];
+          if (!existingDbs.includes(cleanDbName)) {
+            await writeServiceMeta(foundSvc.serviceDir, {
+              provisionedDbs: [...existingDbs, cleanDbName],
+            });
+          }
         }
-        return sendJson(res, 200, { ok: true, provisioned: true, engine: 'mysql' });
+
+        return sendJson(res, 200, {
+          ok: true,
+          provisioned: true,
+          engine: isPostgres ? 'postgresql' : 'mysql',
+          dbName: cleanDbName,
+          dbUsername: cleanDbUser,
+          host: process.env.COMPUTE_DB_PUBLIC_HOST || '127.0.0.1',
+          port: isPostgres ? 5432 : 3306,
+        });
       }
 
       // 5. Tenant Database Drop
       if (req.method === 'POST' && url.pathname === '/v1/databases/drop') {
         const cleanDb = validateSqlIdentifier(body.dbName, 'dbName');
-        const cleanUser = body.dbUser ? validateSqlIdentifier(body.dbUser, 'dbUser') : null;
-        const engine = String(body.engine || 'postgresql').toLowerCase();
+        const dbUserInput = body.dbUsername || body.dbUser;
+        const cleanUser = dbUserInput ? validateSqlIdentifier(dbUserInput, 'dbUser') : null;
+        const engine = String(body.dbEngine || body.engine || 'postgresql').toLowerCase();
 
         if (engine.includes('postgres')) {
           const stdinSql = [
@@ -1560,8 +1650,7 @@ export function createAgentHandler(options = {}) {
             ...(cleanUser ? [`SELECT format('DROP ROLE IF EXISTS %I', :'dbuser')\\gexec`] : []),
           ].join('\n');
           const args = [
-            '-U',
-            process.env.PG_ADMIN_USER || 'postgres',
+            ...getPgAdminArgs(),
             '-v',
             'ON_ERROR_STOP=1',
             '-v',
@@ -1596,7 +1685,7 @@ export function createAgentHandler(options = {}) {
           }
         }
 
-        return sendJson(res, 200, { ok: true, dropped: cleanDb });
+        return sendJson(res, 200, { ok: true, dropped: true, dbName: cleanDb });
       }
 
       // 6. Database Remote IP Whitelist
@@ -1619,21 +1708,52 @@ export function createAgentHandler(options = {}) {
             },
           });
         }
-        return sendJson(res, 200, { ok: true, dbName: cleanDb, whitelistedIps: ips });
+        return sendJson(res, 200, { ok: true, updated: true, dbName: cleanDb, whitelistedIps: ips });
       }
 
       // 7. Scoped SQL Query Execution
       if (req.method === 'POST' && url.pathname === '/v1/console/sql') {
+        const cpanelUser = body.cpanelUser ? safeIdentifier(body.cpanelUser, '') : '';
+        if (!cpanelUser) {
+          throw new AgentValidationError('cpanelUser is required for scoped SQL execution');
+        }
+        if (!body.dbName || !String(body.dbName).trim()) {
+          throw new AgentValidationError('dbName is required for scoped SQL execution');
+        }
         const safeSql = validateTypedSqlQuery(body.query);
-        const cleanDb = validateSqlIdentifier(body.dbName || 'postgres', 'dbName');
+        const cleanDb = validateSqlIdentifier(body.dbName, 'dbName');
+        const forbiddenSystemDbs = new Set([
+          'postgres',
+          'template0',
+          'template1',
+          'mysql',
+          'information_schema',
+          'performance_schema',
+          'sys',
+        ]);
+        if (forbiddenSystemDbs.has(cleanDb.toLowerCase())) {
+          return sendJson(res, 403, { ok: false, error: `Forbidden system database "${cleanDb}".` });
+        }
+
+        const foundMeta = body.serviceId
+          ? await findServiceMetaByServiceId(workRoot, String(body.serviceId))
+          : null;
+        const recordedDbs = Array.isArray(foundMeta?.meta?.provisionedDbs) ? foundMeta.meta.provisionedDbs : [];
+        const whitelistedDbs = foundMeta?.meta?.dbWhitelists ? Object.keys(foundMeta.meta.dbWhitelists) : [];
+        const ownsByPrefix = cleanDb.startsWith(`${cpanelUser}_`);
+        const ownsByMeta = recordedDbs.includes(cleanDb) || whitelistedDbs.includes(cleanDb);
+        if (!ownsByPrefix && !ownsByMeta) {
+          return sendJson(res, 403, {
+            ok: false,
+            error: `Forbidden: Database "${cleanDb}" does not belong to tenant "${cpanelUser}".`,
+          });
+        }
+
         const t0 = Date.now();
         const r = await runExecFile(
           'psql',
           [
-            '-U',
-            process.env.PG_ADMIN_USER || 'postgres',
-            '-d',
-            cleanDb,
+            ...getPgAdminArgs(cleanDb),
             '--csv',
             '-v',
             'ON_ERROR_STOP=1',
@@ -1651,9 +1771,9 @@ export function createAgentHandler(options = {}) {
         }
 
         const lines = r.stdout.trim().split(/\r?\n/).filter(Boolean);
-        const columns = lines[0] ? lines[0].split(',') : [];
+        const columns = lines[0] ? parseCsvLine(lines[0]) : [];
         const rows = lines.slice(1, 101).map((line) => {
-          const vals = line.split(',');
+          const vals = parseCsvLine(line);
           const obj = {};
           columns.forEach((col, i) => {
             obj[col] = vals[i] ?? null;
@@ -1692,32 +1812,52 @@ export function createAgentHandler(options = {}) {
               };
             })
           );
-          return sendJson(res, 200, { ok: true, items });
+          return sendJson(res, 200, { ok: true, synced: true, items });
         }
 
         if (action === 'read') {
           const content = await fs.readFile(resolved, 'utf8');
-          return sendJson(res, 200, { ok: true, content });
+          const sizeBytes = Buffer.byteLength(content, 'utf8');
+          return sendJson(res, 200, {
+            ok: true,
+            synced: true,
+            content,
+            contentText: content,
+            sizeBytes,
+          });
         }
 
         if (action === 'save' || action === 'write') {
+          const contentText = String(body.contentText ?? body.content ?? '');
           await fs.mkdir(path.dirname(resolved), { recursive: true });
-          await fs.writeFile(resolved, String(body.content ?? ''), 'utf8');
-          return sendJson(res, 200, { ok: true, saved: true });
+          await fs.writeFile(resolved, contentText, 'utf8');
+          const sizeBytes = Buffer.byteLength(contentText, 'utf8');
+          return sendJson(res, 200, {
+            ok: true,
+            synced: true,
+            saved: true,
+            sizeBytes,
+            reloaded: true,
+          });
         }
 
         if (action === 'chmod') {
-          const modeStr = String(body.permissions || '644').trim();
+          const modeStr = String(body.permissionsOctal ?? body.permissions ?? '644').trim();
           if (!SAFE_OCTAL_MODE_REGEX.test(modeStr)) {
             throw new AgentValidationError('Invalid octal permission mode');
           }
           await fs.chmod(resolved, parseInt(modeStr, 8));
-          return sendJson(res, 200, { ok: true, permissions: modeStr });
+          return sendJson(res, 200, {
+            ok: true,
+            synced: true,
+            permissions: modeStr,
+            permissionsOctal: modeStr,
+          });
         }
 
         if (action === 'delete') {
           await fs.rm(resolved, { recursive: true, force: true });
-          return sendJson(res, 200, { ok: true, deleted: true });
+          return sendJson(res, 200, { ok: true, synced: true, deleted: true });
         }
 
         throw new AgentValidationError(`Unsupported file action: "${action}"`);

@@ -161,9 +161,12 @@ export async function GET(req: NextRequest) {
         height: 630,
       }
     );
-  } catch (error: any) {
-    return new Response(`Failed to generate OpenGraph image: ${error?.message}`, {
-      status: 500,
-    });
+  } catch (error: unknown) {
+    return new Response(
+      `Failed to generate OpenGraph image: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      {
+        status: 500,
+      }
+    );
   }
 }

@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, getServiceSupabase } from '@/lib/supabase';
 import { renderHostingProvisionedEmail } from '@/lib/emailEngine';
-import { requireAdmin } from '@/lib/authGuard';
-
+import { requireAdmin, verifySudoToken, escapeHtml } from '@/lib/authGuard';
 
 const CONFIG_KEY = 'live_integrations';
 
@@ -18,8 +17,8 @@ const DEFAULT_CONFIG: LiveIntegrationsConfig = {
   telegram_bot_token: process.env.TELEGRAM_BOT_TOKEN || '',
   telegram_chat_id: process.env.TELEGRAM_ADMIN_CHAT_ID || '',
   resend_api_key: process.env.RESEND_API_KEY || '',
-  resend_from_email: 'DevHost Cloud <onboarding@resend.dev>',
-  founder_email: 'mohammadbitullah@gmail.com',
+  resend_from_email: process.env.EMAIL_FROM || 'DevHost Cloud <noreply@devhostcloud.com>',
+  founder_email: process.env.FOUNDER_ADMIN_EMAIL || 'admin@devhostcloud.com',
 };
 
 async function getLiveIntegrationsConfig(): Promise<LiveIntegrationsConfig> {
@@ -29,7 +28,7 @@ async function getLiveIntegrationsConfig(): Promise<LiveIntegrationsConfig> {
   try {
     const db = getServiceSupabase();
     const { data } = await db
-      .from('cms_global_config')
+      .from('private_integration_credentials')
       .select('config_value')
       .eq('config_key', CONFIG_KEY)
       .maybeSingle();
@@ -59,14 +58,17 @@ export async function GET(req: NextRequest) {
         telegram_bot_token: config.telegram_bot_token ? `${config.telegram_bot_token.slice(0, 8)}...` : '',
         telegram_chat_id: config.telegram_chat_id,
         resend_api_key: config.resend_api_key ? `${config.resend_api_key.slice(0, 6)}...` : '',
-        resend_from_email: config.resend_from_email || 'DevHost Cloud <onboarding@resend.dev>',
-        founder_email: config.founder_email || 'mohammadbitullah@gmail.com',
+        resend_from_email: config.resend_from_email || 'DevHost Cloud <noreply@devhostcloud.com>',
+        founder_email: config.founder_email || 'admin@devhostcloud.com',
         is_telegram_connected: Boolean(config.telegram_bot_token && config.telegram_chat_id),
         is_resend_connected: Boolean(config.resend_api_key),
       },
     });
-  } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+  } catch (err: unknown) {
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : 'Failed to load integrations' },
+      { status: 500 }
+    );
   }
 }
 
@@ -82,8 +84,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Action parameter is required.' }, { status: 400 });
     }
 
-    // 1. SAVE INTEGRATION CREDENTIALS
+    // 1. SAVE INTEGRATION CREDENTIALS (Sudo-Guarded & Stored in Private Vault Table)
     if (action === 'save') {
+      const sudoValid = await verifySudoToken(req, adminAuth.user.id);
+      if (!sudoValid) {
+        return NextResponse.json(
+          { success: false, requireSudo: true, error: 'Admin Sudo elevation required to update API integration secrets.' },
+          { status: 403 }
+        );
+      }
+
       const { telegram_bot_token, telegram_chat_id, resend_api_key, resend_from_email, founder_email } = body;
 
       const currentConfig = await getLiveIntegrationsConfig();
@@ -97,12 +107,19 @@ export async function POST(req: NextRequest) {
 
       if (isSupabaseConfigured()) {
         const db = getServiceSupabase();
-        await db.from('cms_global_config').upsert({
-          config_key: CONFIG_KEY,
-          config_value: updatedConfig,
-          description: 'Live Zero-Cost Telegram Bot & Resend Email Integrations',
-          updated_at: new Date().toISOString(),
-        });
+        const { error } = await db.from('private_integration_credentials').upsert(
+          {
+            config_key: CONFIG_KEY,
+            config_value: updatedConfig,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'config_key' }
+        );
+        if (error) {
+          return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+        }
+        // Remove any legacy secret row from public cms_global_config
+        await db.from('cms_global_config').delete().eq('config_key', CONFIG_KEY);
       }
 
       return NextResponse.json({
@@ -131,7 +148,7 @@ export async function POST(req: NextRequest) {
 ⚡ <b>[DevHost Cloud] Real Telegram Alert Active!</b>
 ━━━━━━━━━━━━━━━━━━━━━
 <b>Founder NOC Alert:</b> Connected Successfully!
-<b>Chat ID:</b> <code>${chatId}</code>
+<b>Chat ID:</b> <code>${escapeHtml(chatId)}</code>
 <b>Time:</b> ${new Date().toLocaleString()}
 <b>Zero-Touch Engine:</b> 100% Operational on Cloudflare Edge ⚡
 <i>You will receive instant alerts whenever an invoice is paid or a cPanel container is provisioned.</i>
@@ -171,8 +188,8 @@ export async function POST(req: NextRequest) {
     if (action === 'test_resend') {
       const currentConfig = await getLiveIntegrationsConfig();
       const apiKey = (body.resend_api_key && !body.resend_api_key.includes('...') ? body.resend_api_key.trim() : '') || currentConfig.resend_api_key || process.env.RESEND_API_KEY;
-      const toEmail = (body.founder_email ? body.founder_email.trim() : '') || currentConfig.founder_email || 'mohammadbitullah@gmail.com';
-      const fromEmail = (body.resend_from_email ? body.resend_from_email.trim() : '') || currentConfig.resend_from_email || 'DevHost Cloud <onboarding@resend.dev>';
+      const toEmail = (body.founder_email ? body.founder_email.trim() : '') || currentConfig.founder_email || 'admin@devhostcloud.com';
+      const fromEmail = (body.resend_from_email ? body.resend_from_email.trim() : '') || currentConfig.resend_from_email || 'DevHost Cloud <noreply@devhostcloud.com>';
 
       if (!apiKey) {
         return NextResponse.json(
@@ -229,7 +246,10 @@ export async function POST(req: NextRequest) {
     }
 
     return NextResponse.json({ success: false, error: 'Unknown action' }, { status: 400 });
-  } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+  } catch (err: unknown) {
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : 'Integration action failed' },
+      { status: 500 }
+    );
   }
 }

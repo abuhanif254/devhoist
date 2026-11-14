@@ -149,8 +149,20 @@ export async function POST(request: NextRequest) {
         }
 
         const resolvedUserId = serviceRow?.user_id || access.user.id;
-        const resolvedDomain = bodyDomain || serviceRow?.domain || 'app.devhost.cloud';
-        const resolvedCpanelUser = bodyCpanelUser || serviceRow?.cpanel_username || 'dvhst';
+        const resolvedDomain = String(
+            serviceRow?.domain || (!serviceRow ? bodyDomain : '') || ''
+        )
+            .trim()
+            .toLowerCase();
+        if (!resolvedDomain) {
+            return NextResponse.json(
+                { error: 'Target service domain could not be resolved.' },
+                { status: 400 }
+            );
+        }
+        const resolvedCpanelUser = String(
+            serviceRow?.cpanel_username || (!serviceRow ? bodyCpanelUser : '') || 'dvhst'
+        ).trim();
 
         // Hardware compatibility check if service has a known RAM allocation
         const serviceRamMb = serviceRow?.ram_limit_mb ?? serviceRow?.ram_mb;

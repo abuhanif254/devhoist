@@ -104,8 +104,10 @@ export async function decryptEnvValue(encryptedBase64: string): Promise<string> 
     );
 
     return new TextDecoder().decode(decryptedBuffer);
-  } catch {
-    return '••••••••••••';
+  } catch (err) {
+    throw new Error(
+      `AES-256-GCM decryption failed: ${err instanceof Error ? err.message : 'invalid ciphertext'}`
+    );
   }
 }
 

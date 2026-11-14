@@ -51,7 +51,9 @@ export default function DomainChecker() {
     if (!debouncedQuery) return;
 
     let isMounted = true;
-    setIsLoading(true);
+    const timer = window.setTimeout(() => {
+      if (isMounted) setIsLoading(true);
+    }, 0);
 
     fetch(`/api/domain-check?domain=${encodeURIComponent(debouncedQuery)}&currency=${currency}`)
       .then((res) => res.json())
@@ -70,6 +72,7 @@ export default function DomainChecker() {
 
     return () => {
       isMounted = false;
+      window.clearTimeout(timer);
     };
   }, [debouncedQuery, currency]);
 

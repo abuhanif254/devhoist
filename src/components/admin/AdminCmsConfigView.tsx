@@ -18,6 +18,7 @@ import {
   Loader2,
   ExternalLink,
   Check,
+  AlertTriangle,
 } from 'lucide-react';
 import { useSudoGate } from '@/components/security/SudoGateModal';
 
@@ -26,6 +27,7 @@ export default function AdminCmsConfigView() {
   const [activeSubTab, setActiveSubTab] = useState<'banner' | 'currency' | 'gateways' | 'hero' | 'lockdown' | 'live_integrations'>('banner');
   const [isLoading, setIsLoading] = useState(true);
   const [toast, setToast] = useState<string | null>(null);
+  const [errorBanner, setErrorBanner] = useState<string | null>(null);
 
   // Live Integrations (Telegram & Resend) State
   const [telegramBotToken, setTelegramBotToken] = useState('');
@@ -110,23 +112,35 @@ export default function AdminCmsConfigView() {
         setIsTelegramConnected(intData.config.is_telegram_connected);
         setIsResendConnected(intData.config.is_resend_connected);
       }
-    } catch (err) {
-      console.warn('Failed to fetch CMS configs:', err);
+      setErrorBanner(null);
+    } catch (err: unknown) {
+      setErrorBanner(
+        err instanceof Error ? `Failed to fetch CMS configuration: ${err.message}` : 'Failed to fetch CMS configurations.'
+      );
     } finally {
       setIsLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchConfigs();
+    const timer = window.setTimeout(() => {
+      void fetchConfigs();
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
   const showToast = (msg: string) => {
+    setErrorBanner(null);
     setToast(msg);
     setTimeout(() => setToast(null), 3000);
   };
 
-  const handleSaveConfig = (key: string, value: any, label: string) => {
+  const showError = (msg: string) => {
+    setErrorBanner(msg);
+    setTimeout(() => setErrorBanner(null), 5000);
+  };
+
+  const handleSaveConfig = (key: string, value: unknown, label: string) => {
     requireSudo(async () => {
       try {
         const res = await fetch('/api/admin/cms-config', {
@@ -138,13 +152,13 @@ export default function AdminCmsConfigView() {
             sudoVerified: true,
           }),
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `Failed to save ${label} (HTTP ${res.status}).`);
 
         showToast(`${label} updated successfully!`);
         fetchConfigs();
-      } catch (err: any) {
-        alert(err.message);
+      } catch (err: unknown) {
+        showError(err instanceof Error ? err.message : `Failed to update ${label}.`);
       }
     }, `Update ${label}`);
   };
@@ -165,13 +179,13 @@ export default function AdminCmsConfigView() {
             founder_email: founderEmail,
           }),
         });
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.success) throw new Error(data.error || 'Failed to save integrations');
 
         showToast('Live Integrations credentials saved successfully!');
         fetchConfigs();
-      } catch (err: any) {
-        alert(err.message);
+      } catch (err: unknown) {
+        showError(err instanceof Error ? err.message : 'Failed to save integration credentials.');
       } finally {
         setIsSavingIntegrations(false);
       }
@@ -196,8 +210,8 @@ export default function AdminCmsConfigView() {
         success: data.success,
         msg: data.success ? data.message : `Error: ${data.error || 'Failed to send Telegram message'}`,
       });
-    } catch (err: any) {
-      setTelegramTestFeedback({ success: false, msg: err.message });
+    } catch (err: unknown) {
+      setTelegramTestFeedback({ success: false, msg: err instanceof Error ? err.message : 'Test failed' });
     } finally {
       setIsTestingTelegram(false);
     }
@@ -222,8 +236,8 @@ export default function AdminCmsConfigView() {
         success: data.success,
         msg: data.success ? data.message : `Error: ${data.error || 'Failed to send email'}`,
       });
-    } catch (err: any) {
-      setResendTestFeedback({ success: false, msg: err.message });
+    } catch (err: unknown) {
+      setResendTestFeedback({ success: false, msg: err instanceof Error ? err.message : 'Test failed' });
     } finally {
       setIsTestingResend(false);
     }
@@ -236,6 +250,12 @@ export default function AdminCmsConfigView() {
         <div className="fixed bottom-6 right-6 z-50 px-4 py-2.5 rounded-xl bg-emerald-600 text-white font-mono text-xs shadow-xl flex items-center gap-2 animate-in slide-in-from-bottom">
           <CheckCircle2 className="w-4 h-4" />
           <span>{toast}</span>
+        </div>
+      )}
+      {errorBanner && (
+        <div className="fixed bottom-6 right-6 z-50 px-4 py-2.5 rounded-xl bg-rose-600 text-white font-mono text-xs shadow-xl flex items-center gap-2 animate-in slide-in-from-bottom">
+          <AlertTriangle className="w-4 h-4" />
+          <span>{errorBanner}</span>
         </div>
       )}
 

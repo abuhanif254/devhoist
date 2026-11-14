@@ -21,7 +21,7 @@ const TERMINAL_STEPS: TerminalStep[] = [
 
 export default function HeroTerminal() {
   const [currentStepIndex, setCurrentStepIndex] = useState<number>(0);
-  const [isDone, setIsDone] = useState(false);
+  const isDone = currentStepIndex >= TERMINAL_STEPS.length;
 
   useEffect(() => {
     let timeout: NodeJS.Timeout;
@@ -31,11 +31,9 @@ export default function HeroTerminal() {
         setCurrentStepIndex((prev) => prev + 1);
       }, TERMINAL_STEPS[currentStepIndex].delay);
     } else {
-      setIsDone(true);
-      // Loop after 4 seconds
+      // Loop after 4.5 seconds
       timeout = setTimeout(() => {
         setCurrentStepIndex(0);
-        setIsDone(false);
       }, 4500);
     }
 
@@ -44,7 +42,6 @@ export default function HeroTerminal() {
 
   const handleRestart = () => {
     setCurrentStepIndex(0);
-    setIsDone(false);
   };
 
   return (

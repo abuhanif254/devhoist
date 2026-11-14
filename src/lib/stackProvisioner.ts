@@ -1464,7 +1464,7 @@ export async function provisionMarketplaceStack(
 
         if (queueConfigured || sandboxActive) {
             const qRes = await enqueueBuildJob({
-                jobId: `bld_${commitHash}_${Date.now()}`,
+                jobId: crypto.randomUUID(),
                 serviceId: params.serviceId,
                 userId: params.userId,
                 domain: params.domain,

@@ -15,7 +15,8 @@
         "queue": "devhost-build-queue",
         "max_batch_size": 5,
         "max_batch_timeout": 5,
-        "max_retries": 3
+        "max_retries": 3,
+        "dead_letter_queue": "devhost-build-dlq"
       }
     ]
   }

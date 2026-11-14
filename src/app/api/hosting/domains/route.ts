@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { randomBytes } from 'crypto';
 import { isSupabaseConfigured, getServiceSupabase, isDevSandboxMode } from '@/lib/supabase';
-import { requireServiceAccess, serviceUnavailableResponse } from '@/lib/authGuard';
+import { requireUser, requireServiceAccess, serviceUnavailableResponse } from '@/lib/authGuard';
 import { scanDomainForPhishing } from '@/lib/abuseShieldEngine';
 import {
   createCloudflareCustomHostname,
@@ -574,6 +574,9 @@ export async function POST(request: NextRequest) {
  */
 export async function PATCH(request: NextRequest) {
   try {
+    const auth = await requireUser(request);
+    if (!auth.ok) return auth.response;
+
     const ip = request.headers.get('x-forwarded-for') || '127.0.0.1';
     const body = (await request.json().catch(() => ({}))) as { id?: string; serviceId?: string };
     const { id } = body;
@@ -601,7 +604,10 @@ export async function PATCH(request: NextRequest) {
         return NextResponse.json({ success: false, error: 'Hosting domain mapping not found.' }, { status: 404 });
       }
 
-      if (!serviceId) serviceId = row.service_id;
+      if (serviceId && row.service_id && row.service_id !== serviceId) {
+        return NextResponse.json({ success: false, error: 'Forbidden hosting domain access.' }, { status: 403 });
+      }
+      serviceId = row.service_id || serviceId;
       cfHostnameId = row.cloudflare_hostname_id || null;
       hostname = String(row.hostname || '').trim().toLowerCase();
       verificationToken = row.verification_token || null;
@@ -716,7 +722,8 @@ export async function PATCH(request: NextRequest) {
           dcv_record_name: prov.dcvRecordName,
           dcv_record_value: prov.dcvRecordValue,
         })
-        .eq('id', id);
+        .eq('id', id)
+        .eq('service_id', access.serviceId);
 
       await logAudit(
         access.user.id,
@@ -751,7 +758,8 @@ export async function PATCH(request: NextRequest) {
           await db
             .from('hosting_addon_domains')
             .update({ ssl_status: 'active_tls13' })
-            .eq('id', id);
+            .eq('id', id)
+            .eq('service_id', access.serviceId);
         }
         return NextResponse.json({
           success: true,
@@ -785,7 +793,8 @@ export async function PATCH(request: NextRequest) {
           dcv_record_name: statusRes.dcvRecordName || undefined,
           dcv_record_value: statusRes.dcvRecordValue || undefined,
         })
-        .eq('id', id);
+        .eq('id', id)
+        .eq('service_id', access.serviceId);
     }
 
     return NextResponse.json({
@@ -818,6 +827,9 @@ export async function PATCH(request: NextRequest) {
  */
 export async function DELETE(request: NextRequest) {
   try {
+    const auth = await requireUser(request);
+    if (!auth.ok) return auth.response;
+
     const ip = request.headers.get('x-forwarded-for') || '127.0.0.1';
     const { searchParams } = new URL(request.url);
     const domainId = searchParams.get('id');
@@ -835,8 +847,14 @@ export async function DELETE(request: NextRequest) {
         .select('service_id, cloudflare_hostname_id')
         .eq('id', domainId)
         .maybeSingle();
-      if (!serviceId) serviceId = domainRow?.service_id || null;
-      cfHostnameId = domainRow?.cloudflare_hostname_id || null;
+      if (!domainRow) {
+        return NextResponse.json({ success: false, error: 'Hosting domain mapping not found.' }, { status: 404 });
+      }
+      if (serviceId && domainRow.service_id && domainRow.service_id !== serviceId) {
+        return NextResponse.json({ success: false, error: 'Forbidden hosting domain access.' }, { status: 403 });
+      }
+      serviceId = domainRow.service_id || serviceId;
+      cfHostnameId = domainRow.cloudflare_hostname_id || null;
     }
 
     const access = await requireServiceAccess(request, serviceId, 'services:write');

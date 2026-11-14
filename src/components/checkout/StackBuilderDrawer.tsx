@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { useBilling } from '@/context/BillingContext';
 import { usePortal } from '@/context/PortalContext';
+import { convertBdtToUsd } from '@/config/constants';
 import {
   UNIVERSAL_MARKETPLACE_STACKS,
   getStackBlueprintBySlug,
@@ -86,22 +87,31 @@ const STACK_OPTIONS = [
 
 const PLAN_SPECS: Record<
   number,
-  { ram: string; cpu: string; storage: string; inodes: string; monthlyBDT: number; monthlyUSD: number }
+  { name: string; slug: string; ram: string; cpu: string; storage: string; inodes: string; monthlyBDT: number; monthlyUSD: number }
 > = {
-  1: { ram: '1 GB', cpu: '1 Core', storage: '10 GB NVMe', inodes: '150,000', monthlyBDT: 200, monthlyUSD: 1.67 },
-  2: { ram: '2 GB', cpu: '2 Cores', storage: '25 GB NVMe', inodes: '300,000', monthlyBDT: 450, monthlyUSD: 3.75 },
-  3: { ram: '4 GB', cpu: '2 Cores (HF)', storage: '50 GB NVMe', inodes: '600,000', monthlyBDT: 900, monthlyUSD: 7.5 },
+  1: { name: 'Starter Pack', slug: 'starter', ram: '1 GB', cpu: '1 Core', storage: '2 GB NVMe', inodes: '150,000', monthlyBDT: 200, monthlyUSD: 1.67 },
+  2: { name: 'Developer Pro', slug: 'developer-pro', ram: '2 GB', cpu: '2 Cores', storage: '5 GB NVMe', inodes: '300,000', monthlyBDT: 450, monthlyUSD: 3.75 },
+  3: { name: 'Business Max', slug: 'business-max', ram: '4 GB', cpu: '4 Cores (HF)', storage: '15 GB NVMe', inodes: '600,000', monthlyBDT: 900, monthlyUSD: 7.5 },
+  101: { name: 'Cloud KVM-1', slug: 'cloud-kvm-1', ram: '4 GB ECC', cpu: '2 vCPU EPYC', storage: '60 GB NVMe', inodes: '1,000,000', monthlyBDT: 1450, monthlyUSD: 12.08 },
+  102: { name: 'Cloud KVM-2', slug: 'cloud-kvm-2', ram: '8 GB ECC', cpu: '4 vCPU EPYC', storage: '120 GB NVMe', inodes: '2,000,000', monthlyBDT: 2750, monthlyUSD: 22.92 },
+  103: { name: 'Cloud KVM-4', slug: 'cloud-kvm-4', ram: '16 GB ECC', cpu: '6 vCPU EPYC', storage: '240 GB NVMe', inodes: '5,000,000', monthlyBDT: 5200, monthlyUSD: 43.33 },
+  104: { name: 'Cloud KVM-8', slug: 'cloud-kvm-8', ram: '32 GB ECC', cpu: '8 vCPU EPYC', storage: '480 GB NVMe', inodes: '10,000,000', monthlyBDT: 9800, monthlyUSD: 81.67 },
 };
 
 export default function StackBuilderDrawer() {
   const router = useRouter();
   const { isStackBuilderOpen, closeStackBuilder, stackBuilderConfig, currency } = useBilling();
-  const { walletBalanceBDT, currentUser, promoCodes, dynamicTlds, refreshUserData } = usePortal();
+  const { walletBalanceBDT, currentUser, promoCodes, dynamicPlans, dynamicTlds, refreshUserData } = usePortal();
 
   const [region, setRegion] = useState<Region>('sg');
   const [appStack, setAppStack] = useState<AppStack>('nextjs-15-standalone');
   const [selectedPidOverride, setSelectedPidOverride] = useState<number | null>(null);
-  const [cycle, setCycle] = useState<Cycle>('monthly');
+  const [cycleOverride, setCycleOverride] = useState<{ cfg: unknown; value: Cycle } | null>(null);
+  const cycle: Cycle =
+    cycleOverride && cycleOverride.cfg === stackBuilderConfig
+      ? cycleOverride.value
+      : stackBuilderConfig?.defaultBillingCycle || 'monthly';
+  const setCycle = (val: Cycle) => setCycleOverride({ cfg: stackBuilderConfig, value: val });
   const [promoInput, setPromoInput] = useState('');
   const [promoApplied, setPromoApplied] = useState(false);
   const [appliedDiscountPercent, setAppliedDiscountPercent] = useState<number>(20);
@@ -110,11 +120,14 @@ export default function StackBuilderDrawer() {
   // Sync incoming stackBuilderConfig when opened
   React.useEffect(() => {
     if (stackBuilderConfig) {
-      const incomingSlug =
-        stackBuilderConfig.selectedStackSlug ||
-        (stackBuilderConfig.defaultStack ? resolveStackSlug(stackBuilderConfig.defaultStack) : 'nextjs-15-standalone');
-      setAppStack(incomingSlug);
-      setSelectedPidOverride(null);
+      const timer = window.setTimeout(() => {
+        const incomingSlug =
+          stackBuilderConfig.selectedStackSlug ||
+          (stackBuilderConfig.defaultStack ? resolveStackSlug(stackBuilderConfig.defaultStack) : 'nextjs-15-standalone');
+        setAppStack(incomingSlug);
+        setSelectedPidOverride(null);
+      }, 0);
+      return () => window.clearTimeout(timer);
     }
   }, [stackBuilderConfig]);
 
@@ -157,6 +170,7 @@ export default function StackBuilderDrawer() {
     available: boolean;
     tld: string;
     checked: boolean;
+    error?: string;
   } | null>(null);
   const [claimedFreeDomain, setClaimedFreeDomain] = useState<string | null>(null);
 
@@ -183,18 +197,38 @@ export default function StackBuilderDrawer() {
     stackBuilderConfig?.minPlanPid ||
     PLAN_SLUG_TO_PID[activeBlueprint.recommended_plan_slug]?.pid ||
     1;
+  const livePlanMap: Record<number, (typeof PLAN_SPECS)[number]> = { ...PLAN_SPECS };
+  for (const dyn of dynamicPlans || []) {
+    const matchedPid =
+      dyn?.pid && livePlanMap[dyn.pid]
+        ? dyn.pid
+        : Number(
+            Object.entries(livePlanMap).find(
+              ([, spec]) => spec.slug === dyn?.slug || spec.slug === dyn?.id
+            )?.[0]
+          );
+    if (matchedPid && livePlanMap[matchedPid]) {
+      const mBdt = Number(dyn.priceMonthlyBDT || livePlanMap[matchedPid].monthlyBDT);
+      livePlanMap[matchedPid] = {
+        ...livePlanMap[matchedPid],
+        name: dyn.name || livePlanMap[matchedPid].name,
+        ram: dyn.ramGB ? `${dyn.ramGB} GB` : livePlanMap[matchedPid].ram,
+        cpu: dyn.cpuCores ? `${dyn.cpuCores} Core${dyn.cpuCores > 1 ? 's' : ''}` : livePlanMap[matchedPid].cpu,
+        storage: dyn.storageGB ? `${dyn.storageGB} GB NVMe` : livePlanMap[matchedPid].storage,
+        monthlyBDT: mBdt,
+        monthlyUSD: convertBdtToUsd(mBdt),
+      };
+    }
+  }
+
   const rawConfigPid =
     selectedPidOverride ||
     stackBuilderConfig?.pid ||
     stackBuilderConfig?.defaultPlanId ||
     minRequiredPid;
-  const pid = Math.max(rawConfigPid, Math.min(minRequiredPid, 3));
-  const hostingPlanName =
-    pid === 1
-      ? 'Starter Pack Cloud'
-      : pid === 3
-      ? 'Business Max Cloud'
-      : 'Developer Pro Cloud';
+  const pid = Math.max(rawConfigPid, minRequiredPid);
+  const selectedPlanSpec = livePlanMap[pid] || livePlanMap[2];
+  const hostingPlanName = `${selectedPlanSpec.name} Cloud`;
   const effectiveDomain = (
     customDomainInput.trim() ||
     stackBuilderConfig?.domainName ||
@@ -220,7 +254,7 @@ export default function StackBuilderDrawer() {
       ? `Domain Renewal: ${effectiveDomain || 'domain'} (${effectiveDomainYears} Yr)`
       : `Domain Registration: ${effectiveDomain || 'domain'} (${effectiveDomainYears} Yr)`;
   const planName = isDomainOrder ? domainOrderTitle : hostingPlanName;
-  const specs = PLAN_SPECS[pid] || PLAN_SPECS[2];
+  const specs = selectedPlanSpec;
 
   const eligibleFreeTlds = pid === 1 ? ['.xyz', '.shop'] : ['.com', '.net', '.org', '.xyz', '.shop'];
 
@@ -243,7 +277,7 @@ export default function StackBuilderDrawer() {
   const finalTotal = isDomainOrder
     ? isBDT
       ? domainTotalBDT
-      : Number((domainTotalBDT / 120).toFixed(2))
+      : convertBdtToUsd(domainTotalBDT)
     : promoApplied
     ? isBDT
       ? Math.round(hostingSubtotal * discountMultiplier)
@@ -307,21 +341,32 @@ export default function StackBuilderDrawer() {
     try {
       const res = await fetch(`/api/domain-check?domain=${encodeURIComponent(fullDomain)}`);
       const data = await res.json();
+      if (!res.ok) {
+        setDomainCheckResult({
+          domain: fullDomain,
+          available: false,
+          tld: targetTld,
+          checked: true,
+          error: data?.error || 'Could not verify live domain availability.',
+        });
+        return;
+      }
       const isAvailable = data.results
-        ? data.results.some((r: any) => r.domain === fullDomain && r.available)
+        ? Boolean(data.results.find((r: { domain?: string; available?: boolean }) => r.domain === fullDomain)?.available)
         : data.registered === false;
       setDomainCheckResult({
         domain: fullDomain,
-        available: isAvailable ?? true,
+        available: isAvailable,
         tld: targetTld,
         checked: true,
       });
     } catch {
       setDomainCheckResult({
         domain: fullDomain,
-        available: true,
+        available: false,
         tld: targetTld,
         checked: true,
+        error: 'Network error while verifying live domain availability. Please retry.',
       });
     } finally {
       setIsSearchingDomain(false);
@@ -419,8 +464,8 @@ export default function StackBuilderDrawer() {
         } else {
           setVerificationError(payData.error || 'Wallet payment failed');
         }
-      } catch (err: any) {
-        setVerificationError(err.message || 'Payment failed');
+      } catch (err: unknown) {
+        setVerificationError(err instanceof Error ? err.message : 'Payment failed');
       } finally {
         setIsSubmitting(false);
       }
@@ -459,8 +504,8 @@ export default function StackBuilderDrawer() {
       setCreatedInvoiceNumber(data.invoiceNumber);
       setManualMerchantNumber(data.instructions?.merchantNumber || '');
       setPaymentStep('manual_verification');
-    } catch (err: any) {
-      setVerificationError(err.message || 'Failed to start payment');
+    } catch (err: unknown) {
+      setVerificationError(err instanceof Error ? err.message : 'Failed to start payment');
     } finally {
       setIsSubmitting(false);
     }
@@ -506,8 +551,8 @@ export default function StackBuilderDrawer() {
       }
 
       setPaymentStep('submitted');
-    } catch (err: any) {
-      setVerificationError(err.message || 'Failed to submit transaction ID');
+    } catch (err: unknown) {
+      setVerificationError(err instanceof Error ? err.message : 'Failed to submit transaction ID');
     } finally {
       setIsSubmitting(false);
     }
@@ -747,20 +792,18 @@ export default function StackBuilderDrawer() {
                     </span>
                   )}
                 </label>
-                <div className="grid grid-cols-3 gap-2">
-                  {[
-                    { id: 1, title: 'Starter Pack', ram: '1 GB RAM', price: '৳200/mo' },
-                    { id: 2, title: 'Developer Pro', ram: '2 GB RAM', price: '৳450/mo' },
-                    { id: 3, title: 'Business Max', ram: '4 GB RAM', price: '৳900/mo' },
-                  ].map((tier) => {
-                    const isLocked = tier.id < Math.min(minRequiredPid, 3);
-                    const isSelected = pid === tier.id;
+                <div className={pid >= 100 ? 'grid grid-cols-2 sm:grid-cols-4 gap-2' : 'grid grid-cols-3 gap-2'}>
+                  {(pid >= 100 ? [101, 102, 103, 104] : [1, 2, 3]).map((tierId) => {
+                    const spec = livePlanMap[tierId];
+                    const isLocked = tierId < minRequiredPid;
+                    const isSelected = pid === tierId;
+                    const displayTierPrice = isBDT ? `৳${spec.monthlyBDT}/mo` : `$${spec.monthlyUSD}/mo`;
                     return (
                       <button
-                        key={tier.id}
+                        key={tierId}
                         type="button"
                         disabled={isLocked}
-                        onClick={() => setSelectedPidOverride(tier.id)}
+                        onClick={() => setSelectedPidOverride(tierId)}
                         className={`p-2.5 rounded-xl border text-left transition-all ${
                           isLocked
                             ? 'opacity-45 cursor-not-allowed border-slate-200 dark:border-white/5 bg-slate-100 dark:bg-zinc-900/40'
@@ -770,11 +813,11 @@ export default function StackBuilderDrawer() {
                         }`}
                       >
                         <div className="font-bold text-slate-900 dark:text-white flex items-center justify-between">
-                          <span>{tier.title}</span>
+                          <span>{spec.name}</span>
                           {isLocked && <Lock className="w-3 h-3 text-rose-500" />}
                         </div>
                         <div className="text-[10px] font-mono text-blue-600 dark:text-blue-400 mt-0.5">
-                          {tier.ram} • {tier.price}
+                          {spec.ram} RAM • {displayTierPrice}
                         </div>
                       </button>
                     );
@@ -921,18 +964,24 @@ export default function StackBuilderDrawer() {
                             <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
                           )}
                           <span>
-                            <strong>{domainCheckResult.domain}</strong> is{' '}
-                            {domainCheckResult.available ? 'available!' : 'already taken.'}
+                            {domainCheckResult.error ? (
+                              domainCheckResult.error
+                            ) : (
+                              <>
+                                <strong>{domainCheckResult.domain}</strong> is{' '}
+                                {domainCheckResult.available ? 'available!' : 'already taken.'}
+                              </>
+                            )}
                           </span>
                         </div>
 
-                        {domainCheckResult.available && (
+                        {domainCheckResult.available && !domainCheckResult.error && (
                           <button
                             type="button"
                             onClick={() => handleClaimFreeDomain(domainCheckResult.domain)}
                             className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] cursor-pointer shadow-xs"
                           >
-                            Claim (৳0)
+                            Claim ({isBDT ? '৳0' : '$0'})
                           </button>
                         )}
                       </div>
@@ -1189,7 +1238,7 @@ export default function StackBuilderDrawer() {
                         <button
                           type="button"
                           onClick={() => {
-                            const nextPath = typeof window !== 'undefined' ? window.location.pathname : '/domains';
+                            const nextPath = typeof window !== 'undefined' ? window.location.pathname : '/cheap-domain-registration-bd';
                             setIsPaymentModalOpen(false);
                             closeStackBuilder();
                             router.push(`/login?next=${encodeURIComponent(nextPath)}`);
@@ -1201,7 +1250,7 @@ export default function StackBuilderDrawer() {
                         <button
                           type="button"
                           onClick={() => {
-                            const nextPath = typeof window !== 'undefined' ? window.location.pathname : '/domains';
+                            const nextPath = typeof window !== 'undefined' ? window.location.pathname : '/cheap-domain-registration-bd';
                             setIsPaymentModalOpen(false);
                             closeStackBuilder();
                             router.push(`/register?next=${encodeURIComponent(nextPath)}`);

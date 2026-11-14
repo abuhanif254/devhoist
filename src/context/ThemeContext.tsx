@@ -12,39 +12,35 @@ interface ThemeContextType {
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
+const applyTheme = (t: Theme) => {
+  const root = document.documentElement;
+  if (t === 'dark') {
+    root.classList.remove('light');
+    root.classList.add('dark');
+  } else {
+    root.classList.remove('dark');
+    root.classList.add('light');
+  }
+};
+
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   // Default theme is strictly 'light'
   const [theme, setTheme] = useState<Theme>('light');
-  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    setMounted(true);
     // Remove any stale legacy 'dark' preference from earlier sessions
     localStorage.removeItem('devhost-theme');
     localStorage.removeItem('devhost-theme-v2');
     localStorage.removeItem('devhost-theme-v3');
 
     const savedTheme = localStorage.getItem('devhost-theme-v4') as Theme | null;
-    if (savedTheme === 'dark') {
-      setTheme('dark');
-      applyTheme('dark');
-    } else {
-      // Light mode by default
-      setTheme('light');
-      applyTheme('light');
-    }
+    const resolvedTheme: Theme = savedTheme === 'dark' ? 'dark' : 'light';
+    applyTheme(resolvedTheme);
+    const timer = window.setTimeout(() => {
+      setTheme(resolvedTheme);
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, []);
-
-  const applyTheme = (t: Theme) => {
-    const root = document.documentElement;
-    if (t === 'dark') {
-      root.classList.remove('light');
-      root.classList.add('dark');
-    } else {
-      root.classList.remove('dark');
-      root.classList.add('light');
-    }
-  };
 
   const handleSetTheme = (newTheme: Theme) => {
     setTheme(newTheme);

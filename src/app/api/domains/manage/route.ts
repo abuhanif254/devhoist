@@ -9,6 +9,8 @@ import {
   serviceUnavailableResponse,
 } from '@/lib/authGuard';
 import {
+  consumePaidDomainEntitlement,
+  releasePaidDomainEntitlement,
   resolveDomainTldPriceBDT,
   verifyPaidDomainEntitlement,
 } from '@/lib/billingEntitlements';
@@ -168,21 +170,33 @@ export async function POST(request: NextRequest) {
       userId = adminAuth.user.id;
       userRole = 'admin';
     } else {
-      if (!resolvedDomainId && db) {
+      if (db) {
         if (action === 'delete_child_nameserver' && childId) {
           const { data: childRow } = await db
             .from('domain_child_nameservers')
             .select('domain_id')
             .eq('id', childId)
             .maybeSingle();
-          resolvedDomainId = childRow?.domain_id;
+          if (!childRow) {
+            return NextResponse.json({ success: false, error: 'Child nameserver record not found.' }, { status: 404 });
+          }
+          if (resolvedDomainId && childRow.domain_id && childRow.domain_id !== resolvedDomainId) {
+            return NextResponse.json({ success: false, error: 'Forbidden child nameserver access.' }, { status: 403 });
+          }
+          resolvedDomainId = childRow.domain_id || resolvedDomainId;
         } else if (action === 'delete_url_forward' && forwardId) {
           const { data: fwdRow } = await db
             .from('domain_url_forwards')
             .select('domain_id')
             .eq('id', forwardId)
             .maybeSingle();
-          resolvedDomainId = fwdRow?.domain_id;
+          if (!fwdRow) {
+            return NextResponse.json({ success: false, error: 'Redirect rule not found.' }, { status: 404 });
+          }
+          if (resolvedDomainId && fwdRow.domain_id && fwdRow.domain_id !== resolvedDomainId) {
+            return NextResponse.json({ success: false, error: 'Forbidden redirect rule access.' }, { status: 403 });
+          }
+          resolvedDomainId = fwdRow.domain_id || resolvedDomainId;
         }
       }
 
@@ -366,16 +380,18 @@ export async function POST(request: NextRequest) {
 
       let targetHost = childHostname?.trim().toLowerCase() || '';
       let targetIpv4 = childIpv4?.trim() || '';
-      if (db && (!targetHost || !targetIpv4)) {
+      if (db) {
         const { data: row } = await db
           .from('domain_child_nameservers')
-          .select('hostname, ipv4_address')
+          .select('hostname, ipv4_address, domain_id')
           .eq('id', childId)
+          .eq('domain_id', resolvedDomainId)
           .maybeSingle();
-        if (row) {
-          targetHost = targetHost || row.hostname;
-          targetIpv4 = targetIpv4 || row.ipv4_address;
+        if (!row) {
+          return NextResponse.json({ success: false, error: 'Child nameserver record not found for domain.' }, { status: 404 });
         }
+        targetHost = row.hostname || targetHost;
+        targetIpv4 = row.ipv4_address || targetIpv4;
       }
 
       if (targetHost) {
@@ -393,7 +409,11 @@ export async function POST(request: NextRequest) {
       }
 
       if (db) {
-        const { error } = await db.from('domain_child_nameservers').delete().eq('id', childId);
+        const { error } = await db
+          .from('domain_child_nameservers')
+          .delete()
+          .eq('id', childId)
+          .eq('domain_id', resolvedDomainId);
         if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
       }
 
@@ -491,9 +511,14 @@ export async function POST(request: NextRequest) {
       if (db) {
         const { data: fwd } = await db
           .from('domain_url_forwards')
-          .select('cloudflare_rule_id')
+          .select('cloudflare_rule_id, domain_id')
           .eq('id', forwardId)
+          .eq('domain_id', resolvedDomainId)
           .maybeSingle();
+
+        if (!fwd) {
+          return NextResponse.json({ success: false, error: 'Redirect rule not found for domain.' }, { status: 404 });
+        }
 
         if (isCloudflareConfigured() && fwd?.cloudflare_rule_id && domainMeta.cloudflareZoneId) {
           const cfDel = await deleteCloudflareRedirectRule(
@@ -508,7 +533,11 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        const { error } = await db.from('domain_url_forwards').delete().eq('id', forwardId);
+        const { error } = await db
+          .from('domain_url_forwards')
+          .delete()
+          .eq('id', forwardId)
+          .eq('domain_id', resolvedDomainId);
         if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
       }
 
@@ -670,9 +699,28 @@ export async function POST(request: NextRequest) {
           { status: 402 }
         );
       }
-      const renewalYears = Math.max(1, Math.min(10, Number(years || 1)));
+      const requestedYears = Math.max(1, Math.min(10, Number(years || 1)));
+      const renewalYears =
+        entitlement.via === 'admin'
+          ? requestedYears
+          : Math.min(requestedYears, entitlement.authorizedYears || 1);
+
+      const claimed = await consumePaidDomainEntitlement({
+        db,
+        entitlement,
+        domain: activeDomainName,
+        operation: 'renew',
+      });
+      if (!claimed.ok) {
+        return NextResponse.json(
+          { success: false, code: 'ENTITLEMENT_ALREADY_USED', error: claimed.error },
+          { status: 409 }
+        );
+      }
+
       const regRes = await renewDomainWithRegistrar({ domain: activeDomainName, years: renewalYears });
       if (!regRes.ok) {
+        await releasePaidDomainEntitlement({ db, entitlement });
         return NextResponse.json(
           { success: false, error: regRes.message || regRes.error || 'Domain renewal failed.' },
           { status: regRes.statusCode || 502 }
@@ -745,11 +793,25 @@ export async function POST(request: NextRequest) {
           );
         }
 
+        const claimed = await consumePaidDomainEntitlement({
+          db,
+          entitlement,
+          domain: cleanDomain,
+          operation: 'transfer',
+        });
+        if (!claimed.ok) {
+          return NextResponse.json(
+            { success: false, code: 'ENTITLEMENT_ALREADY_USED', error: claimed.error },
+            { status: 409 }
+          );
+        }
+
         const regRes = await transferDomainWithRegistrar({
           domain: cleanDomain,
           eppCode: eppCode.trim(),
         });
         if (!regRes.ok) {
+          await releasePaidDomainEntitlement({ db, entitlement });
           return NextResponse.json(
             { success: false, error: regRes.message || regRes.error || 'Registrar transfer submission failed.' },
             { status: regRes.statusCode || 502 }
@@ -896,6 +958,7 @@ export async function POST(request: NextRequest) {
 
       let targetDomain = String(domainName || '').trim().toLowerCase();
       let existingRegistrarTransferId: string | null = null;
+      let isRetryForRejectedTransfer = false;
       if (db) {
         const { data: existingTrf, error: fetchErr } = await db
           .from('domain_transfers')
@@ -919,6 +982,8 @@ export async function POST(request: NextRequest) {
         existingRegistrarTransferId = existingTrf.registrar_transfer_id
           ? String(existingTrf.registrar_transfer_id)
           : null;
+        isRetryForRejectedTransfer =
+          existingTrf.status === 'rejected_invalid_epp' || existingTrf.epp_status === 'rejected';
       }
 
       if (!targetDomain) {
@@ -932,12 +997,28 @@ export async function POST(request: NextRequest) {
         domain: targetDomain,
         operation: 'transfer',
         invoiceNumber: invoiceNumber || null,
+        allowConsumedRetry: isRetryForRejectedTransfer,
       });
       if (!entitlement.entitled) {
         return NextResponse.json(
           { success: false, code: 'PAYMENT_REQUIRED', error: entitlement.reason },
           { status: 402 }
         );
+      }
+
+      if (!isRetryForRejectedTransfer) {
+        const claimed = await consumePaidDomainEntitlement({
+          db,
+          entitlement,
+          domain: targetDomain,
+          operation: 'transfer',
+        });
+        if (!claimed.ok) {
+          return NextResponse.json(
+            { success: false, code: 'ENTITLEMENT_ALREADY_USED', error: claimed.error },
+            { status: 409 }
+          );
+        }
       }
 
       const encryptedEpp = await encryptEppCode(eppCode.trim());
@@ -948,6 +1029,9 @@ export async function POST(request: NextRequest) {
       const nowIso = new Date().toISOString();
 
       if (!regRes.ok) {
+        if (!isRetryForRejectedTransfer) {
+          await releasePaidDomainEntitlement({ db, entitlement });
+        }
         if (db) {
           await db
             .from('domain_transfers')

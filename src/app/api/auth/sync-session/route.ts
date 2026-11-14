@@ -112,10 +112,13 @@ export async function POST(request: NextRequest) {
     });
 
     return response;
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('[Sync Session Fatal Error]:', err);
     return NextResponse.json(
-      { error: 'Internal Server Error', message: err.message || 'Failed to sync session' },
+      {
+        error: 'Internal Server Error',
+        message: err instanceof Error ? err.message : 'Failed to sync session',
+      },
       { status: 500 }
     );
   }

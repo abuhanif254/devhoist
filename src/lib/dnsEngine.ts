@@ -213,7 +213,7 @@ export function parseBindZone(bindText: string, defaultDomain: string): DnsRecor
   let origin = defaultDomain.replace(/\.$/, '');
   let defaultTtl = 3600;
 
-  for (let rawLine of lines) {
+  for (const rawLine of lines) {
     // Strip comments
     const commentIdx = rawLine.indexOf(';');
     const line = (commentIdx >= 0 ? rawLine.substring(0, commentIdx) : rawLine).trim();
@@ -284,7 +284,7 @@ export function parseBindZone(bindText: string, defaultDomain: string): DnsRecor
 
     parsed.push({
       id: `imported_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
-      type: typeCandidate as any,
+      type: typeCandidate as DnsRecord['type'],
       name: name || '@',
       content,
       ttl,

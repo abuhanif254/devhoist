@@ -34,15 +34,25 @@ let lockdownCacheTimestamp = 0;
 /**
  * Extract clean client IP address from Edge request headers
  */
-export function getClientIp(request: Request | any): string {
+type HeaderContainer = Headers | Record<string, string | string[] | undefined>;
+
+function readHeaderValue(headers: HeaderContainer, key: string): string | undefined {
+  if (typeof (headers as Headers).get === 'function') {
+    return (headers as Headers).get(key) ?? undefined;
+  }
+  const val = (headers as Record<string, string | string[] | undefined>)[key];
+  return Array.isArray(val) ? val[0] : val;
+}
+
+export function getClientIp(request: Request | { headers: HeaderContainer }): string {
   const headers = request.headers;
-  const cfConnectingIp = headers.get ? headers.get('cf-connecting-ip') : headers['cf-connecting-ip'];
+  const cfConnectingIp = readHeaderValue(headers, 'cf-connecting-ip');
   if (cfConnectingIp) return cfConnectingIp.split(',')[0].trim();
 
-  const xRealIp = headers.get ? headers.get('x-real-ip') : headers['x-real-ip'];
+  const xRealIp = readHeaderValue(headers, 'x-real-ip');
   if (xRealIp) return xRealIp.split(',')[0].trim();
 
-  const xForwardedFor = headers.get ? headers.get('x-forwarded-for') : headers['x-forwarded-for'];
+  const xForwardedFor = readHeaderValue(headers, 'x-forwarded-for');
   if (xForwardedFor) return xForwardedFor.split(',')[0].trim();
 
   return '127.0.0.1';
@@ -255,7 +265,10 @@ export async function getSecurityLockdown(): Promise<SecurityLockdownConfig> {
       .maybeSingle();
 
     if (data && data.config_value) {
-      const resolved: SecurityLockdownConfig = { ...defaultLockdown, ...(data.config_value as Record<string, any>) };
+      const resolved: SecurityLockdownConfig = {
+        ...defaultLockdown,
+        ...(data.config_value as Partial<SecurityLockdownConfig>),
+      };
       lockdownCache = resolved;
       lockdownCacheTimestamp = now;
       return resolved;
@@ -292,7 +305,7 @@ export async function getCmsConfig<T>(key: string, fallback: T): Promise<T> {
 /**
  * Update any CMS config (requires admin)
  */
-export async function updateCmsConfig(key: string, value: any): Promise<boolean> {
+export async function updateCmsConfig(key: string, value: unknown): Promise<boolean> {
   if (key === 'security_lockdown') lockdownCache = null;
 
   if (!isSupabaseConfigured()) return true;

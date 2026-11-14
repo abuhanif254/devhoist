@@ -1,7 +1,7 @@
 FROM node:22-alpine
 
 WORKDIR /opt/devhost-agent
-RUN apk add --no-cache docker-cli caddy-client postgresql16-client mariadb-client tar gzip
+RUN apk add --no-cache docker-cli git ca-certificates postgresql16-client mariadb-client tar gzip
 
 COPY package.json server.mjs ./
 

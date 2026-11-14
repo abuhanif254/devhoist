@@ -328,6 +328,14 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ success: false, error: 'invoiceId or invoiceNumber is required.' }, { status: 400 });
       }
 
+      const sudoValid = await verifySudoToken(req, adminAuth.user.id);
+      if (!sudoValid) {
+        return NextResponse.json(
+          { success: false, requireSudo: true, error: 'Admin Sudo elevation is required to approve manual transactions.' },
+          { status: 403 }
+        );
+      }
+
       const gross = Number(grossAmountBdt) || 0;
       const cogs = Number(cogsBdt) || 0;
       const aff = Number(affiliateCutBdt) || 0;
@@ -432,6 +440,14 @@ export async function POST(req: NextRequest) {
     // 2B. Reject Fake Transaction ID (Fraud Strike)
     if (action === 'reject_trxid') {
       const { invoiceId, invoiceNumber, trxId, reason } = body;
+
+      const sudoValid = await verifySudoToken(req, adminAuth.user.id);
+      if (!sudoValid) {
+        return NextResponse.json(
+          { success: false, requireSudo: true, error: 'Admin Sudo elevation is required to reject transactions.' },
+          { status: 403 }
+        );
+      }
 
       if (isSupabaseConfigured()) {
         const db = getServiceSupabase();

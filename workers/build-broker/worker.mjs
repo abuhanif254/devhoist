@@ -37,6 +37,7 @@ const buildBrokerWorker = {
 
         const rawBody = JSON.stringify({ ...job, envVars: job.envVars || {} });
         const timestamp = String(Date.now());
+        const nonce = crypto.randomUUID();
         const signature = await signPayload(secret, timestamp, rawBody);
 
         const res = await fetch(`${targetUrl}/v1/builds/deploy`, {
@@ -44,6 +45,7 @@ const buildBrokerWorker = {
           headers: {
             Authorization: `Bearer ${secret}`,
             'X-DevHost-Timestamp': timestamp,
+            'X-DevHost-Nonce': nonce,
             'X-DevHost-Signature': signature,
             'Content-Type': 'application/json',
           },

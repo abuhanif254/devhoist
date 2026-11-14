@@ -25,6 +25,9 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { url: `${baseUrl}/enterprise`, lastModified: currentDate, changeFrequency: 'weekly', priority: 0.9 },
     { url: `${baseUrl}/about`, lastModified: currentDate, changeFrequency: 'monthly', priority: 0.6 },
     { url: `${baseUrl}/contact`, lastModified: currentDate, changeFrequency: 'monthly', priority: 0.6 },
+    { url: `${baseUrl}/tools`, lastModified: currentDate, changeFrequency: 'weekly', priority: 0.8 },
+    { url: `${baseUrl}/legal`, lastModified: currentDate, changeFrequency: 'monthly', priority: 0.5 },
+    { url: `${baseUrl}/abuse`, lastModified: currentDate, changeFrequency: 'monthly', priority: 0.5 },
     { url: `${baseUrl}/terms`, lastModified: currentDate, changeFrequency: 'monthly', priority: 0.5 },
     { url: `${baseUrl}/privacy`, lastModified: currentDate, changeFrequency: 'monthly', priority: 0.5 },
     { url: `${baseUrl}/refund-policy`, lastModified: currentDate, changeFrequency: 'monthly', priority: 0.5 },
@@ -53,7 +56,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   }
 
   const docsRoutes: MetadataRoute.Sitemap = docsArticles.map((art) => ({
-    url: `${baseUrl}/docs?article=${encodeURIComponent(art.slug)}`,
+    url: `${baseUrl}/docs/${encodeURIComponent(art.slug)}`,
     lastModified: art.updated_at ? new Date(art.updated_at) : currentDate,
     changeFrequency: 'weekly',
     priority: 0.8,

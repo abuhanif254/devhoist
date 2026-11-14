@@ -26,7 +26,7 @@ const CORE_SERVICES: CoreServiceDef[] = [
   { id: 'registrar-api', name: 'Domain Registrar & Provisioning Engine', category: 'Registrar Engine' },
 ];
 
-export interface DayUptimeBucket {
+interface DayUptimeBucket {
   dayIndex: number;
   date: string;
   status: 'operational' | 'degraded' | 'outage' | 'no_data';

@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, Suspense } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Terminal,
   ShieldCheck,
@@ -17,12 +17,15 @@ import {
   AlertTriangle,
   Loader2,
 } from 'lucide-react';
-import { supabase } from '@/lib/supabase';
-import { isDisposableEmail } from '@/lib/authSecurity';
+import { supabase, syncAuthCookie } from '@/lib/supabase';
+import { isDisposableEmail, sanitizeRedirect } from '@/lib/authSecurity';
 import Auth3DScene from '@/components/visuals/Auth3DScene';
 
-export default function RegisterPage() {
+function RegisterPageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const rawRedirect = searchParams.get('redirect') || searchParams.get('from') || searchParams.get('next');
+  const redirectParam = sanitizeRedirect(rawRedirect);
 
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
@@ -56,7 +59,7 @@ export default function RegisterPage() {
       });
       setResendSuccess(true);
       setResendCooldown(60);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.warn('[Resend verification error]:', err);
       setResendSuccess(true);
       setResendCooldown(60);
@@ -122,7 +125,7 @@ export default function RegisterPage() {
         });
 
         const text = await res.text();
-        let data: any = {};
+        let data: { success?: boolean; error?: string } = {};
         try {
           data = JSON.parse(text);
         } catch {
@@ -150,8 +153,8 @@ export default function RegisterPage() {
         );
       }
 
-      // 3. Authenticate and redirect to dashboard
-      const { error: signInErr } = await supabase.auth.signInWithPassword({
+      // 3. Authenticate and redirect to requested next destination or dashboard
+      const { data: signInData, error: signInErr } = await supabase.auth.signInWithPassword({
         email: cleanEmail,
         password,
       });
@@ -162,10 +165,13 @@ export default function RegisterPage() {
         setRequiresVerification(true);
         setResendCooldown(60);
       } else {
-        router.push('/dashboard');
+        if (signInData?.session) {
+          await syncAuthCookie(signInData.session, 'client');
+        }
+        router.push(redirectParam || '/dashboard');
       }
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Registration failed. Please try again.');
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : 'Registration failed. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
@@ -173,10 +179,10 @@ export default function RegisterPage() {
 
   const handleOAuthSignUp = async (provider: 'github' | 'google') => {
     try {
-      const { data, error } = await supabase.auth.signInWithOAuth({
+      const { error } = await supabase.auth.signInWithOAuth({
         provider,
         options: {
-          redirectTo: `${window.location.origin}/auth/callback?next=/dashboard`,
+          redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(redirectParam || '/dashboard')}`,
         },
       });
       if (error) {
@@ -184,7 +190,7 @@ export default function RegisterPage() {
           `${provider === 'google' ? 'Google' : 'GitHub'} OAuth is not enabled in Supabase yet. Please register below with your Name, Email & Password.`
         );
       }
-    } catch (err: any) {
+    } catch {
       setErrorMsg(
         `${provider === 'google' ? 'Google' : 'GitHub'} OAuth is not enabled in Supabase yet. Please register below with your Name, Email & Password.`
       );
@@ -461,7 +467,10 @@ export default function RegisterPage() {
           <div className="text-center pt-2">
             <p className="text-xs text-slate-600 dark:text-zinc-400">
               Already have an account?{' '}
-              <Link href="/login" className="font-semibold text-blue-600 dark:text-blue-400 hover:underline">
+              <Link
+                href={redirectParam && redirectParam !== '/dashboard' ? `/login?next=${encodeURIComponent(redirectParam)}` : '/login'}
+                className="font-semibold text-blue-600 dark:text-blue-400 hover:underline"
+              >
                 Sign in here
               </Link>
             </p>
@@ -492,5 +501,13 @@ export default function RegisterPage() {
         <Auth3DScene />
       </div>
     </div>
+  );
+}
+
+export default function RegisterPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen w-full flex items-center justify-center bg-white dark:bg-zinc-950 text-sm text-slate-500">Loading registration...</div>}>
+      <RegisterPageContent />
+    </Suspense>
   );
 }

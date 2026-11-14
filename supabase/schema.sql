@@ -1561,12 +1561,23 @@ CREATE POLICY "Admins full access on whm_server_nodes" ON public.whm_server_node
         EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role IN ('admin', 'superadmin'))
     );
 
--- 4. cms_global_config: Public can read sitewide settings, only admins can modify
+-- 4. cms_global_config: Public can only read explicitly public UI config keys; admins can read/modify all
 CREATE POLICY "Public read cms_global_config" ON public.cms_global_config
-    FOR SELECT USING (true);
+    FOR SELECT USING (
+        config_key IN (
+            'announcement_banner',
+            'hero_cms_content',
+            'public_branding',
+            'footer_links',
+            'pricing_badges'
+        )
+        OR EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role IN ('admin', 'superadmin'))
+    );
 
 CREATE POLICY "Admins modify cms_global_config" ON public.cms_global_config
     FOR ALL USING (
+        EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role IN ('admin', 'superadmin'))
+    ) WITH CHECK (
         EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role IN ('admin', 'superadmin'))
     );
 

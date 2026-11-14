@@ -10,7 +10,7 @@ import {
 } from '@/lib/cloudflareClient';
 import { whmClient } from '@/lib/whmClient';
 
-export interface EmailAccountRecord {
+interface EmailAccountRecord {
   id: string;
   service_id: string;
   user_id?: string;
@@ -25,7 +25,7 @@ export interface EmailAccountRecord {
   created_at: string;
 }
 
-export interface EmailDeliverabilityHealth {
+interface EmailDeliverabilityHealth {
   spfConfigured: boolean;
   dkimConfigured: boolean;
   dmarcConfigured: boolean;
@@ -230,8 +230,42 @@ export async function POST(req: NextRequest) {
       const cleanLocal = (localPart || 'hello')
         .toLowerCase()
         .replace(/[^a-z0-9._-]/g, '');
-      const targetDomain = domain || target.domain;
-      const fullAddress = emailAddress || `${cleanLocal}@${targetDomain}`;
+      const targetDomain = String(domain || target.domain).trim().toLowerCase();
+      if (supabaseAdmin && domain && targetDomain !== target.domain.toLowerCase()) {
+        const { data: addonRow } = await supabaseAdmin
+          .from('hosting_addon_domains')
+          .select('id, verification_status')
+          .eq('service_id', serviceId)
+          .eq('hostname', targetDomain)
+          .maybeSingle();
+        if (!addonRow) {
+          return NextResponse.json(
+            { success: false, error: 'Forbidden: Target email domain does not belong to this hosting service.' },
+            { status: 403 }
+          );
+        }
+      }
+
+      const fullAddress = (emailAddress || `${cleanLocal}@${targetDomain}`).trim().toLowerCase();
+      if (!fullAddress.endsWith(`@${targetDomain}`)) {
+        return NextResponse.json(
+          { success: false, error: `Email address must belong to @${targetDomain}.` },
+          { status: 400 }
+        );
+      }
+      if (supabaseAdmin) {
+        const { data: existingMail } = await supabaseAdmin
+          .from('hosting_email_accounts')
+          .select('id, service_id')
+          .eq('email_address', fullAddress)
+          .maybeSingle();
+        if (existingMail && existingMail.service_id && existingMail.service_id !== serviceId) {
+          return NextResponse.json(
+            { success: false, error: 'Mailbox address is already provisioned on another service.' },
+            { status: 409 }
+          );
+        }
+      }
       const safeQuota = Math.max(250, Math.min(10240, Number(quotaMb) || 1024));
 
       if (agentConfigured || sandbox) {
@@ -321,7 +355,23 @@ export async function POST(req: NextRequest) {
         return serviceUnavailableResponse('Mail Compute Plane');
       }
 
-      const targetEmail = emailAddress || `info@${domain || target.domain}`;
+      let targetEmail = emailAddress || `info@${domain || target.domain}`;
+      if (supabaseAdmin && mailboxId) {
+        const { data: mailRow } = await supabaseAdmin
+          .from('hosting_email_accounts')
+          .select('id, email_address, service_id')
+          .eq('id', mailboxId)
+          .eq('service_id', serviceId)
+          .maybeSingle();
+        if (!mailRow) {
+          return NextResponse.json(
+            { success: false, error: 'Mailbox not found for this hosting service.' },
+            { status: 404 }
+          );
+        }
+        targetEmail = String(mailRow.email_address || targetEmail);
+      }
+
       const updRes = await provisionMailboxOnAgent(
         {
           action: 'update',
@@ -353,7 +403,8 @@ export async function POST(req: NextRequest) {
             autoresponder_subject: autoresponderSubject || null,
             autoresponder_body: autoresponderBody || null,
           })
-          .eq('id', mailboxId);
+          .eq('id', mailboxId)
+          .eq('service_id', serviceId);
       }
 
       return NextResponse.json({
@@ -372,12 +423,19 @@ export async function POST(req: NextRequest) {
         ? (
             await supabaseAdmin
               .from('hosting_email_accounts')
-              .select('email_address')
+              .select('email_address, service_id')
               .eq('id', mailboxId)
+              .eq('service_id', serviceId)
               .maybeSingle()
           ).data
         : null;
-      const targetEmail = emailAddress || String(mailRow?.email_address || `mailbox@${domain || target.domain}`);
+      if (supabaseAdmin && mailboxId && !mailRow) {
+        return NextResponse.json(
+          { success: false, error: 'Mailbox not found for this hosting service.' },
+          { status: 404 }
+        );
+      }
+      const targetEmail = String(mailRow?.email_address || emailAddress || `mailbox@${domain || target.domain}`);
 
       if (agentConfigured || sandbox) {
         const delRes = await provisionMailboxOnAgent(
@@ -408,7 +466,8 @@ export async function POST(req: NextRequest) {
         await supabaseAdmin
           .from('hosting_email_accounts')
           .delete()
-          .eq('id', mailboxId);
+          .eq('id', mailboxId)
+          .eq('service_id', serviceId);
       }
 
       return NextResponse.json({

@@ -115,7 +115,7 @@ export function recordClientFailedAttempt(): { isLocked: boolean; remainingSecon
   try {
     const raw = localStorage.getItem(ATTEMPTS_STORAGE_KEY);
     const now = Date.now();
-    let state: LockoutState = raw
+    const state: LockoutState = raw
       ? JSON.parse(raw)
       : { count: 0, lockedUntil: null, lastAttempt: now };
 

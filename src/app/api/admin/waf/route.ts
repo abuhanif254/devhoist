@@ -319,6 +319,14 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Rule ID or targetValue is required.' }, { status: 400 });
     }
 
+    const sudoValid = await verifySudoToken(req, adminAuth.user.id);
+    if (!sudoValid) {
+      return NextResponse.json(
+        { success: false, requireSudo: true, error: 'Admin Sudo elevation is required to delete Edge WAF rules.' },
+        { status: 403 }
+      );
+    }
+
     let cfRuleIdToDelete: string | null = null;
     if (isSupabaseConfigured()) {
       const db = getServiceSupabase();

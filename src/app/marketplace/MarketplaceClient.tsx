@@ -5,6 +5,7 @@ import Link from 'next/link';
 import Navbar from '@/components/Navbar';
 import DependencyAnalyzer from '@/components/developer/DependencyAnalyzer';
 import { useBilling } from '@/context/BillingContext';
+import { convertBdtToUsd } from '@/config/constants';
 import {
     UNIVERSAL_MARKETPLACE_STACKS,
     PLAN_SLUG_TO_PID,
@@ -108,7 +109,7 @@ export default function MarketplaceClient() {
             selectedStackSlug: stack.slug,
             defaultStack: stack.slug,
             basePriceBDT: planInfo.monthlyBdt,
-            basePriceUSD: Number((planInfo.monthlyBdt / 120).toFixed(2)),
+            basePriceUSD: convertBdtToUsd(planInfo.monthlyBdt),
             specs: {
                 ram: `${planInfo.ramMb / 1024} GB Dedicated`,
                 cpu: `${planInfo.cpuCores} Core vCPU`,
@@ -215,7 +216,7 @@ export default function MarketplaceClient() {
                                 PLAN_SLUG_TO_PID['developer-pro'];
                             const formattedPrice = formatPrice(
                                 planInfo.monthlyBdt,
-                                Number((planInfo.monthlyBdt / 120).toFixed(2))
+                                convertBdtToUsd(planInfo.monthlyBdt)
                             );
 
                             return (
@@ -606,7 +607,7 @@ export default function MarketplaceClient() {
                     <div className="flex items-center gap-4">
                         <Link href="/" className="hover:text-blue-600">Home</Link>
                         <Link href="/estimator" className="hover:text-blue-600">Pricing Estimator</Link>
-                        <Link href="/status" className="hover:text-blue-600">SLA Status</Link>
+                        <Link href="/server-status" className="hover:text-blue-600">SLA Status</Link>
                         <Link href="/dashboard" className="hover:text-blue-600">Cloud Console</Link>
                     </div>
                 </div>

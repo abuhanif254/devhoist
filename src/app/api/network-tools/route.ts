@@ -60,7 +60,7 @@ export async function GET(req: NextRequest) {
       }
 
       const dohData = await dohRes.json();
-      const answers = (dohData.Answer || []).map((ans: any) => ({
+      const answers = (dohData.Answer || []).map((ans: { name: string; TTL: number; data: string }) => ({
         name: ans.name,
         type: recordType,
         ttl: ans.TTL,
@@ -126,12 +126,13 @@ export async function GET(req: NextRequest) {
       // Extract entities (registrar, registrant)
       let registrar = 'Unknown / Privacy Protected';
       if (Array.isArray(data.entities)) {
-        const registrarEntity = data.entities.find((e: any) =>
+        const registrarEntity = (data.entities as Array<{ roles?: string[]; vcardArray?: unknown[] }>).find((e) =>
           e.roles?.includes('registrar')
         );
-        if (registrarEntity?.vcardArray?.[1]) {
-          const fn = registrarEntity.vcardArray[1].find((v: any) => v[0] === 'fn');
-          if (fn?.[3]) registrar = fn[3];
+        const vcardProps = registrarEntity?.vcardArray?.[1];
+        if (Array.isArray(vcardProps)) {
+          const fn = (vcardProps as unknown[][]).find((v) => Array.isArray(v) && v[0] === 'fn');
+          if (typeof fn?.[3] === 'string' && fn[3]) registrar = fn[3];
         }
       }
 
@@ -212,7 +213,7 @@ export async function GET(req: NextRequest) {
           redirect: 'follow',
           cache: 'no-store',
         });
-      } catch (err: any) {
+      } catch {
         // Retry with GET if HEAD is rejected by server
         try {
           auditRes = await fetch(parsed.toString(), {
@@ -220,9 +221,9 @@ export async function GET(req: NextRequest) {
             redirect: 'follow',
             cache: 'no-store',
           });
-        } catch (getErr: any) {
+        } catch (getErr: unknown) {
           return NextResponse.json(
-            { error: `Connection failed: ${getErr.message || 'Host unreachable'}` },
+            { error: `Connection failed: ${getErr instanceof Error ? getErr.message : 'Host unreachable'}` },
             { status: 502 }
           );
         }
@@ -279,9 +280,9 @@ export async function GET(req: NextRequest) {
       { error: "Invalid tool requested. Available tools: 'dns', 'whois', 'headers'" },
       { status: 400 }
     );
-  } catch (error: any) {
+  } catch (error: unknown) {
     return NextResponse.json(
-      { error: error.message || 'Internal Edge processing error' },
+      { error: error instanceof Error ? error.message : 'Internal Edge processing error' },
       { status: 500 }
     );
   }

@@ -108,15 +108,22 @@ export default function AdminDocsSeoStudio() {
           }
         }
       }
-    } catch (err: any) {
-      setMessage({ type: 'error', text: 'Failed to load CMS & SEO data: ' + err.message });
+    } catch (err: unknown) {
+      setMessage({
+        type: 'error',
+        text: 'Failed to load CMS & SEO data: ' + (err instanceof Error ? err.message : 'Unknown error'),
+      });
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadData();
+    const timer = window.setTimeout(() => {
+      void loadData();
+    }, 0);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const triggerSudoAction = (action: () => Promise<void>) => {
@@ -148,8 +155,8 @@ export default function AdminDocsSeoStudio() {
         } else {
           setMessage({ type: 'error', text: data.error || 'Failed to save SEO route' });
         }
-      } catch (err: any) {
-        setMessage({ type: 'error', text: err.message });
+      } catch (err: unknown) {
+        setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to save SEO route' });
       } finally {
         setSaving(false);
       }
@@ -181,8 +188,8 @@ export default function AdminDocsSeoStudio() {
         } else {
           setMessage({ type: 'error', text: data.error || 'Failed to save article' });
         }
-      } catch (err: any) {
-        setMessage({ type: 'error', text: err.message });
+      } catch (err: unknown) {
+        setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to save article' });
       } finally {
         setSaving(false);
       }
@@ -200,8 +207,8 @@ export default function AdminDocsSeoStudio() {
           setMessage({ type: 'success', text: data.message });
           loadData();
         }
-      } catch (err: any) {
-        setMessage({ type: 'error', text: err.message });
+      } catch (err: unknown) {
+        setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to delete article' });
       }
     });
   };
@@ -231,8 +238,8 @@ export default function AdminDocsSeoStudio() {
         } else {
           setMessage({ type: 'error', text: data.error || 'Failed to save FAQ' });
         }
-      } catch (err: any) {
-        setMessage({ type: 'error', text: err.message });
+      } catch (err: unknown) {
+        setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to save FAQ' });
       } finally {
         setSaving(false);
       }
@@ -250,8 +257,8 @@ export default function AdminDocsSeoStudio() {
           setMessage({ type: 'success', text: data.message });
           loadData();
         }
-      } catch (err: any) {
-        setMessage({ type: 'error', text: err.message });
+      } catch (err: unknown) {
+        setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to delete FAQ' });
       }
     });
   };
@@ -497,7 +504,7 @@ export default function AdminDocsSeoStudio() {
                       onChange={(e) =>
                         setSelectedSeoRoute({
                           ...selectedSeoRoute,
-                          schema_type: e.target.value as any,
+                          schema_type: e.target.value as SeoRouteItem['schema_type'],
                         })
                       }
                       className="w-full h-8 px-3 rounded-lg border border-slate-300 dark:border-white/10 bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-100 font-mono"

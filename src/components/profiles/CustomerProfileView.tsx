@@ -29,6 +29,7 @@ import {
 import { usePortal } from '@/context/PortalContext';
 import { useSudoGate } from '@/components/security/SudoGateModal';
 import { sha256Hex } from '@/lib/totpEngine';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 
 export default function CustomerProfileView() {
   const {
@@ -47,38 +48,27 @@ export default function CustomerProfileView() {
 
   const [activeTab, setActiveTab] = useState<'identity' | 'ssh' | 'api' | 'security'>('identity');
   const [saveToast, setSaveToast] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
 
   // Tab A: Identity & Corporate VAT State
   const [fullName, setFullName] = useState(currentUser?.name || '');
   const [accountType, setAccountType] = useState<'individual' | 'business_corporate' | 'software_agency'>('business_corporate');
   const [companyLegalName, setCompanyLegalName] = useState(currentUser?.company || '');
-  const [taxBinNumber, setTaxBinNumber] = useState('002941849-0101');
-  const [billingAddress, setBillingAddress] = useState('Level 7, Software Technology Park, Kawran Bazar');
-  const [billingCity, setBillingCity] = useState('Dhaka');
+  const [taxBinNumber, setTaxBinNumber] = useState('');
+  const [billingAddress, setBillingAddress] = useState('');
+  const [billingCity, setBillingCity] = useState('');
   const [billingCountry, setBillingCountry] = useState('Bangladesh');
-  const [emergencyBillingEmail, setEmergencyBillingEmail] = useState('finance@devhostcloud.com');
-  const [whatsappAlertNumber, setWhatsappAlertNumber] = useState('+880 1712-345678');
+  const [emergencyBillingEmail, setEmergencyBillingEmail] = useState(currentUser?.email || '');
+  const [whatsappAlertNumber, setWhatsappAlertNumber] = useState('');
 
   // Tab B: Global SSH & Defaults State
   const [defaultRegion, setDefaultRegion] = useState<'sg1' | 'us1'>('sg1');
   const [defaultNodeVersion, setDefaultNodeVersion] = useState('22');
   const [defaultPhpVersion, setDefaultPhpVersion] = useState('8.3');
-  const [sshKeys, setSshKeys] = useState([
-    {
-      id: 'ssh_1',
-      label: 'MacBook Pro M3 Max (Primary Dev)',
-      type: 'ED25519',
-      fingerprint: 'SHA256:4x8k19ZbQ0vLmP82K94fJ8aLmPq19',
-      created: '2026-10-14',
-    },
-    {
-      id: 'ssh_2',
-      label: 'Ubuntu Office Workstation',
-      type: 'RSA 4096',
-      fingerprint: 'SHA256:9q2mP41xLk89ZaBc772Lmq001Za',
-      created: '2026-09-02',
-    },
-  ]);
+  const [sshKeys, setSshKeys] = useState<
+    Array<{ id: string; label: string; type: string; fingerprint: string; created: string }>
+  >([]);
   const [newSshLabel, setNewSshLabel] = useState('');
   const [newSshKeyText, setNewSshKeyText] = useState('');
   const [isAddSshModalOpen, setIsAddSshModalOpen] = useState(false);
@@ -103,7 +93,7 @@ export default function CustomerProfileView() {
   const [sudoPinInput, setSudoPinInput] = useState('');
   const [sudoPinSuccess, setSudoPinSuccess] = useState(false);
 
-  // Sync authoritative server 2FA status on mount
+  // Sync authoritative server 2FA status and persisted user metadata on mount
   useEffect(() => {
     let cancelled = false;
     fetch('/api/auth/2fa')
@@ -114,15 +104,75 @@ export default function CustomerProfileView() {
         }
       })
       .catch(() => {});
+
+    if (isSupabaseConfigured()) {
+      supabase.auth
+        .getUser()
+        .then(({ data }) => {
+          if (cancelled || !data?.user?.user_metadata) return;
+          const m = data.user.user_metadata as Record<string, unknown>;
+          if (typeof m.full_name === 'string') setFullName(m.full_name);
+          if (m.account_type === 'individual' || m.account_type === 'business_corporate' || m.account_type === 'software_agency') {
+            setAccountType(m.account_type);
+          }
+          if (typeof m.company_name === 'string') setCompanyLegalName(m.company_name);
+          if (typeof m.tax_bin_number === 'string') setTaxBinNumber(m.tax_bin_number);
+          if (typeof m.billing_address === 'string') setBillingAddress(m.billing_address);
+          if (typeof m.billing_city === 'string') setBillingCity(m.billing_city);
+          if (typeof m.billing_country === 'string') setBillingCountry(m.billing_country);
+          if (typeof m.emergency_billing_email === 'string') setEmergencyBillingEmail(m.emergency_billing_email);
+          if (typeof m.whatsapp_alert_number === 'string') setWhatsappAlertNumber(m.whatsapp_alert_number);
+          if (m.default_region === 'sg1' || m.default_region === 'us1') setDefaultRegion(m.default_region);
+          if (typeof m.default_node_version === 'string') setDefaultNodeVersion(m.default_node_version);
+          if (typeof m.default_php_version === 'string') setDefaultPhpVersion(m.default_php_version);
+          if (Array.isArray(m.ssh_public_keys)) {
+            setSshKeys(m.ssh_public_keys);
+          }
+        })
+        .catch(() => {});
+    }
+
     return () => {
       cancelled = true;
     };
   }, []);
 
   // Handle Profile Save
-  const handleSaveProfile = () => {
-    setSaveToast(true);
-    setTimeout(() => setSaveToast(false), 3000);
+  const handleSaveProfile = async () => {
+    setSaveError(null);
+    if (!isSupabaseConfigured()) {
+      setSaveError('Profile persistence is unavailable: Supabase authentication is not configured.');
+      return;
+    }
+    setIsSavingProfile(true);
+    try {
+      const { error } = await supabase.auth.updateUser({
+        data: {
+          full_name: fullName.trim(),
+          account_type: accountType,
+          company_name: companyLegalName.trim(),
+          tax_bin_number: taxBinNumber.trim(),
+          billing_address: billingAddress.trim(),
+          billing_city: billingCity.trim(),
+          billing_country: billingCountry,
+          emergency_billing_email: emergencyBillingEmail.trim(),
+          whatsapp_alert_number: whatsappAlertNumber.trim(),
+          default_region: defaultRegion,
+          default_node_version: defaultNodeVersion,
+          default_php_version: defaultPhpVersion,
+        },
+      });
+      if (error) {
+        setSaveError(error.message || 'Failed to save profile settings.');
+        return;
+      }
+      setSaveToast(true);
+      setTimeout(() => setSaveToast(false), 3000);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Unable to persist profile preferences.');
+    } finally {
+      setIsSavingProfile(false);
+    }
   };
 
   // Add SSH Key
@@ -146,7 +196,22 @@ export default function CustomerProfileView() {
       created: new Date().toISOString().split('T')[0],
     };
 
-    setSshKeys((prev) => [newKey, ...prev]);
+    const nextKeys = [newKey, ...sshKeys];
+    if (isSupabaseConfigured()) {
+      const { error } = await supabase.auth.updateUser({
+        data: { ssh_public_keys: nextKeys },
+      });
+      if (error) {
+        setSaveError(error.message || 'Failed to save SSH public key.');
+        return;
+      }
+    } else {
+      setSaveError('SSH key vault requires Supabase authentication.');
+      return;
+    }
+
+    setSaveError(null);
+    setSshKeys(nextKeys);
     setNewSshLabel('');
     setNewSshKeyText('');
     setIsAddSshModalOpen(false);
@@ -178,8 +243,8 @@ export default function CustomerProfileView() {
         setWizardError('');
         setIs2FaWizardOpen(true);
       }
-    } catch (err: any) {
-      alert('Failed to initialize 2FA setup: ' + err.message);
+    } catch (err: unknown) {
+      alert('Failed to initialize 2FA setup: ' + (err instanceof Error ? err.message : 'Unknown error'));
     }
   };
 
@@ -204,8 +269,8 @@ export default function CustomerProfileView() {
       } else {
         setWizardError(data.error || 'Invalid 6-digit code. Please verify your authenticator app.');
       }
-    } catch (err: any) {
-      setWizardError(err.message || 'Error communicating with 2FA server.');
+    } catch (err: unknown) {
+      setWizardError(err instanceof Error ? err.message : 'Error communicating with 2FA server.');
     }
   };
 
@@ -249,10 +314,11 @@ ${wizardBackupCodes.map((c, i) => `${i + 1}. ${c}`).join('\n')}
         <button
           type="button"
           onClick={handleSaveProfile}
-          className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-md shadow-blue-600/20 cursor-pointer whitespace-nowrap flex items-center gap-2"
+          disabled={isSavingProfile}
+          className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-md shadow-blue-600/20 cursor-pointer whitespace-nowrap flex items-center gap-2 disabled:opacity-50"
         >
           <Save className="w-4 h-4" />
-          <span>Save Changes</span>
+          <span>{isSavingProfile ? 'Saving...' : 'Save Changes'}</span>
         </button>
       </div>
 
@@ -260,6 +326,12 @@ ${wizardBackupCodes.map((c, i) => `${i + 1}. ${c}`).join('\n')}
         <div className="p-3.5 rounded-xl bg-emerald-500 text-white font-mono text-xs flex items-center gap-2 animate-in fade-in shadow-md shadow-emerald-500/20">
           <CheckCircle2 className="w-4 h-4" />
           <span>Profile &amp; security preferences saved successfully!</span>
+        </div>
+      )}
+      {saveError && (
+        <div className="p-3.5 rounded-xl bg-rose-600 text-white font-mono text-xs flex items-center gap-2 animate-in fade-in shadow-md shadow-rose-600/20">
+          <AlertTriangle className="w-4 h-4" />
+          <span>{saveError}</span>
         </div>
       )}
 
@@ -347,7 +419,9 @@ ${wizardBackupCodes.map((c, i) => `${i + 1}. ${c}`).join('\n')}
               <label className="text-slate-600 dark:text-zinc-400 block mb-1">Account Type / Entity Classification:</label>
               <select
                 value={accountType}
-                onChange={(e: any) => setAccountType(e.target.value)}
+                onChange={(e) =>
+                  setAccountType(e.target.value as 'individual' | 'business_corporate' | 'software_agency')
+                }
                 className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white font-sans text-xs font-semibold cursor-pointer"
               >
                 <option value="individual">Individual Developer / Freelancer</option>
@@ -481,8 +555,18 @@ ${wizardBackupCodes.map((c, i) => `${i + 1}. ${c}`).join('\n')}
                 <button
                   type="button"
                   onClick={() =>
-                    requireSudo(() => {
-                      setSshKeys((prev) => prev.filter((k) => k.id !== key.id));
+                    requireSudo(async () => {
+                      const nextKeys = sshKeys.filter((k) => k.id !== key.id);
+                      if (isSupabaseConfigured()) {
+                        const { error } = await supabase.auth.updateUser({
+                          data: { ssh_public_keys: nextKeys },
+                        });
+                        if (error) {
+                          setSaveError(error.message || 'Failed to revoke SSH key.');
+                          return;
+                        }
+                      }
+                      setSshKeys(nextKeys);
                     }, `Revoke SSH Key: ${key.label}`)
                   }
                   className="px-3 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/50 text-rose-600 dark:text-rose-400 text-xs font-semibold cursor-pointer flex items-center gap-1.5 self-start sm:self-center"
@@ -504,7 +588,7 @@ ${wizardBackupCodes.map((c, i) => `${i + 1}. ${c}`).join('\n')}
                 <label className="text-slate-500 block text-[11px]">Primary Datacenter:</label>
                 <select
                   value={defaultRegion}
-                  onChange={(e: any) => setDefaultRegion(e.target.value)}
+                  onChange={(e) => setDefaultRegion(e.target.value as 'sg1' | 'us1')}
                   className="w-full px-2.5 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white font-semibold cursor-pointer"
                 >
                   <option value="sg1">Singapore SG1 (Equinix - Sub 35ms BD)</option>

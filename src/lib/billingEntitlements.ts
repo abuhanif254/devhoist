@@ -7,7 +7,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   DEFAULT_PRODUCTION_DOMAIN_TLDS,
   DEFAULT_PRODUCTION_HOSTING_PLANS,
-} from '@/app/api/catalog/route';
+} from '@/lib/catalogDefaults';
 
 export function extractDomainTld(domain: string): string {
   const clean = domain.trim().toLowerCase();
@@ -139,14 +139,32 @@ export async function resolveDomainTldPriceBDT(
 export interface DomainEntitlementResult {
   entitled: boolean;
   via?: 'admin' | 'paid_invoice' | 'free_annual_bundle';
+  invoiceId?: string;
   invoiceNumber?: string;
+  authorizedYears?: number;
   reason?: string;
+}
+
+function resolveInvoiceDomainYears(
+  inv: Record<string, unknown>,
+  cleanDomain: string
+): number {
+  const items = Array.isArray(inv.items) ? (inv.items as Array<Record<string, unknown>>) : [];
+  for (const it of items) {
+    if (String(it.domain || '').trim().toLowerCase() === cleanDomain) {
+      const explicitYears = Number(it.years ?? it.period ?? it.quantity ?? 0);
+      if (Number.isFinite(explicitYears) && explicitYears >= 1) {
+        return Math.max(1, Math.min(10, Math.floor(explicitYears)));
+      }
+    }
+  }
+  return 1;
 }
 
 /**
  * Verifies that a domain registrar billable action (`register`, `renew`, `transfer`)
- * is backed by either an admin privilege or a verified `paid` invoice / annual hosting
- * free-domain bundle owned by `userId`.
+ * is backed by either an admin privilege or an unconsumed verified `paid` invoice /
+ * annual hosting free-domain bundle owned by `userId`.
  */
 export async function verifyPaidDomainEntitlement(params: {
   db: SupabaseClient | null;
@@ -155,12 +173,13 @@ export async function verifyPaidDomainEntitlement(params: {
   domain: string;
   operation: 'register' | 'renew' | 'transfer';
   invoiceNumber?: string | null;
+  allowConsumedRetry?: boolean;
 }): Promise<DomainEntitlementResult> {
-  const { db, userId, role, domain, operation, invoiceNumber } = params;
+  const { db, userId, role, domain, operation, invoiceNumber, allowConsumedRetry } = params;
   const cleanDomain = domain.trim().toLowerCase();
 
   if (role === 'admin' || role === 'superadmin') {
-    return { entitled: true, via: 'admin' };
+    return { entitled: true, via: 'admin', authorizedYears: 10 };
   }
 
   if (!db) {
@@ -172,7 +191,9 @@ export async function verifyPaidDomainEntitlement(params: {
 
   let query = db
     .from('invoices')
-    .select('id, invoice_number, user_id, status, order_type, billing_cycle, free_domain_bundle_applied, bundled_domain_name, items')
+    .select(
+      'id, invoice_number, user_id, status, order_type, billing_cycle, free_domain_bundle_applied, bundled_domain_name, items, domain_entitlement_consumed, domain_entitlement_consumed_at'
+    )
     .eq('user_id', userId)
     .eq('status', 'paid');
 
@@ -197,6 +218,12 @@ export async function verifyPaidDomainEntitlement(params: {
   );
 
   for (const inv of paidInvoices as Array<Record<string, unknown>>) {
+    const alreadyConsumed =
+      inv.domain_entitlement_consumed === true || Boolean(inv.domain_entitlement_consumed_at);
+    if (alreadyConsumed && !allowConsumedRetry) {
+      continue;
+    }
+
     const bundled = String(inv.bundled_domain_name || '').trim().toLowerCase();
     const orderType = String(inv.order_type || '').toLowerCase();
     const items = Array.isArray(inv.items) ? (inv.items as Array<Record<string, unknown>>) : [];
@@ -208,11 +235,15 @@ export async function verifyPaidDomainEntitlement(params: {
 
     if (!domainMatched) continue;
 
+    const authorizedYears = resolveInvoiceDomainYears(inv, cleanDomain);
+
     if (operation === 'register' && Boolean(inv.free_domain_bundle_applied) && orderType === 'hosting_order') {
       return {
         entitled: true,
         via: 'free_annual_bundle',
+        invoiceId: inv.id ? String(inv.id) : undefined,
         invoiceNumber: String(inv.invoice_number || inv.id || ''),
+        authorizedYears: 1,
       };
     }
 
@@ -220,15 +251,98 @@ export async function verifyPaidDomainEntitlement(params: {
       return {
         entitled: true,
         via: 'paid_invoice',
+        invoiceId: inv.id ? String(inv.id) : undefined,
         invoiceNumber: String(inv.invoice_number || inv.id || ''),
+        authorizedYears,
       };
     }
   }
 
   return {
     entitled: false,
-    reason: `Payment Required: Verified paid invoices on your account do not cover "${cleanDomain}" for ${operation}.`,
+    reason: `Payment Required: No unconsumed verified paid invoice on your account covers "${cleanDomain}" for ${operation}.`,
   };
+}
+
+/**
+ * Atomically marks a paid invoice's domain entitlement as consumed so a single
+ * paid invoice cannot be replayed across multiple registrations, renewals, or transfers.
+ */
+export async function consumePaidDomainEntitlement(params: {
+  db: SupabaseClient | null;
+  entitlement: DomainEntitlementResult;
+  domain: string;
+  operation: 'register' | 'renew' | 'transfer';
+}): Promise<{ ok: boolean; error?: string }> {
+  const { db, entitlement, domain, operation } = params;
+  if (!db || entitlement.via === 'admin' || !entitlement.invoiceId) {
+    return { ok: true };
+  }
+
+  const { data: current } = await db
+    .from('invoices')
+    .select('id, domain_entitlement_consumed, domain_entitlement_consumed_at')
+    .eq('id', entitlement.invoiceId)
+    .maybeSingle();
+
+  if (
+    current &&
+    (current.domain_entitlement_consumed === true || Boolean(current.domain_entitlement_consumed_at))
+  ) {
+    return {
+      ok: false,
+      error: `Payment entitlement for invoice ${entitlement.invoiceNumber || entitlement.invoiceId} has already been consumed.`,
+    };
+  }
+
+  const nowIso = new Date().toISOString();
+  let updateQuery = db
+    .from('invoices')
+    .update({
+      domain_entitlement_consumed: true,
+      domain_entitlement_consumed_at: nowIso,
+      domain_entitlement_consumed_domain: domain.trim().toLowerCase(),
+      domain_entitlement_consumed_action: operation,
+      updated_at: nowIso,
+    })
+    .eq('id', entitlement.invoiceId);
+
+  if (current && current.domain_entitlement_consumed === false) {
+    updateQuery = updateQuery.eq('domain_entitlement_consumed', false);
+  }
+
+  const { error } = await updateQuery;
+  if (error) {
+    return { ok: false, error: error.message };
+  }
+
+  return { ok: true };
+}
+
+/**
+ * Releases a claimed entitlement if the upstream registrar call fails so the
+ * customer does not lose a valid paid invoice on a transient 502 error.
+ */
+export async function releasePaidDomainEntitlement(params: {
+  db: SupabaseClient | null;
+  entitlement: DomainEntitlementResult;
+}): Promise<void> {
+  const { db, entitlement } = params;
+  if (!db || entitlement.via === 'admin' || !entitlement.invoiceId) return;
+  try {
+    await db
+      .from('invoices')
+      .update({
+        domain_entitlement_consumed: false,
+        domain_entitlement_consumed_at: null,
+        domain_entitlement_consumed_domain: null,
+        domain_entitlement_consumed_action: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', entitlement.invoiceId);
+  } catch {
+    // Non-fatal rollback best-effort
+  }
 }
 
 export async function resolveAuthoritativePlanMeta(

@@ -2,10 +2,18 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServiceSupabase, isSupabaseConfigured, isDevSandboxMode } from '@/lib/supabase';
 import { requireUser, requireServiceAccess, serviceUnavailableResponse } from '@/lib/authGuard';
 import { chargeWalletAtomic, resolveAuthoritativePlanMeta } from '@/lib/billingEntitlements';
+import { buildPortalUrl } from '@/lib/siteUrl';
 
+
+interface HandoverStoreRecord {
+  developer_user_id?: string;
+  status?: string;
+  claimed_by_user_id?: string;
+  [key: string]: unknown;
+}
 
 // Mock in-memory store for local sandbox testing if Supabase is offline
-const inMemoryHandovers = new Map<string, any>();
+const inMemoryHandovers = new Map<string, HandoverStoreRecord>();
 
 export async function GET(request: NextRequest) {
   try {
@@ -112,9 +120,12 @@ export async function GET(request: NextRequest) {
     }
 
     return NextResponse.json({ success: true, handovers: [] });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('[Handover GET Error]', error);
-    return NextResponse.json({ error: error?.message || 'Failed to load handover details' }, { status: 500 });
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Failed to load handover details' },
+      { status: 500 }
+    );
   }
 }
 
@@ -208,12 +219,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       handoverToken,
-      handoverUrl: `https://devhost.cloud/handover/${handoverToken}`,
+      handoverUrl: buildPortalUrl(`/handover/${handoverToken}`),
       handover: handoverRecord,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('[Handover POST Error]', error);
-    return NextResponse.json({ error: error?.message || 'Failed to create handover' }, { status: 500 });
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Failed to create handover' },
+      { status: 500 }
+    );
   }
 }
 
@@ -248,9 +262,9 @@ export async function PUT(request: NextRequest) {
         return NextResponse.json({ error: 'Handover invitation not found.' }, { status: 404 });
       }
 
-      if (existingHo.status === 'claimed_and_paid') {
+      if (existingHo.status && existingHo.status !== 'pending_client_claim') {
         return NextResponse.json(
-          { error: 'Handover token has already been claimed.' },
+          { error: 'Handover token has already been claimed or is no longer active.' },
           { status: 409 }
         );
       }
@@ -276,28 +290,43 @@ export async function PUT(request: NextRequest) {
       const requiredTotalBDT =
         Number(existingHo.developer_setup_fee_bdt || 0) + Number(existingHo.hosting_price_bdt || 0);
 
-      // Verify genuine settlement (paid invoice, completed transaction, atomic wallet debit, or admin)
+      // Verify genuine settlement specifically bound to this handover token (paid invoice, atomic wallet debit, or admin)
       let paymentVerified = auth.role === 'admin' || requiredTotalBDT <= 0;
+      let consumedInvoiceId: string | null = null;
+
+      const verifyHandoverInvoiceRow = (inv: Record<string, unknown> | null | undefined): boolean => {
+        if (!inv) return false;
+        if (inv.handover_claimed === true) return false;
+        if (String(inv.order_type || '').toLowerCase() !== 'agency_handover') return false;
+        if (Number(inv.total_bdt || 0) + 1 < requiredTotalBDT) return false;
+        const invItems = Array.isArray(inv.items) ? (inv.items as Array<Record<string, unknown>>) : [];
+        if (invItems.length === 0) return true;
+        return invItems.some((it) => {
+          const itemTok = String(it.handoverToken || it.handover_token || '').trim();
+          return !itemTok || itemTok === handoverToken;
+        });
+      };
 
       if (!paymentVerified && invoiceNumber) {
         const { data: paidInv } = await db
           .from('invoices')
-          .select('id, user_id, status, total_bdt, order_type, trx_id')
+          .select('id, user_id, status, total_bdt, order_type, trx_id, items, handover_claimed')
           .eq('invoice_number', String(invoiceNumber).trim())
           .eq('user_id', clientUserId)
           .eq('status', 'paid')
           .maybeSingle();
 
-        if (paidInv && Number(paidInv.total_bdt || 0) + 1 >= requiredTotalBDT) {
+        if (verifyHandoverInvoiceRow(paidInv as Record<string, unknown> | null)) {
           paymentVerified = true;
-          resolvedTrxId = String(paidInv.trx_id || resolvedTrxId || invoiceNumber);
+          consumedInvoiceId = paidInv?.id ? String(paidInv.id) : null;
+          resolvedTrxId = String(paidInv?.trx_id || resolvedTrxId || invoiceNumber);
         }
       }
 
       if (!paymentVerified && resolvedTrxId) {
         const { data: paidTx } = await db
           .from('transactions')
-          .select('id, user_id, amount_bdt, status, trx_id')
+          .select('id, invoice_id, user_id, amount_bdt, status, trx_id')
           .eq('trx_id', resolvedTrxId)
           .eq('user_id', clientUserId)
           .maybeSingle();
@@ -306,9 +335,20 @@ export async function PUT(request: NextRequest) {
         if (
           paidTx &&
           ['completed', 'settled', 'succeeded', 'paid'].includes(txStatus) &&
-          Number(paidTx.amount_bdt || 0) + 1 >= requiredTotalBDT
+          Number(paidTx.amount_bdt || 0) + 1 >= requiredTotalBDT &&
+          paidTx.invoice_id
         ) {
-          paymentVerified = true;
+          const { data: linkedInv } = await db
+            .from('invoices')
+            .select('id, user_id, status, total_bdt, order_type, trx_id, items, handover_claimed')
+            .eq('id', String(paidTx.invoice_id))
+            .eq('user_id', clientUserId)
+            .eq('status', 'paid')
+            .maybeSingle();
+          if (verifyHandoverInvoiceRow(linkedInv as Record<string, unknown> | null)) {
+            paymentVerified = true;
+            consumedInvoiceId = linkedInv?.id ? String(linkedInv.id) : null;
+          }
         }
       }
 
@@ -334,7 +374,7 @@ export async function PUT(request: NextRequest) {
       if (!paymentVerified) {
         return NextResponse.json(
           {
-            error: `Payment Required: Verify a paid gateway invoice/transaction for ৳${requiredTotalBDT} BDT or pay via Cloud Wallet before claiming ownership.`,
+            error: `Payment Required: Verify a paid handover invoice for ৳${requiredTotalBDT} BDT or pay via Cloud Wallet before claiming ownership.`,
             code: 'PAYMENT_REQUIRED',
             requiredAmountBDT: requiredTotalBDT,
           },
@@ -342,13 +382,32 @@ export async function PUT(request: NextRequest) {
         );
       }
 
-      await db
+      const { data: claimedRows, error: claimErr } = await db
         .from('agency_handover_transfers')
         .update({
           status: 'claimed_and_paid',
           claimed_by_user_id: clientUserId,
         })
-        .eq('handover_token', handoverToken);
+        .eq('handover_token', handoverToken)
+        .eq('status', 'pending_client_claim')
+        .select('id');
+
+      if (claimErr || !claimedRows || (Array.isArray(claimedRows) && claimedRows.length === 0)) {
+        return NextResponse.json(
+          { error: 'Handover claim conflict: token was already claimed.' },
+          { status: 409 }
+        );
+      }
+
+      if (consumedInvoiceId) {
+        await db
+          .from('invoices')
+          .update({
+            handover_claimed: true,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', consumedInvoiceId);
+      }
 
       if (existingHo.service_id) {
         await db
@@ -373,8 +432,11 @@ export async function PUT(request: NextRequest) {
       message: 'Project claimed and service ownership successfully transferred to client account.',
       trxId: resolvedTrxId || `CLAIM-${Date.now()}`,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('[Handover Claim Error]', error);
-    return NextResponse.json({ error: error?.message || 'Failed to process handover claim' }, { status: 500 });
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Failed to process handover claim' },
+      { status: 500 }
+    );
   }
 }

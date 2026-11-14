@@ -155,7 +155,7 @@ export async function POST(request: NextRequest) {
     if (action === 'trigger_manual') {
       const commitSha = Math.random().toString(36).substring(2, 9);
       const releaseId = `rel_${commitSha}_${Date.now()}`;
-      const jobId = `bld_${commitSha}_${Date.now()}`;
+      const jobId = crypto.randomUUID();
 
       let buildLogs = '';
       let r2ArtifactKey: string | null = null;

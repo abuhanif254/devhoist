@@ -153,10 +153,25 @@ export async function generateDynamicMetadata(path: string): Promise<Metadata> {
 /**
  * Generate rich JSON-LD structured data for search engine rich snippets
  */
+export interface SeoExtraData {
+  name?: string;
+  description?: string;
+  title?: string;
+  summary?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  faqs?: Array<{
+    question_en?: string;
+    question?: string;
+    answer_en?: string;
+    answer?: string;
+  }>;
+}
+
 export function generateJsonLdSchema(
   schemaType: 'WebApplication' | 'Product' | 'TechArticle' | 'FAQPage' | 'Organization',
   routePath: string,
-  extraData?: any
+  extraData?: SeoExtraData
 ) {
   const baseUrl = 'https://devhostcloud.com';
 
@@ -252,7 +267,7 @@ export function generateJsonLdSchema(
     return {
       '@context': 'https://schema.org',
       '@type': 'FAQPage',
-      mainEntity: extraData.faqs.map((f: any) => ({
+      mainEntity: extraData.faqs.map((f) => ({
         '@type': 'Question',
         name: f.question_en || f.question,
         acceptedAnswer: {

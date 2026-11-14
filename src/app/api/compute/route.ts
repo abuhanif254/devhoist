@@ -329,7 +329,7 @@ export async function POST(request: NextRequest) {
       }
 
       const envVars = await loadDecryptedEnvMap(supabaseAdmin, serviceId, 'production');
-      const jobId = `bld_${shortSha}_${Date.now()}`;
+      const jobId = crypto.randomUUID();
       const nodeCfg = getComputeNodeConfig(target.agentEndpoint);
 
       const qRes =

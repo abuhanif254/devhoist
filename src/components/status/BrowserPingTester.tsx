@@ -88,7 +88,11 @@ export default function BrowserPingTester() {
   };
 
   useEffect(() => {
-    runConsecutivePings();
+    const timer = window.setTimeout(() => {
+      void runConsecutivePings();
+    }, 0);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (

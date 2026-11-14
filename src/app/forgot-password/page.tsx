@@ -49,7 +49,7 @@ export default function ForgotPasswordPage() {
       // Display secure confirmation (prevents email enumeration attacks)
       setIsSent(true);
       setCooldown(60);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('[ForgotPassword Exception]:', err);
       setIsSent(true);
     } finally {

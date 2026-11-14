@@ -159,6 +159,10 @@ export async function POST(req: Request) {
           '1': 'starter',
           '2': 'developer-pro',
           '3': 'business-max',
+          '101': 'cloud-kvm-1',
+          '102': 'cloud-kvm-2',
+          '103': 'cloud-kvm-4',
+          '104': 'cloud-kvm-8',
         };
         const resolvedSlug = (pidSlugMap[planSlugOrId] || planSlugOrId).toLowerCase();
         const { data: planRow } = await db

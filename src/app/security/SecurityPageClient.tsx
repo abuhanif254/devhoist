@@ -25,19 +25,52 @@ export default function SecurityPageClient() {
     type: 'phishing',
     targetUrl: '',
     details: '',
+    swornDeclaration: true,
   });
   const [abuseSubmitted, setAbuseSubmitted] = useState(false);
   const [abuseLoading, setAbuseLoading] = useState(false);
+  const [abuseError, setAbuseError] = useState<string | null>(null);
+  const [submittedTicketRef, setSubmittedTicketRef] = useState<string>('');
+  const [submittedStatus, setSubmittedStatus] = useState<string>('');
 
   const handleAbuseSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!abuseForm.email || !abuseForm.targetUrl) return;
+    if (!abuseForm.name || !abuseForm.email || !abuseForm.targetUrl || !abuseForm.details) return;
+    if (!abuseForm.swornDeclaration) {
+      setAbuseError('Please affirm the good-faith declaration before submitting.');
+      return;
+    }
 
     setAbuseLoading(true);
-    // Simulate security ticket generation
-    await new Promise((resolve) => setTimeout(resolve, 800));
-    setAbuseLoading(false);
-    setAbuseSubmitted(true);
+    setAbuseError(null);
+    try {
+      const res = await fetch('/api/abuse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          reporterName: abuseForm.name.trim(),
+          reporterEmail: abuseForm.email.trim(),
+          abuseType: abuseForm.type,
+          reportedUrlOrIp: abuseForm.targetUrl.trim(),
+          evidenceLogs: abuseForm.details.trim(),
+          swornDeclaration: abuseForm.swornDeclaration,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        setAbuseError(data.error || `Failed to submit security report (HTTP ${res.status}).`);
+        return;
+      }
+      setSubmittedTicketRef(data.ticketReference || 'ABUSE-LOGGED');
+      setSubmittedStatus(data.status || 'received_investigating');
+      setAbuseSubmitted(true);
+    } catch (err) {
+      setAbuseError(
+        err instanceof Error ? `Network error submitting report: ${err.message}` : 'Unable to reach security intake endpoint.'
+      );
+    } finally {
+      setAbuseLoading(false);
+    }
   };
 
   return (
@@ -185,13 +218,14 @@ export default function SecurityPageClient() {
               Security Ticket Dispatched Successfully
             </h3>
             <p className="text-xs text-slate-700 dark:text-zinc-300 font-mono">
-              Report registered under case ID: #SEC-{Math.floor(100000 + Math.random() * 900000)}. Our senior security engineers are investigating the reported domain/IP.
+              Report registered under case ID: <span className="font-bold">#{submittedTicketRef}</span> ({submittedStatus}). Our senior security engineers are investigating the reported domain/IP.
             </p>
             <button
               type="button"
               onClick={() => {
                 setAbuseSubmitted(false);
-                setAbuseForm({ name: '', email: '', type: 'phishing', targetUrl: '', details: '' });
+                setAbuseError(null);
+                setAbuseForm({ name: '', email: '', type: 'phishing', targetUrl: '', details: '', swornDeclaration: true });
               }}
               className="mt-3 text-xs font-mono text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
             >
@@ -203,6 +237,12 @@ export default function SecurityPageClient() {
             onSubmit={handleAbuseSubmit}
             className="p-6 sm:p-7 rounded-xl bg-white dark:bg-zinc-950/80 border border-slate-200 dark:border-white/[0.08] space-y-4 shadow-xl"
           >
+            {abuseError && (
+              <div className="p-3 rounded-lg bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs font-mono flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>{abuseError}</span>
+              </div>
+            )}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
                 <label className="text-xs font-mono text-slate-800 dark:text-zinc-300 font-semibold">Your Full Name</label>
@@ -269,6 +309,18 @@ export default function SecurityPageClient() {
                 className="w-full p-3 rounded-lg bg-slate-50 dark:bg-zinc-900 border border-slate-300 dark:border-white/10 text-xs text-slate-900 dark:text-zinc-100 font-mono focus:outline-hidden focus:border-blue-500 dark:focus:border-white/25 resize-none"
               />
             </div>
+
+            <label className="flex items-start gap-2.5 text-xs text-slate-600 dark:text-zinc-400 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={abuseForm.swornDeclaration}
+                onChange={(e) => setAbuseForm({ ...abuseForm, swornDeclaration: e.target.checked })}
+                className="mt-0.5 rounded border-slate-300 dark:border-zinc-700"
+              />
+              <span>
+                I affirm in good faith that the reported URL/IP and evidence logs are accurate to the best of my knowledge.
+              </span>
+            </label>
 
             <button
               type="submit"

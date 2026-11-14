@@ -372,9 +372,27 @@ export async function executeZeroTouchProvisioning(
       selectedNodeDriver !== 'devhost_docker' &&
       ((whmConfigured && !whmResult.success) || shouldFailUnprovisionedProd);
 
-    // Record or update hosting_services
+    // Record or update hosting_services (fail closed on cross-tenant domain takeover)
     if (db) {
       try {
+        const { data: existingSrv } = await db
+          .from('hosting_services')
+          .select('id, user_id')
+          .eq('domain', cleanDomain)
+          .maybeSingle();
+
+        if (existingSrv && existingSrv.user_id && params.userId && existingSrv.user_id !== params.userId) {
+          await logSecurityAudit({
+            actorId: params.userId,
+            actorRole: 'system',
+            actionType: 'CROSS_TENANT_SERVICE_TAKEOVER_BLOCKED',
+            targetResource: cleanDomain,
+            riskLevel: 'critical',
+            metadata: { existingOwner: existingSrv.user_id, attemptedOwner: params.userId },
+          });
+          throw new Error(`Service domain ${cleanDomain} is already registered to another tenant.`);
+        }
+
         const nextDueDate = new Date();
         nextDueDate.setDate(nextDueDate.getDate() + (isAnnual ? 365 : 30));
 
@@ -382,7 +400,7 @@ export async function executeZeroTouchProvisioning(
           .from('hosting_services')
           .upsert(
             {
-              user_id: params.userId || null,
+              user_id: params.userId || existingSrv?.user_id || null,
               domain: cleanDomain,
               plan_id: planMeta.slug || String(params.planId || 'developer-pro'),
               plan_name: params.planName || planMeta.name,
@@ -528,30 +546,44 @@ export async function executeZeroTouchProvisioning(
 
         // 3C. Persist Domain Record & Sync Cloudflare DNS Records
         if (db) {
-          const { data: domData } = await db
+          const { data: existingDom } = await db
             .from('domains')
-            .upsert(
-              {
-                user_id: params.userId || null,
-                domain_name: cleanDomain,
-                tld,
-                status: domainStatus,
-                registrar_lock: domainStatus === 'Active',
-                whois_privacy: true,
-                auto_renew: true,
-                nameservers: serverNameservers,
-                registrar_provider: registrarProvider || null,
-                registrar_order_id: registrarOrderId || null,
-                cloudflare_zone_id: cloudflareZoneId || null,
-                cloudflare_zone_status: cfZoneStatus,
-                cloudflare_nameservers: cfNameservers,
-                expiry_date: domainExpiry.toISOString().split('T')[0],
-                updated_at: new Date().toISOString(),
-              },
-              { onConflict: 'domain_name' }
-            )
-            .select('id')
-            .single();
+            .select('id, user_id')
+            .eq('domain_name', cleanDomain)
+            .maybeSingle();
+
+          const ownerMismatch = Boolean(
+            existingDom && existingDom.user_id && params.userId && existingDom.user_id !== params.userId
+          );
+
+          const domData = ownerMismatch
+            ? null
+            : (
+                await db
+                  .from('domains')
+                  .upsert(
+                    {
+                      user_id: params.userId || existingDom?.user_id || null,
+                      domain_name: cleanDomain,
+                      tld,
+                      status: domainStatus,
+                      registrar_lock: domainStatus === 'Active',
+                      whois_privacy: true,
+                      auto_renew: true,
+                      nameservers: serverNameservers,
+                      registrar_provider: registrarProvider || null,
+                      registrar_order_id: registrarOrderId || null,
+                      cloudflare_zone_id: cloudflareZoneId || null,
+                      cloudflare_zone_status: cfZoneStatus,
+                      cloudflare_nameservers: cfNameservers,
+                      expiry_date: domainExpiry.toISOString().split('T')[0],
+                      updated_at: new Date().toISOString(),
+                    },
+                    { onConflict: 'domain_name' }
+                  )
+                  .select('id')
+                  .single()
+              ).data;
 
           if (domData) {
             assignedDomainId = domData.id;

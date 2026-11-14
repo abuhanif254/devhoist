@@ -14,7 +14,7 @@ import {
   setCloudflareSecurityLevel,
 } from '@/lib/cloudflareClient';
 
-export interface AutoscalingRuleRecord {
+interface AutoscalingRuleRecord {
   id: string;
   service_id: string;
   user_id?: string;
